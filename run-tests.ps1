@@ -99,7 +99,7 @@ Test-Step "dry-run" {
 
 # ─── Test 7: Plan Parse ────────────────────────────────────────────
 Test-Step "plan-parse" {
-    $output = node mcp/orchestrator.mjs --parse docs/plans/Phase-1-CLIENTS-CRUD-PLAN.md 2>&1 | Out-String
+    $output = node pforge-mcp/orchestrator.mjs --parse docs/plans/Phase-1-CLIENTS-CRUD-PLAN.md 2>&1 | Out-String
     if ($output -notmatch "ClientsController") { throw "Parse did not find slice 1 title" }
     if ($output -notmatch "parallel.*true") { throw "Parse did not detect [P] tags" }
     if ($output -notmatch "depends") { throw "Parse did not detect dependencies" }
@@ -107,7 +107,7 @@ Test-Step "plan-parse" {
 
 # ─── Test 8: Orchestrator Self-Test ─────────────────────────────────
 Test-Step "orchestrator-self-test" {
-    $output = node mcp/orchestrator.mjs --test 2>&1 | Out-String
+    $output = node pforge-mcp/orchestrator.mjs --test 2>&1 | Out-String
     if ($output -notmatch "passed, 0 failed") { throw "Self-test did not pass all" }
 }
 
@@ -122,7 +122,7 @@ Write-Host ""
 Write-Host "Cost Tracking:" -ForegroundColor Yellow
 
 Test-Step "cost-report-empty" {
-    $output = node --input-type=module -e "import{getCostReport}from'./mcp/orchestrator.mjs';console.log(JSON.stringify(getCostReport(process.cwd())))" 2>&1 | Out-String
+    $output = node --input-type=module -e "import{getCostReport}from'./pforge-mcp/orchestrator.mjs';console.log(JSON.stringify(getCostReport(process.cwd())))" 2>&1 | Out-String
     if ($output -notmatch "runs|No cost") { throw "Cost report failed" }
 }
 

@@ -1194,7 +1194,7 @@ with open('$config_path', 'w') as f:
     done
     if [ "$mcp_updated" = true ]; then
         echo ""
-        echo "MCP server files were updated. Run: cd mcp && npm install"
+        echo "MCP server files were updated. Run: cd pforge-mcp && npm install"
     fi
 }
 
@@ -1639,17 +1639,17 @@ cmd_doctor() {
     # ═══════════════════════════════════════════════════════════════
     echo "MCP Server:"
 
-    local mcp_server="$REPO_ROOT/mcp/server.mjs"
+    local mcp_server="$REPO_ROOT/pforge-mcp/server.mjs"
     if [ -f "$mcp_server" ]; then
-        doctor_pass "mcp/server.mjs exists"
+        doctor_pass "pforge-mcp/server.mjs exists"
 
-        [ -f "$REPO_ROOT/mcp/package.json" ] \
-            || doctor_warn "mcp/package.json missing" "Copy from Plan Forge template"
+        [ -f "$REPO_ROOT/pforge-mcp/package.json" ] \
+            || doctor_warn "pforge-mcp/package.json missing" "Copy from Plan Forge template"
 
-        if [ -d "$REPO_ROOT/mcp/node_modules" ]; then
+        if [ -d "$REPO_ROOT/pforge-mcp/node_modules" ]; then
             doctor_pass "MCP dependencies installed"
         else
-            doctor_warn "MCP dependencies not installed" "Run: cd mcp && npm install"
+            doctor_warn "MCP dependencies not installed" "Run: cd pforge-mcp && npm install"
         fi
 
         if [ -f "$REPO_ROOT/.vscode/mcp.json" ]; then
@@ -1815,7 +1815,7 @@ cmd_run_plan() {
         "Write results to .forge/runs/<timestamp>/"
 
     # Build node args
-    local node_args=("$REPO_ROOT/mcp/orchestrator.mjs" "--run" "$full_plan_path" "--mode" "$mode")
+    local node_args=("$REPO_ROOT/pforge-mcp/orchestrator.mjs" "--run" "$full_plan_path" "--mode" "$mode")
     if [ "$estimate" = true ]; then node_args+=("--estimate"); fi
     if [ "$dry_run" = true ]; then node_args+=("--dry-run"); fi
     if [ -n "$model" ]; then node_args+=("--model" "$model"); fi

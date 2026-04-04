@@ -2,7 +2,7 @@
   "servers": {
     "plan-forge": {
       "args": [
-        "mcp/server.mjs"
+        "pforge-mcp/server.mjs"
       ],
       "type": "stdio",
       "cwd": "${workspaceFolder}",
