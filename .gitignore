@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+.forge/runs/
+.forge/cost-history.json
+.forge/server-ports.json
+.forge.json
+node_modules/

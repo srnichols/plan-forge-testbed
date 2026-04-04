@@ -1,0 +1,79 @@
+{
+  "generatedBy": "plan-forge-setup",
+  "hooks": [
+    ".github/hooks/plan-forge.json"
+  ],
+  "agents": [
+    "accessibility-reviewer.agent.md",
+    "api-contract-reviewer.agent.md",
+    "architecture-reviewer.agent.md",
+    "cicd-reviewer.agent.md",
+    "compliance-reviewer.agent.md",
+    "database-reviewer.agent.md",
+    "dependency-reviewer.agent.md",
+    "deploy-helper.agent.md",
+    "error-handling-reviewer.agent.md",
+    "executor.agent.md",
+    "multi-tenancy-reviewer.agent.md",
+    "observability-reviewer.agent.md",
+    "performance-analyzer.agent.md",
+    "plan-hardener.agent.md",
+    "reviewer-gate.agent.md",
+    "security-reviewer.agent.md",
+    "shipper.agent.md",
+    "specifier.agent.md",
+    "test-runner.agent.md"
+  ],
+  "generatedAt": "2026-04-04T13:56:27Z",
+  "preset": [
+    "dotnet"
+  ],
+  "instructions": [
+    "ai-plan-hardening-runbook.instructions.md",
+    "api-patterns.instructions.md",
+    "architecture-principles.instructions.md",
+    "auth.instructions.md",
+    "caching.instructions.md",
+    "dapr.instructions.md",
+    "database.instructions.md",
+    "deploy.instructions.md",
+    "errorhandling.instructions.md",
+    "git-workflow.instructions.md",
+    "graphql.instructions.md",
+    "messaging.instructions.md",
+    "multi-environment.instructions.md",
+    "observability.instructions.md",
+    "performance.instructions.md",
+    "project-principles.instructions.md",
+    "security.instructions.md",
+    "testing.instructions.md",
+    "version.instructions.md"
+  ],
+  "prompts": [
+    "bug-fix-tdd.prompt.md",
+    "new-config.prompt.md",
+    "new-controller.prompt.md",
+    "new-dockerfile.prompt.md",
+    "new-dto.prompt.md",
+    "new-entity.prompt.md",
+    "new-error-types.prompt.md",
+    "new-event-handler.prompt.md",
+    "new-graphql-resolver.prompt.md",
+    "new-middleware.prompt.md",
+    "new-repository.prompt.md",
+    "new-service.prompt.md",
+    "new-test.prompt.md",
+    "new-worker.prompt.md",
+    "project-principles.prompt.md"
+  ],
+  "skills": [
+    "api-doc-gen",
+    "code-review",
+    "database-migration",
+    "dependency-audit",
+    "onboarding",
+    "release-notes",
+    "staging-deploy",
+    "test-sweep"
+  ]
+}
