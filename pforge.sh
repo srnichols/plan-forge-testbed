@@ -1088,8 +1088,8 @@ print(v if isinstance(v, str) else ','.join(v))
     unset -f _pf_check
 
     # ─── MCP server files ────────────────────────────────────────
-    local src_mcp="$SOURCE_PATH/mcp"
-    local dst_mcp="$REPO_ROOT/mcp"
+    local src_mcp="$SOURCE_PATH/pforge-mcp"
+    local dst_mcp="$REPO_ROOT/pforge-mcp"
     if [ -d "$src_mcp" ]; then
         for mcp_file in server.mjs package.json; do
             local src_f="$src_mcp/$mcp_file"
@@ -1100,10 +1100,10 @@ print(v if isinstance(v, str) else ','.join(v))
                     src_hash="$(sha256sum "$src_f" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$src_f" | cut -d' ' -f1)"
                     dst_hash="$(sha256sum "$dst_f" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$dst_f" | cut -d' ' -f1)"
                     if [ "$src_hash" != "$dst_hash" ]; then
-                        _updates+=("$src_f|$dst_f|mcp/$mcp_file")
+                        _updates+=("$src_f|$dst_f|pforge-mcp/$mcp_file")
                     fi
                 else
-                    _new_files+=("$src_f|$dst_f|mcp/$mcp_file")
+                    _new_files+=("$src_f|$dst_f|pforge-mcp/$mcp_file")
                 fi
             fi
         done
@@ -1187,7 +1187,7 @@ with open('$config_path', 'w') as f:
     local mcp_updated=false
     for entry in "${_updates[@]}" "${_new_files[@]}"; do
         local entry_name="${entry##*|}"
-        if [[ "$entry_name" == mcp/* ]]; then
+        if [[ "$entry_name" == pforge-mcp/* ]]; then
             mcp_updated=true
             break
         fi
@@ -1573,7 +1573,7 @@ cmd_doctor() {
     local exp_instr=3 exp_agents=5 exp_prompts=7 exp_skills=0
     case "$preset_key" in
         dotnet|typescript|python|java|go|azure-iac)
-            exp_instr=14; exp_agents=17; exp_prompts=9; exp_skills=8 ;;
+            exp_instr=15; exp_agents=17; exp_prompts=9; exp_skills=8 ;;
         custom)
             exp_instr=3; exp_agents=5; exp_prompts=7; exp_skills=0 ;;
     esac

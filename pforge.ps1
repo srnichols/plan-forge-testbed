@@ -1237,8 +1237,8 @@ function Invoke-Update {
     }
 
     # ─── MCP server files ────────────────────────────────────────
-    $srcMcp = Join-Path $sourcePath "mcp"
-    $dstMcp = Join-Path $RepoRoot "mcp"
+    $srcMcp = Join-Path $sourcePath "pforge-mcp"
+    $dstMcp = Join-Path $RepoRoot "pforge-mcp"
     if (Test-Path $srcMcp) {
         foreach ($mcpFile in @("server.mjs", "package.json")) {
             $srcFile = Join-Path $srcMcp $mcpFile
@@ -1248,10 +1248,10 @@ function Invoke-Update {
                     $srcHash = (Get-FileHash $srcFile -Algorithm SHA256).Hash
                     $dstHash = (Get-FileHash $dstFile -Algorithm SHA256).Hash
                     if ($srcHash -ne $dstHash) {
-                        $updates += @{ Src = $srcFile; Dst = $dstFile; Name = \"pforge-mcp/$mcpFile" }
+                        $updates += @{ Src = $srcFile; Dst = $dstFile; Name = "pforge-mcp/$mcpFile" }
                     }
                 } else {
-                    $newFiles += @{ Src = $srcFile; Dst = $dstFile; Name = \"pforge-mcp/$mcpFile" }
+                    $newFiles += @{ Src = $srcFile; Dst = $dstFile; Name = "pforge-mcp/$mcpFile" }
                 }
             }
         }
@@ -1315,7 +1315,7 @@ function Invoke-Update {
     Write-Host "Run 'pforge check' to validate the updated setup." -ForegroundColor DarkGray
 
     # Check if MCP files were updated — remind to reinstall deps
-    $mcpUpdated = ($updates + $newFiles) | Where-Object { $_.Name -like \"pforge-mcp/*" }
+    $mcpUpdated = ($updates + $newFiles) | Where-Object { $_.Name -like "pforge-mcp/*" }
     if ($mcpUpdated) {
         Write-Host ""
         Write-Host "MCP server files were updated. Run: cd pforge-mcp && npm install" -ForegroundColor Yellow
@@ -1845,12 +1845,12 @@ function Invoke-Smith {
 
     # File count expectations per preset
     $expectedCounts = @{
-        'dotnet'     = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
-        'typescript' = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
-        'python'     = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
-        'java'       = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
-        'go'         = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
-        'azure-iac'  = @{ instructions = 14; agents = 17; prompts = 9; skills = 8 }
+        'dotnet'     = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
+        'typescript' = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
+        'python'     = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
+        'java'       = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
+        'go'         = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
+        'azure-iac'  = @{ instructions = 15; agents = 17; prompts = 9; skills = 8 }
         'custom'     = @{ instructions = 3;  agents = 5;  prompts = 7; skills = 0 }
     }
 
