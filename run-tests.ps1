@@ -28,7 +28,7 @@ function Test-Step([string]$Name, [scriptblock]$Action) {
     }
     Write-Host "  ▶  $Name" -ForegroundColor Cyan -NoNewline
     try {
-        $result = & $Action
+        $null = & $Action
         if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Exit code: $LASTEXITCODE" }
         Write-Host "  ✅" -ForegroundColor Green
         $script:passed++
@@ -114,9 +114,9 @@ Test-Step "orchestrator-self-test" {
 
 # ─── Test 9: Analyze ───────────────────────────────────────────────
 Test-Step "analyze" {
-    $output = pwsh -NoProfile -File pforge.ps1 analyze docs/plans/Phase-1-CLIENTS-CRUD-PLAN.md 2>&1 | Out-String
+    $analyzeOut = pwsh -NoProfile -File pforge.ps1 analyze docs/plans/Phase-1-CLIENTS-CRUD-PLAN.md 2>&1 | Out-String
     $global:LASTEXITCODE = 0  # Analyze exits 1 when score <60% — expected pre-execution
-    if ($output -notmatch "consistent|Traceability|slices") { throw "Analyze did not produce output" }
+    if ($analyzeOut -notmatch "consistent|Traceability|slices") { throw "Analyze did not produce output" }
 }
 
 # ─── Test 10: Cost Report (empty) ──────────────────────────────────
