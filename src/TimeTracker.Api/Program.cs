@@ -12,6 +12,7 @@ builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddScoped<IBillingService, BillingService>();
+builder.Services.AddScoped<IClientService, ClientService>();
 
 var app = builder.Build();
 
@@ -29,3 +30,5 @@ app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 app.Run();
+
+public partial class Program { }
