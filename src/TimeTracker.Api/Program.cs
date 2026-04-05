@@ -13,6 +13,7 @@ builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
 
 builder.Services.AddScoped<IBillingService, BillingService>();
 builder.Services.AddScoped<IClientService, ClientService>();
+builder.Services.AddScoped<IProjectService, ProjectService>();
 
 var app = builder.Build();
 
