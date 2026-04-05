@@ -7,6 +7,13 @@
       "type": "stdio",
       "cwd": "${workspaceFolder}",
       "command": "node"
+    },
+    "openbrain": {
+      "args": [
+        "E:/GitHub/OpenBrain/dist/mcp/server.js"
+      ],
+      "type": "stdio",
+      "command": "node"
     }
   }
 }
