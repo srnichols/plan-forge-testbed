@@ -186,6 +186,8 @@ const TOOLS = [
         estimate: { type: "boolean", description: "If true, return cost estimate without executing" },
         resumeFrom: { type: "number", description: "Slice number to resume from (skips completed slices)" },
         dryRun: { type: "boolean", description: "If true, parse and validate plan without executing" },
+        quorum: { type: "string", enum: ["false", "true", "auto"], description: "Quorum mode: 'false' (off), 'true' (all slices), 'auto' (threshold-based). Default: false" },
+        quorumThreshold: { type: "number", description: "Override complexity threshold for auto quorum (1-10). Default: 7" },
         path: { type: "string", description: "Project directory (default: current)" },
       },
       required: ["plan"],
@@ -270,7 +272,7 @@ function executeTool(name, args) {
 
 // ─── MCP Server ───────────────────────────────────────────────────────
 const server = new Server(
-  { name: "plan-forge-mcp", version: "2.0.0" },
+  { name: "plan-forge-mcp", version: "2.5.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -294,6 +296,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       activeAbortController = new AbortController();
       // Phase 3: If hub is running, use it as event handler for live broadcasting
       const eventHandler = activeHub ? { handle: (event) => activeHub.broadcast(event) } : null;
+      // Parse quorum parameter
+      let quorum = false;
+      if (args.quorum === "true" || args.quorum === true) quorum = true;
+      else if (args.quorum === "auto") quorum = "auto";
+
       const result = await runPlan(planPath, {
         cwd,
         model: args.model || null,
@@ -301,6 +308,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         resumeFrom: args.resumeFrom != null ? Number(args.resumeFrom) : null,
         estimate: args.estimate || false,
         dryRun: args.dryRun || false,
+        quorum,
+        quorumThreshold: args.quorumThreshold != null ? Number(args.quorumThreshold) : null,
         abortController: activeAbortController,
         eventHandler,
       });
@@ -566,10 +575,17 @@ function createExpressApp() {
 }
 
 // ─── Start ────────────────────────────────────────────────────────────
+const DASHBOARD_ONLY = process.argv.includes("--dashboard-only") || process.argv.includes("--dashboard");
+
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Plan Forge MCP server running (stdio transport)");
+  // MCP stdio transport (skip in dashboard-only mode)
+  if (!DASHBOARD_ONLY) {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("Plan Forge MCP server running (stdio transport)");
+  } else {
+    console.error("Plan Forge Dashboard-only mode (no MCP stdio)");
+  }
 
   // v2.3: Auto-generate tools.json + cli-schema.json on startup
   try {
