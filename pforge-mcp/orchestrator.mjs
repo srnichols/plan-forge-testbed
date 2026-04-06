@@ -382,10 +382,10 @@ export function spawnWorker(prompt, options = {}) {
     worker = null,     // override worker choice
   } = options;
 
-  return new Promise((resolve, reject) => {
+  return new Promise((workerResolve, workerReject) => {
     const workers = worker ? [{ name: worker }] : detectWorkers().filter((w) => w.available);
     if (workers.length === 0) {
-      reject(new Error("No CLI workers available. Install gh copilot, claude, or codex CLI."));
+      workerReject(new Error("No CLI workers available. Install gh copilot, claude, or codex CLI."));
       return;
     }
 
@@ -394,7 +394,8 @@ export function spawnWorker(prompt, options = {}) {
     let cmd;
 
     // Write prompt to temp file to avoid CLI arg length/escaping issues
-    const promptFile = resolve(tmpdir(), `pforge-prompt-${Date.now()}.txt`);
+    // Use random suffix to prevent collisions when spawning multiple workers in parallel (quorum)
+    const promptFile = resolve(tmpdir(), `pforge-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
     writeFileSync(promptFile, prompt);
 
     switch (chosen.name) {
@@ -422,7 +423,7 @@ export function spawnWorker(prompt, options = {}) {
         if (model) args.push("--model", model);
         break;
       default:
-        reject(new Error(`Unknown worker: ${chosen.name}`));
+        workerReject(new Error(`Unknown worker: ${chosen.name}`));
         return;
     }
 
@@ -465,7 +466,7 @@ export function spawnWorker(prompt, options = {}) {
         if (stderrStats.premiumRequests > 0) tokens.premiumRequests = stderrStats.premiumRequests;
       }
 
-      resolve({
+      workerResolve({
         output: stdout,
         stderr,
         jsonlEvents,
@@ -479,7 +480,7 @@ export function spawnWorker(prompt, options = {}) {
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      reject(new Error(`Failed to spawn ${cmd}: ${err.message} (code: ${err.code || "unknown"})`));
+      workerReject(new Error(`Failed to spawn ${cmd}: ${err.message} (code: ${err.code || "unknown"})`));
     });
   });
 }
@@ -1515,7 +1516,7 @@ export function loadQuorumConfig(cwd) {
     enabled: false,
     auto: true,
     threshold: 7,
-    models: ["claude-opus-4.6", "gpt-5.3-codex", "gemini-3.1-pro"],
+    models: ["claude-opus-4.6", "gpt-5.3-codex", "claude-sonnet-4.6"],
     reviewerModel: "claude-opus-4.6",
     dryRunTimeout: 300_000, // 5 min per dry-run leg
   };
@@ -1737,12 +1738,15 @@ export async function quorumDispatch(slice, config, options = {}) {
       });
       const legResult = {
         model,
-        output: result.output,
+        output: result.output || result.stderr || "",
         tokens: result.tokens,
         duration: Date.now() - legStart,
         exitCode: result.exitCode,
-        success: true,
+        success: true, // gh copilot may exit non-zero but still produce useful output
       };
+      // Determine success: has meaningful output (stdout or stderr) regardless of exit code
+      // gh copilot outputs text to stderr in non-TTY mode
+      legResult.success = (legResult.output || "").trim().length > 50;
       if (eventBus) {
         eventBus.emit("quorum-leg-completed", { sliceId: slice.number, ...legResult });
       }
@@ -1767,7 +1771,7 @@ export async function quorumDispatch(slice, config, options = {}) {
   const results = await Promise.all(promises);
 
   // Filter to successful responses
-  const successful = results.filter((r) => r.success && r.output.trim().length > 0);
+  const successful = results.filter((r) => r.success && (r.output || "").trim().length > 0);
 
   return { all: results, successful, totalDuration: Date.now() - startTime };
 }
@@ -1851,7 +1855,7 @@ export async function quorumReview(dispatchResult, slice, config, options = {}) 
       (a.output || "").length > (b.output || "").length ? a : b);
 
     return {
-      enhancedPrompt: `Based on analysis by ${best.model}, here is the recommended approach:\n\n${best.output}\n\n--- EXECUTE ---\n${buildSlicePrompt(slice)}`,
+      enhancedPrompt: `Based on analysis by ${best.model}, here is the recommended approach:\n\n${best.output || ""}\n\n--- EXECUTE ---\n${buildSlicePrompt(slice)}`,
       reviewerTokens: { tokens_in: 0, tokens_out: 0, model: "none" },
       reviewerCost: 0,
       modelResponses: successful,
