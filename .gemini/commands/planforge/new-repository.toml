@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-repository
+description = "Scaffold a repository class with interface, parameterized queries, connection management, and async patterns."
+
+"""
+# Create New Repository
+"""

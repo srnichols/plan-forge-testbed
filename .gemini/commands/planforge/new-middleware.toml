@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-middleware
+description = "Scaffold ASP.NET Core middleware with request/response pipeline, DI support, structured logging, and proper ordering."
+
+"""
+# Create New Middleware
+"""

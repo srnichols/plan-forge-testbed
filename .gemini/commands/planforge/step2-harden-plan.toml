@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step2-harden-plan
+description = "Pipeline Step 2 — Harden a draft plan into an execution contract with scope contracts, execution slices, validation gates, and TBD resolution."
+
+"""
+# Step 2: Harden the Plan
+"""

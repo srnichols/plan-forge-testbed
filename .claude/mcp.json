@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "plan-forge": {
+      "args": [
+        "pforge-mcp/server.mjs"
+      ],
+      "command": "node",
+      "type": "stdio",
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

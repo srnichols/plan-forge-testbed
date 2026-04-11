@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step1-preflight-check
+description = "Pipeline Step 1 — Pre-flight checks before plan hardening. Verifies git state, roadmap link, plan file, guardrails, and domain-specific instruction files."
+
+"""
+# Step 1: Pre-flight Check
+"""

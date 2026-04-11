@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-worker
+description = "Scaffold a background worker using BackgroundService with PeriodicTimer, structured logging, graceful shutdown, and health checks."
+
+"""
+# Create New Background Worker
+"""

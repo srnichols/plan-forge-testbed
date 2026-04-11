@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-event-handler
+description = "Scaffold domain event types, handlers, and a MediatR-based publish/subscribe pipeline."
+
+"""
+# Create New Event Handler
+"""

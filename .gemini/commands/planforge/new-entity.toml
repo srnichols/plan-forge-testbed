@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-entity
+description = "Scaffold a new database entity end-to-end: migration SQL, repository, service, DTO, controller, and tests."
+
+"""
+# Create New Database Entity
+"""

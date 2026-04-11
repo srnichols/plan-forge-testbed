@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-controller
+description = "Scaffold a REST API controller with authorization, ProblemDetails error handling, proper HTTP status codes, and CancellationToken."
+
+"""
+# Create New API Controller
+"""

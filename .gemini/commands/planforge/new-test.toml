@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-test
+description = "Scaffold xUnit test classes with Arrange-Act-Assert, mock setup, proper naming conventions, and trait categories."
+
+"""
+# Create New Test
+"""

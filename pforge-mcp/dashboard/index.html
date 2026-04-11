@@ -13,6 +13,33 @@
     .slice-executing { animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
     .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+    /* Run detail drawer */
+    #run-detail-drawer { transform: translateX(100%); transition: transform 0.3s ease; }
+    #run-detail-drawer.open { transform: translateX(0); }
+    #drawer-overlay { opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+    #drawer-overlay.open { opacity: 1; pointer-events: auto; }
+    /* Sortable columns */
+    th.sortable { cursor: pointer; -webkit-user-select: none; user-select: none; }
+    th.sortable:hover { color: #3b82f6; }
+    /* Keyboard selection */
+    tr.row-selected { outline: 2px solid #3b82f6; outline-offset: -2px; }
+    tr.row-compare { outline: 2px solid #f59e0b; outline-offset: -2px; background: rgba(245,158,11,0.08); }
+    /* Theme toggle */
+    .light body, .light { background: #f1f5f9 !important; color: #1e293b !important; }
+    .light .bg-gray-800 { background: #fff !important; }
+    .light .bg-gray-900 { background: #f1f5f9 !important; }
+    .light .bg-gray-700 { background: #e2e8f0 !important; }
+    .light .text-gray-100 { color: #1e293b !important; }
+    .light .text-gray-400 { color: #64748b !important; }
+    .light .text-gray-500 { color: #94a3b8 !important; }
+    .light .text-white { color: #0f172a !important; }
+    .light .border-gray-700 { border-color: #cbd5e1 !important; }
+    /* Responsive */
+    @media (max-width: 1024px) { .hide-tablet { display: none; } }
+    @media (max-width: 768px) {
+      .hide-mobile { display: none; }
+      #run-detail-drawer { width: 100% !important; }
+    }
   </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen">
@@ -22,10 +49,12 @@
       <span class="text-2xl">🔨</span>
       <h1 class="text-xl font-bold text-white">Plan Forge</h1>
       <span id="connection-badge" class="text-xs px-2 py-0.5 rounded-full bg-red-900 text-red-300">disconnected</span>
+      <span id="hub-clients" class="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-400 hidden" title="Connected clients">0 clients</span>
     </div>
     <div class="flex items-center gap-4 text-sm text-gray-400">
       <span id="run-status">Idle</span>
       <span id="ws-port"></span>
+      <button id="theme-toggle" onclick="toggleTheme()" title="Toggle theme" class="hover:text-white transition">🌙</button>
     </div>
   </header>
 
@@ -39,6 +68,7 @@
     <button class="tab-btn px-4 py-2 hover:text-blue-400 text-gray-400 whitespace-nowrap" data-tab="extensions">Extensions</button>
     <button class="tab-btn px-4 py-2 hover:text-blue-400 text-gray-400 whitespace-nowrap" data-tab="config">Config</button>
     <button class="tab-btn px-4 py-2 hover:text-blue-400 text-gray-400 whitespace-nowrap" data-tab="traces">Traces</button>
+    <button class="tab-btn px-4 py-2 hover:text-blue-400 text-gray-400 whitespace-nowrap" data-tab="skills">Skills</button>
     <!-- Notification bell -->
     <button id="notif-bell" class="ml-auto px-3 py-2 relative hover:text-yellow-400 text-gray-400" onclick="toggleNotifications()">
       🔔<span id="notif-count" class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center hidden">0</span>
@@ -68,32 +98,97 @@
           <p id="run-progress-text" class="text-sm text-gray-400">Start a run with <code class="bg-gray-700 px-1 rounded">pforge run-plan</code></p>
         </div>
         <div id="run-progress-bar" class="w-48 h-2 bg-gray-700 rounded-full overflow-hidden hidden">
-          <div id="run-progress-fill" class="h-full bg-blue-500 transition-all duration-500" style="width:0%"></div>
+          <div id="run-progress-fill" class="h-full bg-blue-500 transition-all duration-500 w-0"></div>
         </div>
       </div>
+
+      <!-- Plan Browser  -->
+      <details id="plan-browser" class="bg-gray-800 rounded-lg mb-4">
+        <summary class="px-4 py-3 cursor-pointer hover:bg-gray-700/50 flex items-center gap-2 text-sm font-semibold select-none">
+          <span>📄</span> Available Plans
+          <span id="plan-count" class="text-xs text-gray-500 ml-1"></span>
+          <a href="/ui" onclick="event.stopPropagation()" target="_blank" class="text-xs text-blue-400 hover:text-blue-300 ml-auto">Plan Browser →</a>
+        </summary>
+        <div id="plan-list" class="px-4 pb-3">
+          <p class="text-gray-500 text-sm py-2">Loading plans...</p>
+        </div>
+      </details>
 
       <!-- Slice cards -->
       <div id="slice-cards" class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <div class="text-gray-500 text-center py-12">Waiting for run events...</div>
       </div>
+
+      <!-- Event History  -->
+      <details class="bg-gray-800 rounded-lg mt-4">
+        <summary class="px-4 py-3 cursor-pointer hover:bg-gray-700/50 flex items-center gap-2 text-sm font-semibold select-none">
+          <span>📜</span> Event Log
+          <span id="event-log-count" class="text-xs text-gray-500 ml-1">(0)</span>
+        </summary>
+        <div id="event-log" class="px-4 pb-3 max-h-48 overflow-y-auto font-mono text-xs space-y-0.5"></div>
+      </details>
     </section>
 
     <!-- Runs Tab -->
     <section id="tab-runs" class="tab-content hidden">
+      <!-- Filter Bar  -->
+      <div class="bg-gray-800 rounded-lg p-3 mb-3 flex flex-wrap gap-2 items-center text-sm">
+        <select id="filter-plan" title="Filter by plan" class="bg-gray-700 text-white text-xs rounded px-2 py-1" onchange="applyRunFilters()">
+          <option value="">All Plans</option>
+        </select>
+        <select id="filter-status" title="Filter by status" class="bg-gray-700 text-white text-xs rounded px-2 py-1" onchange="applyRunFilters()">
+          <option value="">All Status</option>
+          <option value="completed">Pass</option>
+          <option value="failed">Fail</option>
+        </select>
+        <select id="filter-model" title="Filter by model" class="bg-gray-700 text-white text-xs rounded px-2 py-1" onchange="applyRunFilters()">
+          <option value="">All Models</option>
+        </select>
+        <select id="filter-mode" title="Filter by mode" class="bg-gray-700 text-white text-xs rounded px-2 py-1" onchange="applyRunFilters()">
+          <option value="">All Modes</option>
+          <option value="auto">auto</option>
+          <option value="assisted">assisted</option>
+          <option value="estimate">estimate</option>
+        </select>
+        <input id="filter-date-start" type="date" title="Start date" class="bg-gray-700 text-white text-xs rounded px-2 py-1 hide-mobile" onchange="applyRunFilters()">
+        <input id="filter-date-end" type="date" title="End date" class="bg-gray-700 text-white text-xs rounded px-2 py-1 hide-mobile" onchange="applyRunFilters()">
+        <button onclick="clearRunFilters()" class="text-xs text-gray-500 hover:text-white ml-1">Clear</button>
+        <button id="compare-btn" onclick="toggleCompareMode()" class="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded ml-1">Compare</button>
+        <div class="ml-auto flex gap-2">
+          <span id="runs-count" class="text-xs text-gray-500"></span>
+          <div class="relative">
+            <button onclick="toggleExportMenu('runs')" class="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">Export ▾</button>
+            <div id="export-menu-runs" class="hidden absolute right-0 top-7 bg-gray-800 border border-gray-700 rounded shadow z-50">
+              <button onclick="exportRuns('json')" class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-700">JSON</button>
+              <button onclick="exportRuns('csv')" class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-700">CSV</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Comparison Panel  -->
+      <div id="compare-panel" class="hidden bg-gray-800 rounded-lg p-4 mb-3 border border-amber-700/30">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-sm font-semibold text-amber-400">Run Comparison</h3>
+          <button onclick="closeComparison()" class="text-gray-500 hover:text-white text-sm">✕</button>
+        </div>
+        <div id="compare-content" class="grid gap-4 md:grid-cols-2 text-sm"></div>
+      </div>
       <div class="bg-gray-800 rounded-lg overflow-hidden">
         <table class="w-full text-sm">
           <thead class="bg-gray-700">
             <tr>
-              <th class="px-4 py-2 text-left">Date</th>
-              <th class="px-4 py-2 text-left">Plan</th>
-              <th class="px-4 py-2 text-center">Slices</th>
-              <th class="px-4 py-2 text-center">Status</th>
-              <th class="px-4 py-2 text-right">Cost</th>
-              <th class="px-4 py-2 text-right">Duration</th>
+              <th class="sortable px-4 py-2 text-left" data-sort="date" onclick="sortRuns('date')">Date</th>
+              <th class="sortable px-4 py-2 text-left" data-sort="plan" onclick="sortRuns('plan')">Plan</th>
+              <th class="sortable px-4 py-2 text-center hide-tablet" data-sort="mode" onclick="sortRuns('mode')">Mode</th>
+              <th class="sortable px-4 py-2 text-left hide-tablet" data-sort="model" onclick="sortRuns('model')">Model</th>
+              <th class="sortable px-4 py-2 text-center" data-sort="slices" onclick="sortRuns('slices')">Slices</th>
+              <th class="sortable px-4 py-2 text-center" data-sort="status" onclick="sortRuns('status')">Status</th>
+              <th class="sortable px-4 py-2 text-right" data-sort="cost" onclick="sortRuns('cost')">Cost</th>
+              <th class="sortable px-4 py-2 text-right" data-sort="duration" onclick="sortRuns('duration')">Duration</th>
             </tr>
           </thead>
           <tbody id="runs-table-body">
-            <tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">Loading...</td></tr>
+            <tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -101,6 +196,11 @@
 
     <!-- Cost Tab -->
     <section id="tab-cost" class="tab-content hidden">
+      <!-- Anomaly Banner  -->
+      <div id="cost-anomaly-banner" class="hidden bg-amber-900/30 border border-amber-600/40 rounded-lg p-3 mb-3 flex items-center justify-between">
+        <span id="cost-anomaly-text" class="text-sm text-amber-300"></span>
+        <button onclick="document.getElementById('cost-anomaly-banner').classList.add('hidden')" class="text-amber-500 hover:text-amber-300">✕</button>
+      </div>
       <div class="grid gap-4 md:grid-cols-3 mb-4">
         <div class="bg-gray-800 rounded-lg p-4">
           <p class="text-sm text-gray-400">Total Spend</p>
@@ -125,6 +225,31 @@
           <canvas id="chart-monthly" height="200"></canvas>
         </div>
       </div>
+      <!-- Cost Trend Line  -->
+      <div class="bg-gray-800 rounded-lg p-4 mt-4">
+        <div class="flex justify-between items-center mb-2 relative">
+          <h3 class="text-sm text-gray-400">Cost Per Run</h3>
+          <button onclick="toggleExportMenu('cost')" class="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">Export ▾</button>
+          <div id="export-menu-cost" class="hidden absolute right-0 top-7 bg-gray-800 border border-gray-700 rounded shadow z-50">
+            <button onclick="exportCost('json')" class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-700">JSON</button>
+            <button onclick="exportCost('csv')" class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-700">CSV</button>
+          </div>
+        </div>
+        <canvas id="chart-cost-trend" height="120"></canvas>
+      </div>
+      <!-- Duration Per Run Chart  -->
+      <div class="bg-gray-800 rounded-lg p-4 mt-4">
+        <h3 class="text-sm text-gray-400 mb-2">Duration Per Run</h3>
+        <canvas id="chart-duration-trend" height="120"></canvas>
+      </div>
+      <!-- Model Performance Comparison  -->
+      <div class="bg-gray-800 rounded-lg p-4 mt-4">
+        <h3 class="text-sm text-gray-400 mb-3">Model Performance</h3>
+        <canvas id="chart-model-perf" height="140" class="mb-4"></canvas>
+        <div id="model-comparison" class="overflow-x-auto">
+          <p class="text-gray-500 text-sm">Loading model data...</p>
+        </div>
+      </div>
     </section>
 
     <!-- Actions Tab -->
@@ -134,17 +259,25 @@
           <div class="flex items-center gap-2 mb-1"><span>🔨</span><span class="font-semibold">Smith</span></div>
           <p class="text-sm text-gray-400">Diagnose environment &amp; setup</p>
         </button>
-        <button onclick="runAction('sweep')" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
+        <button onclick="runSweep()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
           <div class="flex items-center gap-2 mb-1"><span>🧹</span><span class="font-semibold">Sweep</span></div>
-          <p class="text-sm text-gray-400">Find TODO/FIXME markers</p>
+          <p class="text-sm text-gray-400">Find TODO/FIXME markers (table view)</p>
         </button>
         <button onclick="runAction('analyze', prompt('Plan path:'))" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
           <div class="flex items-center gap-2 mb-1"><span>📊</span><span class="font-semibold">Analyze</span></div>
           <p class="text-sm text-gray-400">Consistency score for a plan</p>
         </button>
-        <button onclick="runAction('status')" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
+        <button onclick="runAnalyzeQuorum()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-purple-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>📊</span><span class="font-semibold">Analyze (Quorum)</span></div>
+          <p class="text-sm text-gray-400">Multi-model consensus analysis</p>
+        </button>
+        <button onclick="runDiagnose()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-purple-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>🔬</span><span class="font-semibold">Diagnose</span></div>
+          <p class="text-sm text-gray-400">Multi-model bug investigation</p>
+        </button>
+        <button onclick="runStatusEditable()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
           <div class="flex items-center gap-2 mb-1"><span>📋</span><span class="font-semibold">Status</span></div>
-          <p class="text-sm text-gray-400">Phase status from roadmap</p>
+          <p class="text-sm text-gray-400">Phase status (editable)</p>
         </button>
         <button onclick="runAction('check')" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
           <div class="flex items-center gap-2 mb-1"><span>✅</span><span class="font-semibold">Validate</span></div>
@@ -153,6 +286,22 @@
         <button onclick="runAction('ext search')" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition">
           <div class="flex items-center gap-2 mb-1"><span>🧩</span><span class="font-semibold">Extensions</span></div>
           <p class="text-sm text-gray-400">Browse extension catalog</p>
+        </button>
+        <button onclick="runBranch()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-green-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>🌿</span><span class="font-semibold">Create Branch</span></div>
+          <p class="text-sm text-gray-400">Git branch from plan's strategy</p>
+        </button>
+        <button onclick="runCommit()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-green-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>💾</span><span class="font-semibold">Auto-Commit</span></div>
+          <p class="text-sm text-gray-400">Conventional commit from slice goal</p>
+        </button>
+        <button onclick="runDiff()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-blue-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>📝</span><span class="font-semibold">Diff</span></div>
+          <p class="text-sm text-gray-400">Compare changes vs scope contract</p>
+        </button>
+        <button onclick="openLaunchPanel()" class="action-btn bg-gray-800 hover:bg-gray-700 rounded-lg p-4 text-left transition border border-cyan-700/30">
+          <div class="flex items-center gap-2 mb-1"><span>🚀</span><span class="font-semibold">Launch Plan</span></div>
+          <p class="text-sm text-gray-400">Execute a plan with model &amp; mode selection</p>
         </button>
       </div>
       <!-- Action result -->
@@ -167,7 +316,7 @@
       </div>
     </section>
 
-    <!-- Replay Tab (Phase 5) -->
+    <!-- Replay Tab  -->
     <section id="tab-replay" class="tab-content hidden">
       <div class="bg-gray-800 rounded-lg p-4 mb-4">
         <div class="flex gap-2 items-center mb-3">
@@ -187,7 +336,7 @@
       </div>
     </section>
 
-    <!-- Extensions Tab (Phase 5) -->
+    <!-- Extensions Tab  -->
     <section id="tab-extensions" class="tab-content hidden">
       <div class="mb-4">
         <input id="ext-search" type="text" placeholder="Search extensions..." class="bg-gray-700 text-white text-sm rounded-lg px-4 py-2 w-full max-w-sm" oninput="filterExtensions()">
@@ -197,11 +346,26 @@
       </div>
     </section>
 
-    <!-- Config Tab (Phase 5) -->
+    <!-- Config Tab  -->
     <section id="tab-config" class="tab-content hidden">
       <div class="bg-gray-800 rounded-lg p-6 max-w-2xl">
         <h2 class="text-lg font-semibold mb-4">Project Configuration</h2>
-        <div class="space-y-4">
+        <!-- Loading skeleton shown while config fetch is in-flight -->
+        <div id="cfg-skeleton" class="hidden space-y-4 animate-pulse">
+          <div class="h-4 bg-gray-700 rounded w-1/4"></div>
+          <div class="h-8 bg-gray-700 rounded w-full"></div>
+          <div class="h-4 bg-gray-700 rounded w-1/4"></div>
+          <div class="h-8 bg-gray-700 rounded w-full"></div>
+          <div class="h-4 bg-gray-700 rounded w-1/3"></div>
+          <div class="flex gap-2">
+            <div class="h-7 bg-gray-700 rounded w-20"></div>
+            <div class="h-7 bg-gray-700 rounded w-20"></div>
+            <div class="h-7 bg-gray-700 rounded w-20"></div>
+          </div>
+          <div class="h-4 bg-gray-700 rounded w-1/2"></div>
+          <div class="h-8 bg-gray-700 rounded w-full"></div>
+        </div>
+        <div id="cfg-form-body" class="space-y-4">
           <div>
             <label class="block text-sm text-gray-400 mb-1">Preset</label>
             <input id="cfg-preset" title="Preset" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full" readonly>
@@ -218,29 +382,139 @@
             <label class="block text-sm text-gray-400 mb-1">Model Routing — Default</label>
             <select id="cfg-model-default" title="Default model" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full">
               <option value="auto">auto</option>
-              <option value="claude-sonnet-4.6">claude-sonnet-4.6</option>
-              <option value="claude-opus-4.6">claude-opus-4.6</option>
-              <option value="gpt-5.2-codex">gpt-5.2-codex</option>
-              <option value="gpt-5-mini">gpt-5-mini</option>
-              <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
+              <optgroup label="xAI Grok (API)">
+                <option value="grok-4.20">grok-4.20</option>
+                <option value="grok-4">grok-4</option>
+                <option value="grok-3">grok-3</option>
+                <option value="grok-3-mini">grok-3-mini</option>
+              </optgroup>
+              <optgroup label="Claude (CLI)">
+                <option value="claude-sonnet-4.6">claude-sonnet-4.6</option>
+                <option value="claude-opus-4.6">claude-opus-4.6</option>
+              </optgroup>
+              <optgroup label="OpenAI (CLI)">
+                <option value="gpt-5.2-codex">gpt-5.2-codex</option>
+                <option value="gpt-5-mini">gpt-5-mini</option>
+              </optgroup>
+              <optgroup label="Google (CLI)">
+                <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
+              </optgroup>
             </select>
           </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">Image Generation Model</label>
+            <div class="flex gap-2 items-center">
+              <select id="cfg-model-image" title="Image generation model" class="bg-gray-700 text-white text-sm rounded px-3 py-2 flex-1">
+                <option value="">None (disabled)</option>
+                <optgroup label="xAI Grok (XAI_API_KEY)">
+                  <option value="grok-2-image">grok-2-image (Aurora)</option>
+                  <option value="grok-2-image-latest">grok-2-image-latest</option>
+                </optgroup>
+                <optgroup label="OpenAI (OPENAI_API_KEY)">
+                  <option value="dall-e-3">dall-e-3</option>
+                  <option value="dall-e-4">dall-e-4</option>
+                  <option value="gpt-image-1">gpt-image-1</option>
+                </optgroup>
+              </select>
+              <span class="text-xs text-gray-500 shrink-0">🎨</span>
+            </div>
+            <p class="text-xs text-gray-600 mt-1">Agents delegate image tasks (logos, diagrams, icons) to this model via <code class="text-gray-500">forge_generate_image</code>. Requires <code class="text-gray-500">XAI_API_KEY</code> for Grok or <code class="text-gray-500">OPENAI_API_KEY</code> for DALL-E.</p>
+          </div>
+          <!-- Advanced Settings  -->
+          <details class="border border-gray-700 rounded-lg p-3">
+            <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300 font-semibold">Advanced Settings</summary>
+            <div class="space-y-3 mt-3">
+              <div class="grid grid-cols-3 gap-3">
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Max Parallelism</label>
+                  <input id="cfg-max-parallel" type="number" min="1" max="10" value="3" class="bg-gray-700 text-white text-sm rounded px-3 py-1.5 w-full">
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Max Retries</label>
+                  <input id="cfg-max-retries" type="number" min="0" max="5" value="1" class="bg-gray-700 text-white text-sm rounded px-3 py-1.5 w-full">
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Run History Limit</label>
+                  <input id="cfg-max-history" type="number" min="10" max="500" value="50" class="bg-gray-700 text-white text-sm rounded px-3 py-1.5 w-full">
+                </div>
+              </div>
+              <div class="border-t border-gray-700 pt-3">
+                <p class="text-sm text-gray-400 font-semibold mb-2">Quorum Settings</p>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="flex items-center gap-2 text-xs text-gray-500">
+                      <input id="cfg-quorum-enabled" type="checkbox" class="rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-0"> Enable Quorum
+                    </label>
+                  </div>
+                  <div>
+                    <label class="block text-xs text-gray-500 mb-1">Threshold (1-10)</label>
+                    <input id="cfg-quorum-threshold" type="number" min="1" max="10" value="7" class="bg-gray-700 text-white text-sm rounded px-3 py-1.5 w-full">
+                  </div>
+                </div>
+                <div class="mt-2">
+                  <label class="block text-xs text-gray-500 mb-1">Quorum Models (comma-separated)</label>
+                  <input id="cfg-quorum-models" type="text" placeholder="grok-3-mini, claude-sonnet-4.6, gpt-5.2-codex" class="bg-gray-700 text-white text-sm rounded px-3 py-1.5 w-full border border-gray-600 focus:border-purple-500 outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs text-gray-500 mb-1">Available Workers</label>
+                <div id="cfg-workers" class="text-sm text-gray-300 bg-gray-700 rounded px-3 py-2">Checking...</div>
+              </div>
+            </div>
+          </details>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">API Providers</label>
+            <div id="cfg-api-providers" class="text-sm text-gray-300 bg-gray-700 rounded px-3 py-2">Checking...</div>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">OpenBrain Memory</label>
+            <div id="cfg-openbrain" class="text-sm text-gray-300 bg-gray-700 rounded px-3 py-2">Checking...</div>
+            <!-- Memory Search  -->
+            <div id="memory-search-panel" class="mt-3">
+              <div class="flex gap-2">
+                <input id="memory-search-input" type="text" placeholder="Search plans, configs, runs..." class="flex-1 bg-gray-700 text-white text-sm rounded px-3 py-1.5 border border-gray-600 focus:border-blue-500 outline-none" onkeydown="if(event.key==='Enter')searchMemory()">
+                <button onclick="searchMemory()" class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded">Search</button>
+              </div>
+              <div id="memory-presets" class="flex flex-wrap gap-1.5 mt-2"></div>
+              <div id="memory-search-results" class="mt-2 max-h-64 overflow-y-auto"></div>
+            </div>
+          </div>
+          <!-- Bridge Section  -->
+          <details id="cfg-bridge-details" class="border border-gray-700 rounded-lg p-3">
+            <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300 font-semibold flex items-center gap-2">
+              🔔 Bridge — Notification Channels
+              <span id="bridge-enabled-badge" class="hidden text-xs px-1.5 py-0.5 rounded-full bg-green-900 text-green-300 ml-auto">enabled</span>
+            </summary>
+            <div class="mt-3 space-y-3">
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-500 w-16 shrink-0">Status</span>
+                <div id="bridge-status-badge" class="text-sm text-gray-400">Loading...</div>
+              </div>
+              <div id="bridge-channels-list" class="space-y-1"></div>
+              <div id="bridge-approvals-panel" class="hidden">
+                <p class="text-xs text-amber-400 font-semibold mb-2">⏳ Pending Approvals</p>
+                <div id="bridge-approvals-list" class="space-y-2"></div>
+              </div>
+              <p class="text-xs text-gray-600">Configure in <code class="text-gray-500">.forge.json</code> → <code class="text-gray-500">bridge</code>. Supports Telegram, Slack, Discord, and generic webhooks.</p>
+            </div>
+          </details>
           <div class="flex gap-2 pt-2">
             <button onclick="saveConfig()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm">Save Configuration</button>
             <button onclick="loadConfig()" class="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded text-sm">Reload</button>
           </div>
-        </div>
+        </div><!-- end cfg-form-body -->
         <p id="cfg-status" class="text-xs text-gray-500 mt-2"></p>
       </div>
     </section>
 
-    <!-- Traces Tab (v2.4) -->
+    <!-- Traces Tab  -->
     <section id="tab-traces" class="tab-content hidden">
-      <div class="flex gap-4 mb-4">
+      <div class="flex gap-4 mb-4 flex-wrap">
         <select id="trace-run-select" title="Select trace run" class="bg-gray-700 text-white text-sm rounded px-3 py-2" onchange="loadTraceDetail()">
           <option value="">Select a run...</option>
         </select>
-        <div class="flex gap-2 text-xs">
+        <input id="trace-search" type="text" placeholder="Search spans..." class="bg-gray-700 text-white text-sm rounded px-3 py-2 border border-gray-600 focus:border-blue-500 outline-none w-48" oninput="filterTraceSpans()">
+        <div class="flex gap-2 text-xs items-center">
           <button onclick="filterTraceEvents('all')" class="px-2 py-1 bg-gray-600 rounded hover:bg-gray-500">All</button>
           <button onclick="filterTraceEvents('ERROR')" class="px-2 py-1 bg-red-900 rounded hover:bg-red-800">Errors</button>
           <button onclick="filterTraceEvents('WARN')" class="px-2 py-1 bg-yellow-900 rounded hover:bg-yellow-800">Warnings</button>
@@ -266,8 +540,111 @@
         </div>
       </div>
     </section>
+
+    <!-- Skills Tab -->
+    <section id="tab-skills" class="tab-content hidden">
+      <!-- Skill Catalog  -->
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold text-white mb-2">Available Skills</h2>
+        <div id="skill-catalog" class="grid gap-2 md:grid-cols-2 lg:grid-cols-3 mb-6">
+          <p class="text-gray-500 text-sm">Loading skills...</p>
+        </div>
+      </div>
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold text-white mb-2">Skill Executions</h2>
+        <p class="text-sm text-gray-400">Real-time timeline of slash command skill invocations via <code class="text-blue-400">forge_run_skill</code>.</p>
+      </div>
+      <div id="skill-timeline" class="space-y-2">
+        <div class="text-gray-500 text-center py-8">No skill executions yet. Invoke a skill via <code>/skill-name</code> or <code>forge_run_skill</code>.</div>
+      </div>
+    </section>
   </main>
+
+  <!-- Launch Plan Modal  -->
+  <div id="launch-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onclick="if(event.target===this)closeLaunchPanel()">
+    <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 w-[420px] shadow-2xl">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-bold">🚀 Launch Plan</h2>
+        <button onclick="closeLaunchPanel()" class="text-gray-500 hover:text-white text-lg">✕</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Plan</label>
+          <select id="launch-plan" title="Select plan" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full"></select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">Mode</label>
+            <select id="launch-mode" title="Execution mode" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full">
+              <option value="auto">Auto</option>
+              <option value="assisted">Assisted</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">Model</label>
+            <select id="launch-model" title="Model" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full">
+              <option value="auto">auto</option>
+              <option value="grok-4.20">grok-4.20</option>
+              <option value="grok-4">grok-4</option>
+              <option value="grok-3">grok-3</option>
+              <option value="claude-sonnet-4.6">claude-sonnet-4.6</option>
+              <option value="gpt-5.2-codex">gpt-5.2-codex</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-gray-400 mb-1">Quorum</label>
+            <select id="launch-quorum" title="Quorum mode" class="bg-gray-700 text-white text-sm rounded px-3 py-2 w-full">
+              <option value="false">Off</option>
+              <option value="auto" selected>Auto (threshold)</option>
+              <option value="true">All slices</option>
+            </select>
+          </div>
+          <div class="flex items-end">
+            <label class="flex items-center gap-2 text-sm text-gray-400 pb-2">
+              <input id="launch-estimate" type="checkbox" class="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-0"> Estimate only
+            </label>
+          </div>
+        </div>
+        <div id="launch-workers" class="text-xs text-gray-500"></div>
+        <div class="flex gap-2 pt-2">
+          <button onclick="submitLaunch()" class="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded text-sm font-semibold">Launch</button>
+          <button onclick="submitLaunch(true)" class="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded text-sm">Estimate First</button>
+        </div>
+        <div id="launch-status" class="text-xs text-gray-500"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run Detail Drawer  -->
+  <div id="drawer-overlay" class="fixed inset-0 bg-black/50 z-40" onclick="closeRunDrawer()"></div>
+  <div id="run-detail-drawer" class="fixed top-0 right-0 h-full w-[480px] bg-gray-800 border-l border-gray-700 z-50 overflow-y-auto shadow-2xl">
+    <div class="sticky top-0 bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between z-10">
+      <h3 id="drawer-title" class="font-semibold text-white truncate"></h3>
+      <button onclick="closeRunDrawer()" class="text-gray-500 hover:text-white text-lg">✕</button>
+    </div>
+    <div id="drawer-content" class="p-4"></div>
+  </div>
+
+  <!-- Keyboard Shortcuts Modal  -->
+  <div id="shortcuts-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 w-96 shadow-2xl">
+      <h2 class="text-lg font-bold mb-3">Keyboard Shortcuts</h2>
+      <div class="space-y-1 text-sm">
+        <div class="flex justify-between"><span class="text-gray-400">Switch tabs</span><kbd class="bg-gray-700 px-2 py-0.5 rounded text-xs">1-9</kbd></div>
+        <div class="flex justify-between"><span class="text-gray-400">Navigate runs</span><kbd class="bg-gray-700 px-2 py-0.5 rounded text-xs">j / k</kbd></div>
+        <div class="flex justify-between"><span class="text-gray-400">Open detail</span><kbd class="bg-gray-700 px-2 py-0.5 rounded text-xs">Enter</kbd></div>
+        <div class="flex justify-between"><span class="text-gray-400">Close panel</span><kbd class="bg-gray-700 px-2 py-0.5 rounded text-xs">Esc</kbd></div>
+        <div class="flex justify-between"><span class="text-gray-400">Show shortcuts</span><kbd class="bg-gray-700 px-2 py-0.5 rounded text-xs">?</kbd></div>
+      </div>
+      <button onclick="this.closest('#shortcuts-modal').classList.add('hidden')" class="mt-4 w-full text-center text-sm text-gray-500 hover:text-white">Close</button>
+    </div>
+  </div>
+
+  <footer class="text-center text-xs text-gray-600 py-2">Plan Forge <span id="footer-version"></span> · Press <kbd class="bg-gray-700 px-1 rounded">?</kbd> for keyboard shortcuts</footer>
 
   <script src="app.js"></script>
 </body>
 </html>
+

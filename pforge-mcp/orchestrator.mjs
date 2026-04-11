@@ -25,7 +25,11 @@ import { resolve, basename, dirname } from "node:path";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { createTraceContext, createTelemetryHandler, writeManifest, appendRunIndex, pruneRunHistory, addLogSummary } from "./telemetry.mjs";
-import { isOpenBrainConfigured, buildMemorySearchBlock, buildMemoryCaptureBlock, buildRunSummaryThought, buildCostAnomalyThought } from "./memory.mjs";
+import { isOpenBrainConfigured, buildMemorySearchBlock, buildMemoryCaptureBlock, buildRunSummaryThought, buildCostAnomalyThought, loadProjectContext } from "./memory.mjs";
+
+// ─── Centralized Constants ────────────────────────────────────────────
+/** Canonical list of all supported agent adapters. Update here — consumed by dashboard, setup, and docs. */
+export const SUPPORTED_AGENTS = ["copilot", "claude", "cursor", "codex", "gemini", "windsurf", "generic"];
 
 // ─── Event Bus (C3: Dependency Injection) ─────────────────────────────
 
@@ -65,8 +69,10 @@ class OrchestratorEventBus extends EventEmitter {
     // Proxy all known events to the handler
     const events = [
       "run-started", "slice-started", "slice-completed",
-      "slice-failed", "run-completed", "run-aborted",
+      "slice-failed", "slice-escalated", "run-completed", "run-aborted",
       "quorum-dispatch-started", "quorum-leg-completed", "quorum-review-completed",
+      "skill-started", "skill-step-started", "skill-step-completed", "skill-completed",
+      "slice-model-routed",
     ];
     for (const evt of events) {
       this.on(evt, (data) => this.handler.handle({ type: evt, data, timestamp: new Date().toISOString() }));
@@ -178,9 +184,12 @@ function parseSlices(lines) {
       continue;
     }
 
-    // Match slice headers: ### Slice N: Title  OR  ### Slice N.N — Title
+    // Match slice headers (case-insensitive, flexible separators):
+    //   ### Slice N: Title
+    //   ### slice N — Title
+    //   ### SLICE N.N - Title
     const sliceMatch = line.match(
-      /^###\s+Slice\s+([\d.]+)\s*[:\u2014—-]\s*(.+?)(?:\s*\[(.+?)\])*\s*$/u
+      /^###\s+slice\s+([\d.]+)\s*[:\u2014\u2013—–-]\s*(.+?)(?:\s*\[.+?\])*\s*$/ui
     );
     if (sliceMatch) {
       // Save previous slice
@@ -205,14 +214,16 @@ function parseSlices(lines) {
       };
 
       // Parse tags from the full header line
-      const dependsMatch = rawTags.match(/\[depends:\s*([^\]]+)\]/i);
+      // Fuzzy depends: [depends: ...], [depends on: ...], [dep: ...], [needs: ...]
+      const dependsMatch = rawTags.match(/\[(?:depends\s+on|depends|dep|needs):\s*([^\]]+)\]/i);
       if (dependsMatch) {
         current.depends = dependsMatch[1]
           .split(",")
-          .map((d) => d.trim().replace(/^Slice\s+/i, ""));
+          .map((d) => d.trim().replace(/^slice\s+/i, ""));
       }
 
-      const parallelMatch = rawTags.match(/\[P\]/);
+      // Fuzzy parallel: [P], [parallel], [parallel-safe]
+      const parallelMatch = rawTags.match(/\[(?:P|parallel(?:-safe)?)\]/i);
       if (parallelMatch) current.parallel = true;
 
       const scopeMatch = rawTags.match(/\[scope:\s*([^\]]+)\]/i);
@@ -233,12 +244,12 @@ function parseSlices(lines) {
     // Collect raw lines for the current slice
     current.rawLines.push(line);
 
-    // Parse build command
-    const buildMatch = line.match(/\*\*Build command\*\*:\s*`(.+?)`/);
+    // Parse build command (case-insensitive)
+    const buildMatch = line.match(/\*\*Build [Cc]ommand\*\*:\s*`(.+?)`/i);
     if (buildMatch) current.buildCommand = buildMatch[1];
 
-    // Parse test command
-    const testMatch = line.match(/\*\*Test command\*\*:\s*`(.+?)`/);
+    // Parse test command (case-insensitive)
+    const testMatch = line.match(/\*\*Test [Cc]ommand\*\*:\s*`(.+?)`/i);
     if (testMatch) current.testCommand = testMatch[1];
 
     // Detect validation gate section
@@ -337,31 +348,359 @@ function topologicalSort(nodes) {
   return order;
 }
 
+// ─── API Provider Registry ────────────────────────────────────────────
+
+/**
+ * Registry of API-based model providers (OpenAI-compatible endpoints).
+ * Each provider maps a model name pattern to an API endpoint + env var for the key.
+ * Models matching a provider pattern are dispatched via HTTP instead of CLI.
+ */
+const API_PROVIDERS = {
+  xai: {
+    pattern: /^grok-/,
+    baseUrl: "https://api.x.ai/v1",
+    envKey: "XAI_API_KEY",
+    label: "xAI Grok",
+  },
+  openai: {
+    pattern: /^(gpt-|dall-e-|chatgpt-)/,
+    baseUrl: "https://api.openai.com/v1",
+    envKey: "OPENAI_API_KEY",
+    label: "OpenAI",
+  },
+  // Future providers:
+  // anthropic: { pattern: /^claude-/, baseUrl: "https://api.anthropic.com/v1", envKey: "ANTHROPIC_API_KEY", label: "Anthropic Direct" },
+};
+
+/**
+ * Detect which API provider (if any) handles a given model name.
+ * @param {string} model - Model identifier (e.g., "grok-3-mini")
+ * @returns {{ name, baseUrl, apiKey, label } | null}
+ */
+function detectApiProvider(model) {
+  if (!model) return null;
+  for (const [name, provider] of Object.entries(API_PROVIDERS)) {
+    if (provider.pattern.test(model)) {
+      const apiKey = process.env[provider.envKey];
+      if (apiKey) return { name, baseUrl: provider.baseUrl, apiKey, label: provider.label };
+      return null; // Model matches but no API key configured
+    }
+  }
+  return null;
+}
+
+/**
+ * Call an OpenAI-compatible API endpoint directly (no CLI).
+ * Used for API-based providers (xAI Grok, etc.) in quorum and analysis modes.
+ *
+ * @param {string} prompt - The prompt text
+ * @param {string} model - Model identifier
+ * @param {{ name, baseUrl, apiKey, label }} provider - Resolved provider
+ * @param {object} options - { timeout }
+ * @returns {Promise<{ output, stderr, jsonlEvents, exitCode, timedOut, tokens, worker, model }>}
+ */
+async function callApiWorker(prompt, model, provider, options = {}) {
+  const { timeout = 300_000 } = options;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(`${provider.label} API error ${response.status}: ${errBody}`);
+    }
+
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    const usage = data.usage || {};
+    const completionDetails = usage.completion_tokens_details || {};
+
+    return {
+      output: choice?.message?.content || "",
+      stderr: "",
+      jsonlEvents: [],
+      exitCode: 0,
+      timedOut: false,
+      tokens: {
+        tokens_in: usage.prompt_tokens || 0,
+        tokens_out: usage.completion_tokens || 0,
+        model: data.model || model,
+        premiumRequests: 0,
+        apiDurationMs: 0,
+        sessionDurationMs: 0,
+        codeChanges: null,
+        reasoning_tokens: completionDetails.reasoning_tokens || 0,
+      },
+      worker: `api-${provider.name}`,
+      model: data.model || model,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.name === "AbortError") {
+      return {
+        output: "",
+        stderr: `${provider.label} API call timed out after ${timeout}ms`,
+        jsonlEvents: [],
+        exitCode: -1,
+        timedOut: true,
+        tokens: { tokens_in: 0, tokens_out: 0, model },
+        worker: `api-${provider.name}`,
+        model,
+      };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Detect the actual image format from raw bytes using magic byte signatures.
+ * Prevents MIME type mismatches when the API returns a different format than requested
+ * (e.g. xAI Grok Aurora returns JPEG bytes even when PNG is assumed).
+ *
+ * @param {Buffer} buffer - Raw image bytes
+ * @returns {{ ext: string, mimeType: string }}
+ */
+function detectImageFormat(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+    return { ext: "jpg", mimeType: "image/jpeg" };
+  }
+  if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+    return { ext: "png", mimeType: "image/png" };
+  }
+  if (buffer.length >= 3 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    return { ext: "gif", mimeType: "image/gif" };
+  }
+  if (buffer.length >= 12 && buffer.slice(8, 12).toString("ascii") === "WEBP") {
+    return { ext: "webp", mimeType: "image/webp" };
+  }
+  // Unknown — default to JPEG (most common from xAI)
+  return { ext: "jpg", mimeType: "image/jpeg" };
+}
+
+// Format metadata for conversion support
+const FORMAT_META = {
+  jpg:  { ext: "jpg",  mimeType: "image/jpeg", aliases: ["jpg", "jpeg"] },
+  jpeg: { ext: "jpg",  mimeType: "image/jpeg", aliases: ["jpg", "jpeg"] },
+  png:  { ext: "png",  mimeType: "image/png",  aliases: ["png"] },
+  webp: { ext: "webp", mimeType: "image/webp", aliases: ["webp"] },
+  avif: { ext: "avif", mimeType: "image/avif", aliases: ["avif"] },
+  gif:  { ext: "gif",  mimeType: "image/gif",  aliases: ["gif"] },
+};
+
+/**
+ * Convert image buffer to a target format using sharp.
+ * Falls back gracefully if sharp is not installed — returns original buffer.
+ *
+ * @param {Buffer} buffer - Source image bytes
+ * @param {string} targetFormat - Desired output format (jpg, png, webp, avif)
+ * @param {{ quality?: number }} options - Encoding options
+ * @returns {Promise<{ buffer: Buffer, format: { ext: string, mimeType: string }, converted: boolean }>}
+ */
+async function convertImageFormat(buffer, targetFormat, options = {}) {
+  const meta = FORMAT_META[targetFormat];
+  if (!meta) {
+    // Unknown target — return as-is
+    const detected = detectImageFormat(buffer);
+    return { buffer, format: detected, converted: false };
+  }
+
+  const detected = detectImageFormat(buffer);
+  const alreadyCorrect = meta.aliases.some((a) => detected.ext === a || (detected.ext === "jpeg" && a === "jpg"));
+  if (alreadyCorrect) {
+    return { buffer, format: { ext: meta.ext, mimeType: meta.mimeType }, converted: false };
+  }
+
+  try {
+    const sharp = (await import("sharp")).default;
+    const { quality = 85 } = options;
+
+    let pipeline = sharp(buffer);
+    switch (meta.ext) {
+      case "jpg":  pipeline = pipeline.jpeg({ quality, mozjpeg: true }); break;
+      case "png":  pipeline = pipeline.png({ quality: Math.min(quality, 100), compressionLevel: 9 }); break;
+      case "webp": pipeline = pipeline.webp({ quality, effort: 6 }); break;
+      case "avif": pipeline = pipeline.avif({ quality, effort: 4 }); break;
+      case "gif":  pipeline = pipeline.gif(); break;
+      default:     return { buffer, format: detected, converted: false };
+    }
+
+    const converted = await pipeline.toBuffer();
+    return { buffer: converted, format: { ext: meta.ext, mimeType: meta.mimeType }, converted: true };
+  } catch (err) {
+    // sharp not installed or conversion failed — fall back to original bytes
+    const detected2 = detectImageFormat(buffer);
+    return { buffer, format: detected2, converted: false, warning: `Format conversion to ${targetFormat} failed: ${err.message}. Saved as ${detected2.ext} instead.` };
+  }
+}
+
+/**
+ * Generate an image via xAI Grok image API (Aurora).
+ * Uses the OpenAI-compatible /v1/images/generations endpoint.
+ *
+ * @param {string} prompt - Text description of the image to generate
+ * @param {object} options - { model, size, format, outputPath, cwd }
+ * @returns {Promise<{ success, url, localPath, mimeType, model, revisedPrompt }>}
+ */
+export async function generateImage(prompt, options = {}) {
+  const {
+    model = "grok-imagine-image",
+    size = "1024x1024",
+    format = "png",
+    quality = 85,
+    outputPath = null,
+    cwd = process.cwd(),
+  } = options;
+
+  // Resolve provider — try the model's provider, then fall back to xAI, then OpenAI
+  const provider = detectApiProvider(model) || detectApiProvider("grok-imagine-image") || detectApiProvider("dall-e-3");
+  if (!provider) {
+    return { success: false, error: "No image API key configured. Set XAI_API_KEY or OPENAI_API_KEY environment variable." };
+  }
+
+  try {
+    // Build request body — xAI doesn't support 'size', OpenAI does
+    const reqBody = { model, prompt, n: 1, response_format: "b64_json" };
+    if (provider.name !== "xai" && size) reqBody.size = size;
+
+    const response = await fetch(`${provider.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(reqBody),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      return { success: false, error: `Image generation failed (${response.status}): ${errBody}` };
+    }
+
+    const data = await response.json();
+    const imageData = data.data?.[0];
+    if (!imageData?.b64_json) {
+      return { success: false, error: "No image data in response" };
+    }
+
+    // Decode bytes first so we can detect the actual format
+    const rawBuffer = Buffer.from(imageData.b64_json, "base64");
+    const detected = detectImageFormat(rawBuffer);
+
+    // Determine the desired output format from the outputPath extension or format option
+    const { extname: getExt } = await import("node:path");
+    const requestedExt = outputPath ? getExt(outputPath).toLowerCase().replace(".", "") : format;
+    const targetFormat = requestedExt || detected.ext;
+
+    // Convert to the requested format if different from what the API returned
+    const conversion = await convertImageFormat(rawBuffer, targetFormat, { quality });
+    const finalBuffer = conversion.buffer;
+    const finalFormat = conversion.format;
+
+    const result = {
+      success: true,
+      model: data.model || model,
+      revisedPrompt: imageData.revised_prompt || prompt,
+      mimeType: finalFormat.mimeType,
+      originalFormat: detected.mimeType,
+      converted: conversion.converted,
+    };
+
+    if (conversion.warning) {
+      result.warning = conversion.warning;
+    }
+
+    // Save to file if outputPath specified
+    if (outputPath) {
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      const { dirname, resolve: pathResolve } = await import("node:path");
+
+      // If conversion succeeded, use the requested path as-is.
+      // If conversion failed (fallback), correct the extension to match actual bytes.
+      let resolvedPath = outputPath;
+      if (!conversion.converted && detected.ext !== targetFormat) {
+        const detectedMeta = FORMAT_META[detected.ext];
+        const targetMeta = FORMAT_META[targetFormat];
+        const alreadyMatch = targetMeta?.aliases?.some((a) => detectedMeta?.aliases?.includes(a));
+        if (!alreadyMatch) {
+          resolvedPath = outputPath.replace(/\.[^.]+$/, `.${finalFormat.ext}`);
+          result.extensionCorrected = true;
+          result.requestedPath = outputPath;
+        }
+      }
+
+      const fullPath = pathResolve(cwd, resolvedPath);
+      mkdirSync(dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, finalBuffer);
+      result.localPath = fullPath;
+    }
+
+    // Return truncated base64 for logging only — never return full base64 inline,
+    // as passing raw image bytes through MCP tool results causes MIME type mismatch
+    // errors in the Claude API when the declared media_type doesn't match the bytes.
+    result.base64 = imageData.b64_json.substring(0, 100) + "..."; // Truncated for logging
+    result.fullBase64Length = imageData.b64_json.length;
+
+    return result;
+  } catch (err) {
+    return { success: false, error: `Image generation error: ${err.message}` };
+  }
+}
+
 // ─── Worker Spawning ──────────────────────────────────────────────────
 
 /**
- * Detect available CLI workers in priority order.
- * @returns {{ name: string, available: boolean }[]}
+ * Detect available workers (CLI + API providers).
+ * @returns {{ name: string, available: boolean, type: "cli"|"api" }[]}
  */
 export function detectWorkers() {
-  const workers = [
+  const cliWorkers = [
     { name: "gh-copilot", command: "gh", args: ["copilot", "--", "--version"] },
     { name: "claude", command: "claude", args: ["--version"] },
     { name: "codex", command: "codex", args: ["--version"] },
   ];
 
-  return workers.map((w) => {
+  const results = cliWorkers.map((w) => {
     try {
       execSync(`${w.command} ${w.args.join(" ")}`, {
         encoding: "utf-8",
         timeout: 10_000,
         stdio: "pipe",
       });
-      return { name: w.name, available: true };
+      return { name: w.name, available: true, type: "cli" };
     } catch {
-      return { name: w.name, available: false };
+      return { name: w.name, available: false, type: "cli" };
     }
   });
+
+  // Detect API providers
+  for (const [name, provider] of Object.entries(API_PROVIDERS)) {
+    const apiKey = process.env[provider.envKey];
+    results.push({
+      name: `api-${name}`,
+      available: !!apiKey,
+      type: "api",
+      label: provider.label,
+      models: provider.pattern.toString(),
+    });
+  }
+
+  return results;
 }
 
 /**
@@ -382,8 +721,14 @@ export function spawnWorker(prompt, options = {}) {
     worker = null,     // override worker choice
   } = options;
 
+  // Route API-based models (e.g., grok-*) to HTTP provider instead of CLI
+  const apiProvider = model ? detectApiProvider(model) : null;
+  if (apiProvider) {
+    return callApiWorker(prompt, model, apiProvider, { timeout });
+  }
+
   return new Promise((workerResolve, workerReject) => {
-    const workers = worker ? [{ name: worker }] : detectWorkers().filter((w) => w.available);
+    const workers = worker ? [{ name: worker }] : detectWorkers().filter((w) => w.available && w.type !== "api");
     if (workers.length === 0) {
       workerReject(new Error("No CLI workers available. Install gh copilot, claude, or codex CLI."));
       return;
@@ -395,21 +740,15 @@ export function spawnWorker(prompt, options = {}) {
 
     // Write prompt to temp file to avoid CLI arg length/escaping issues
     // Use random suffix to prevent collisions when spawning multiple workers in parallel (quorum)
-    const promptFile = resolve(tmpdir(), `pforge-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const promptFile = resolve(tmpdir(), `pforge-prompt-${suffix}.txt`);
     writeFileSync(promptFile, prompt);
 
     switch (chosen.name) {
       case "gh-copilot": {
-        // Use shell wrapper to read prompt from temp file (avoids Windows spawn arg limits)
-        if (process.platform === "win32") {
-          cmd = "pwsh";
-          args = ["-NoProfile", "-Command",
-            `$p = Get-Content -Path '${promptFile}' -Raw; & gh copilot -- -p $p --allow-all --no-ask-user` + (model ? ` --model ${model}` : "")];
-        } else {
-          cmd = "bash";
-          args = ["-c",
-            `gh copilot -- -p "$(cat '${promptFile}')" --allow-all --no-ask-user` + (model ? ` --model ${model}` : "")];
-        }
+        // Pass prompt file directly via @filepath syntax — avoids PS variable expansion and newline splitting
+        cmd = "gh";
+        args = ["copilot", "--", "-p", `@${promptFile}`, "--allow-all", "--allow-all-paths", "--allow-all-tools", "--no-ask-user", ...(model ? ["--model", model] : [])];
         break;
       }
       case "claude":
@@ -433,6 +772,11 @@ export function spawnWorker(prompt, options = {}) {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    // Track child for cleanup on parent exit
+    if (!global.__pforgeChildren) global.__pforgeChildren = new Set();
+    global.__pforgeChildren.add(child);
+    child.on("close", () => global.__pforgeChildren?.delete(child));
+
     // Close stdin immediately (no interactive input needed)
     child.stdin.end();
 
@@ -440,15 +784,34 @@ export function spawnWorker(prompt, options = {}) {
     let stderr = "";
     let timedOut = false;
 
+    // Fix A: Heartbeat — write a dot to stdout every 15s so VS Code terminal stays alive
+    // This prevents "The terminal is awaiting input" notification
+    const heartbeat = setInterval(() => {
+      process.stdout.write(".");
+    }, 15_000);
+
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
     }, timeout);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      // Fix B: Stream worker stderr to our stdout so terminal shows live progress
+      // gh copilot writes model selection, token counting, and timing to stderr
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith("{")) {
+          // Skip JSONL lines, show human-readable progress
+          process.stdout.write(`    ${trimmed}\n`);
+        }
+      }
+    });
 
     child.on("close", (code) => {
+      clearInterval(heartbeat);
       clearTimeout(timer);
 
       // Clean up temp prompt file
@@ -458,6 +821,7 @@ export function spawnWorker(prompt, options = {}) {
       let tokens = extractTokens(jsonlEvents);
 
       // Fallback: parse stderr stats (gh copilot outputs stats to stderr in non-TTY mode)
+      // Called inside "close" handler so `stderr` is the fully-accumulated string — not a partial stream.
       if (!tokens.model || tokens.tokens_out === 0) {
         const stderrStats = parseStderrStats(stderr);
         if (stderrStats.model) tokens.model = stderrStats.model;
@@ -912,8 +1276,9 @@ export async function runPlan(planPath, options = {}) {
     dryRun = false,
     eventHandler = null,
     abortController = null,
-    quorum = false,        // false | true | "auto"
+    quorum = "auto",       // false | true | "auto" — default: auto (threshold-based)
     quorumThreshold = null, // override threshold from config
+    bridge = null,         // BridgeManager instance for approval gate
   } = options;
 
   // Load model routing from .forge.json (Slice 5)
@@ -952,12 +1317,41 @@ export async function runPlan(planPath, options = {}) {
   const trace = createTraceContext(planPath, { mode, model: effectiveModel, sliceCount: plan.slices.length });
   const telemetryHandler = createTelemetryHandler(trace, runDir);
 
-  // Chain handlers: user-provided → telemetry → log
+  // Chain handlers: user-provided → telemetry → log → console progress
+  const isCliRun = !eventHandler; // If no custom handler, we're running from CLI — show progress on stdout
   const combinedHandler = {
     handle(event) {
       telemetryHandler.handle(event);
       if (eventHandler) eventHandler.handle(event);
       logHandler.handle(event);
+      // Write progress to stdout so terminal stays alive (prevents VS Code "awaiting input" stall)
+      if (isCliRun && event?.type) {
+        const ts = new Date().toISOString().slice(11, 19);
+        const d = event.data || event; // data is nested under event.data by the EventBus
+        switch (event.type) {
+          case "run-started":
+            process.stdout.write(`[${ts}] ▶ Run started: ${d.sliceCount || "?"} slices, mode=${d.mode || "auto"}\n`);
+            break;
+          case "slice-started":
+            process.stdout.write(`[${ts}] ⏳ Slice ${d.sliceId || "?"}: ${d.title || ""} — executing...\n`);
+            break;
+          case "slice-completed":
+            process.stdout.write(`[${ts}] ✅ Slice ${d.sliceId || "?"}: ${d.title || ""} — ${d.status || "done"} (${Math.round((d.duration || 0) / 1000)}s)\n`);
+            break;
+          case "slice-failed":
+            process.stdout.write(`[${ts}] ❌ Slice ${d.sliceId || "?"}: ${d.title || ""} — FAILED\n`);
+            break;
+          case "slice-escalated":
+            process.stdout.write(`[${ts}] ⬆ Slice ${d.sliceId || "?"}: ${d.title || ""} — escalating to ${d.toModel} (attempt ${d.attempt})\n`);
+            break;
+          case "run-completed":
+            process.stdout.write(`[${ts}] 🏁 Run complete: ${d.results?.passed || 0} passed, ${d.results?.failed || 0} failed\n`);
+            break;
+          case "ci-triggered":
+            process.stdout.write(`[${ts}] 🚀 CI triggered: ${d.workflow} @ ${d.ref} — ${d.status}\n`);
+            break;
+        }
+      }
     },
   };
   const eventBus = new OrchestratorEventBus(combinedHandler);
@@ -1006,13 +1400,14 @@ export async function runPlan(planPath, options = {}) {
 
   // Execute slices
   const maxRetries = loadMaxRetries(cwd);
+  const escalationChain = loadEscalationChain(cwd);
   const results = await scheduler.execute(
     plan.dag.nodes,
     plan.dag.order,
     async (slice) => executeSlice(slice, {
       cwd, model: effectiveModel, modelRouting, mode, runDir, maxRetries,
       memoryEnabled, projectName, planName: basename(planPath, ".md"),
-      quorumConfig,
+      quorumConfig, escalationChain, eventBus,
     }),
     { abortSignal, resumeFrom: resumeFrom ? String(resumeFrom) : null },
   );
@@ -1027,12 +1422,48 @@ export async function runPlan(planPath, options = {}) {
     analyzeResult = runAutoAnalyze(cwd, planPath);
   }
 
-  // Write summary
+  // Build summary in memory (needed for approval message content)
+  const runId = basename(runDir);
   const summary = buildSummary(plan, results, runMeta, { sweepResult, analyzeResult });
+
+  // Approval gate (Phase 16) — pause and await human approval before finalising
+  if (allPassed && bridge?.hasApprovalChannels) {
+    try {
+      const approvalResult = await bridge.requestApproval(runId, { ...summary, runId });
+      if (!approvalResult.approved) {
+        summary.status = "approval-rejected";
+        summary.approval = {
+          status: "rejected",
+          approver: approvalResult.approver ?? null,
+          timedOut: approvalResult.timedOut ?? false,
+          timestamp: new Date().toISOString(),
+        };
+      } else {
+        summary.approval = {
+          status: "approved",
+          approver: approvalResult.approver ?? null,
+          timestamp: new Date().toISOString(),
+        };
+      }
+    } catch (err) {
+      // Non-fatal — log and continue without blocking the run
+      console.error(`[orchestrator] Approval gate error: ${err.message}`);
+    }
+  }
+
+  // CI/CD Integration Hook — trigger workflow after successful run
+  if (allPassed && summary.status !== "approval-rejected") {
+    const ciConfig = loadCiConfig(cwd);
+    if (ciConfig.enabled && ciConfig.workflow) {
+      summary.ci = triggerCiWorkflow(ciConfig, eventBus);
+    }
+  }
+
+  // Write summary
   writeFileSync(resolve(runDir, "summary.json"), JSON.stringify(summary, null, 2));
 
   // Phase 2: Append to cost history
-  if (summary.cost && summary.status !== "estimate") {
+  if (summary.cost && summary.status !== "estimate" && summary.status !== "approval-rejected") {
     appendCostHistory(cwd, summary);
   }
 
@@ -1040,7 +1471,6 @@ export async function runPlan(planPath, options = {}) {
   eventBus.emit("run-completed", summary);
 
   // v2.4: Write manifest + index + prune (AFTER trace.json is written by emit)
-  const runId = basename(runDir);
   const manifest = writeManifest(runDir, runId, { ...summary, traceId: trace.traceId });
   appendRunIndex(cwd, runId, manifest);
   pruneRunHistory(cwd, loadMaxRunHistory(cwd));
@@ -1113,7 +1543,26 @@ function loadMaxRetries(cwd) {
 }
 
 /**
- * Load max run history from .forge.json.
+ * Load escalation chain from .forge.json.
+ * Schema: { "escalationChain": ["auto", "claude-opus-4.6", "gpt-5.3-codex"] }
+ * On each retry, the orchestrator escalates to the next model in the chain.
+ * First escalation jumps to top-tier reasoning (Opus), then to Codex for bug-fixing.
+ * @returns {string[]}
+ */
+function loadEscalationChain(cwd) {
+  const configPath = resolve(cwd, ".forge.json");
+  try {
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      if (Array.isArray(config.escalationChain) && config.escalationChain.length > 0) {
+        return config.escalationChain;
+      }
+    }
+  } catch { /* defaults */ }
+  return ["auto", "claude-opus-4.6", "gpt-5.3-codex"];
+}
+
+/**
  * @returns {number}
  */
 function loadMaxRunHistory(cwd) {
@@ -1142,12 +1591,70 @@ function loadProjectName(cwd) {
 }
 
 /**
+ * Load CI/CD integration configuration from .forge.json.
+ * Schema: { "ci": { "enabled": true, "workflow": "ci.yml", "ref": "main", "inputs": { "key": "value" } } }
+ * @returns {{ enabled: boolean, workflow: string|null, ref: string, inputs: object }}
+ */
+function loadCiConfig(cwd) {
+  const configPath = resolve(cwd, ".forge.json");
+  try {
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      if (config.ci && typeof config.ci === "object") {
+        return {
+          enabled: config.ci.enabled === true,
+          workflow: config.ci.workflow || null,
+          ref: config.ci.ref || "main",
+          inputs: config.ci.inputs && typeof config.ci.inputs === "object" ? config.ci.inputs : {},
+        };
+      }
+    }
+  } catch { /* defaults */ }
+  return { enabled: false, workflow: null, ref: "main", inputs: {} };
+}
+
+/**
+ * Trigger a GitHub Actions workflow via `gh workflow run`.
+ * Emits a `ci-triggered` event and returns a CI result object.
+ * @param {{ workflow: string, ref: string, inputs: object }} ciConfig
+ * @param {OrchestratorEventBus} eventBus
+ * @returns {{ workflow: string, ref: string, status: "triggered"|"failed", error?: string, timestamp: string }}
+ */
+function triggerCiWorkflow(ciConfig, eventBus) {
+  const { workflow, ref, inputs } = ciConfig;
+  const timestamp = new Date().toISOString();
+
+  try {
+    const args = ["workflow", "run", workflow, "--ref", ref];
+    if (inputs && Object.keys(inputs).length > 0) {
+      for (const [key, value] of Object.entries(inputs)) {
+        args.push("-f", `${key}=${value}`);
+      }
+    }
+    execSync(`gh ${args.join(" ")}`, { encoding: "utf-8", timeout: 30_000 });
+
+    const result = { workflow, ref, status: "triggered", timestamp };
+    eventBus.emit("ci-triggered", result);
+    return result;
+  } catch (err) {
+    const error = err.stderr?.trim() || err.message || "unknown error";
+    const result = { workflow, ref, status: "failed", error, timestamp };
+    eventBus.emit("ci-triggered", result);
+    return result;
+  }
+}
+
+/**
  * Resolve which model to use for a given slice based on routing config.
  * Priority: CLI override > slice-type routing > default routing > null (auto)
  */
-function resolveModel(cliModel, modelRouting, _slice) {
+function resolveModel(cliModel, modelRouting, slice) {
   if (cliModel && cliModel !== "auto") return cliModel;
-  // Future: match slice type (execute/review/test) to routing keys
+  // Match slice type to routing keys (e.g. modelRouting.test, modelRouting.review, etc.)
+  if (slice) {
+    const sliceType = inferSliceType(slice);
+    if (modelRouting[sliceType] && modelRouting[sliceType] !== "auto") return modelRouting[sliceType];
+  }
   if (modelRouting.default && modelRouting.default !== "auto") return modelRouting.default;
   return null; // Let CLI worker pick default
 }
@@ -1194,20 +1701,21 @@ function appendCostHistory(cwd, summary) {
  */
 export function getCostReport(cwd) {
   const historyPath = resolve(cwd, ".forge", "cost-history.json");
+  const modelStats = aggregateModelStats(loadModelPerformance(cwd));
   if (!existsSync(historyPath)) {
-    return { runs: 0, message: "No cost history yet. Run `pforge run-plan` to start tracking." };
+    return { runs: 0, message: "No cost history yet. Run `pforge run-plan` to start tracking.", forge_model_stats: modelStats };
   }
 
   let history;
   try {
     history = JSON.parse(readFileSync(historyPath, "utf-8"));
-    if (!Array.isArray(history)) return { runs: 0, message: "Invalid cost history format." };
+    if (!Array.isArray(history)) return { runs: 0, message: "Invalid cost history format.", forge_model_stats: modelStats };
   } catch {
-    return { runs: 0, message: "Could not parse cost-history.json." };
+    return { runs: 0, message: "Could not parse cost-history.json.", forge_model_stats: modelStats };
   }
 
   if (history.length === 0) {
-    return { runs: 0, message: "Cost history is empty." };
+    return { runs: 0, message: "Cost history is empty.", forge_model_stats: modelStats };
   }
 
   // Aggregate totals
@@ -1258,7 +1766,124 @@ export function getCostReport(cwd) {
     by_model: modelTotals,
     monthly,
     latest: history[history.length - 1],
+    forge_model_stats: modelStats,
   };
+}
+
+// ─── Model Performance Tracking (Phase 3) ────────────────────────────
+
+/**
+ * Load the model performance log from .forge/model-performance.json.
+ * Returns an array of per-slice performance entries, or [] if none exists.
+ */
+export function loadModelPerformance(cwd) {
+  const perfPath = resolve(cwd, ".forge", "model-performance.json");
+  if (!existsSync(perfPath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(perfPath, "utf-8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Append a per-slice performance entry to .forge/model-performance.json.
+ * Each entry records the model used, pass/fail outcome, cost, and timing.
+ *
+ * @param {string} cwd
+ * @param {{ date, plan, sliceId, sliceTitle, model, status, attempts, duration_ms, cost_usd }} entry
+ */
+export function recordModelPerformance(cwd, entry) {
+  const perfPath = resolve(cwd, ".forge", "model-performance.json");
+  const records = loadModelPerformance(cwd);
+  records.push(entry);
+  mkdirSync(resolve(cwd, ".forge"), { recursive: true });
+  writeFileSync(perfPath, JSON.stringify(records, null, 2));
+}
+
+/**
+ * Aggregate model performance records into per-model stats.
+ * @param {Array} records - from loadModelPerformance()
+ * @returns {object} model → { total_slices, passed, failed, success_rate, avg_cost_usd }
+ */
+function aggregateModelStats(records) {
+  const stats = {};
+  for (const r of records) {
+    const m = r.model || "unknown";
+    if (!stats[m]) stats[m] = { total_slices: 0, passed: 0, failed: 0, total_cost_usd: 0 };
+    stats[m].total_slices += 1;
+    if (r.status === "passed") stats[m].passed += 1;
+    else stats[m].failed += 1;
+    stats[m].total_cost_usd += r.cost_usd || 0;
+  }
+  const result = {};
+  for (const [model, s] of Object.entries(stats)) {
+    result[model] = {
+      total_slices: s.total_slices,
+      passed: s.passed,
+      failed: s.failed,
+      success_rate: s.total_slices > 0 ? Math.round((s.passed / s.total_slices) * 1000) / 1000 : 0,
+      avg_cost_usd: s.total_slices > 0 ? Math.round((s.total_cost_usd / s.total_slices) * 1_000_000) / 1_000_000 : 0,
+    };
+  }
+  return result;
+}
+
+/**
+ * Infer the slice type from its title and tasks for model routing purposes.
+ * Returns one of: "test" | "review" | "migration" | "execute"
+ * @param {object} slice - Parsed slice object
+ * @returns {string}
+ */
+export function inferSliceType(slice) {
+  const text = [slice.title || "", ...(slice.tasks || [])].join(" ").toLowerCase();
+  if (/\b(test|spec|unit test|integration test|e2e|coverage)\b/.test(text)) return "test";
+  if (/\b(review|audit|lint|analyze|analyse|check|inspect)\b/.test(text)) return "review";
+  if (/\b(migration|migrate|schema|seed|alter table|create table|drop table|dbcontext|ef core)\b/.test(text)) return "migration";
+  return "execute";
+}
+
+/**
+ * Recommend the best model for a given slice type based on historical performance.
+ *
+ * Selection criteria:
+ *   1. Minimum 3 slices of data (MIN_SAMPLE)
+ *   2. Success rate > 80%
+ *   3. Cheapest qualifying model wins
+ *
+ * Records are filtered by sliceType when type info is present in history.
+ * Falls back to all records when no type-specific data is available.
+ *
+ * @param {string} cwd - Project working directory
+ * @param {string|null} sliceType - Slice type from inferSliceType(), or null for global stats
+ * @returns {{ model: string, success_rate: number, avg_cost_usd: number, total_slices: number } | null}
+ */
+export function recommendModel(cwd, sliceType = null) {
+  try {
+    const records = loadModelPerformance(cwd);
+    if (records.length === 0) return null;
+
+    // Prefer type-specific records; fall back to all records
+    const typed = sliceType ? records.filter((r) => r.sliceType === sliceType) : records;
+    const relevant = typed.length >= 3 ? typed : records;
+
+    const stats = aggregateModelStats(relevant);
+    const MIN_SAMPLE = 3;
+    const qualified = Object.entries(stats)
+      .filter(([, s]) => s.total_slices >= MIN_SAMPLE && s.success_rate > 0.8)
+      .map(([m, s]) => ({
+        model: m,
+        success_rate: s.success_rate,
+        avg_cost_usd: s.avg_cost_usd,
+        total_slices: s.total_slices,
+      }))
+      .sort((a, b) => a.avg_cost_usd - b.avg_cost_usd);
+
+    return qualified.length > 0 ? qualified[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1268,9 +1893,42 @@ export function getCostReport(cwd) {
 async function executeSlice(slice, options) {
   const { cwd, model, modelRouting = {}, mode, runDir, maxRetries = 1,
     memoryEnabled = false, projectName = "", planName = "",
-    quorumConfig = null } = options;
+    quorumConfig = null,
+    escalationChain = ["auto", "claude-opus-4.6", "gpt-5.3-codex"],
+    eventBus = null } = options;
   const startTime = Date.now();
   const resolvedModel = resolveModel(model, modelRouting, slice);
+
+  // Fix 8: Snapshot working tree before slice (for safe rollback on failure)
+  let snapshotStash = false;
+  try {
+    const status = execSync("git status --porcelain", { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+    if (status) {
+      execSync(`git stash push -m "pforge-slice-${slice.number}-snapshot"`, { cwd, encoding: "utf-8", timeout: 10000 });
+      snapshotStash = true;
+    }
+  } catch { /* not a git repo or git not available — skip snapshot */ }
+
+  // ─── Agent-Per-Slice Routing (Slice 1) ───────────────────────────────
+  // When no explicit model is set, recommend one from historical performance data.
+  let finalModel = resolvedModel;
+  if (!finalModel && cwd) {
+    const sliceType = inferSliceType(slice);
+    const rec = recommendModel(cwd, sliceType);
+    if (rec) {
+      finalModel = rec.model;
+      if (eventBus) {
+        eventBus.emit("slice-model-routed", {
+          sliceId: slice.number,
+          title: slice.title,
+          model: rec.model,
+          sliceType,
+          success_rate: rec.success_rate,
+          based_on_slices: rec.total_slices,
+        });
+      }
+    }
+  }
 
   // ─── Quorum Mode (v2.5) ───
   let quorumResult = null;
@@ -1323,8 +1981,28 @@ async function executeSlice(slice, options) {
   let workerResult = null;
   let gateResult = { success: true, output: "No validation gate defined" };
   let lastError = null;
+  let currentModel = finalModel;
 
   while (attempt <= maxRetries) {
+    // Auto-escalate model on retries
+    if (attempt > 0 && escalationChain.length > 1) {
+      const chainIdx = Math.min(attempt, escalationChain.length - 1);
+      const chainModel = escalationChain[chainIdx] === "auto" ? null : escalationChain[chainIdx];
+      if (chainModel !== currentModel) {
+        const fromModel = currentModel || "auto";
+        currentModel = chainModel;
+        if (eventBus) {
+          eventBus.emit("slice-escalated", {
+            sliceId: slice.number,
+            title: slice.title,
+            attempt,
+            fromModel,
+            toModel: currentModel || "auto",
+          });
+        }
+      }
+    }
+
     // Build prompt — on retry, include the error context
     let sliceInstructions = (useQuorum && quorumResult)
       ? quorumResult.enhancedPrompt
@@ -1351,7 +2029,7 @@ async function executeSlice(slice, options) {
       };
     } else {
       try {
-        workerResult = await spawnWorker(sliceInstructions, { model: resolvedModel, cwd });
+        workerResult = await spawnWorker(sliceInstructions, { model: currentModel, cwd });
       } catch (err) {
         return {
           status: "failed",
@@ -1441,6 +2119,7 @@ async function executeSlice(slice, options) {
     worker: workerResult.worker,
     model: workerResult.model,
     attempts: attempt + 1,
+    ...(currentModel !== finalModel && { escalatedModel: finalModel || "auto" }),
     ...(useQuorum && {
       quorum: {
         score: complexityScore,
@@ -1459,6 +2138,25 @@ async function executeSlice(slice, options) {
     resolve(runDir, `slice-${slice.number}.json`),
     JSON.stringify(sliceResult, null, 2),
   );
+
+  // Record model performance for this slice
+  try {
+    const sliceCost = calculateSliceCost(sliceResult.tokens, sliceResult.worker);
+    recordModelPerformance(cwd, {
+      date: new Date().toISOString(),
+      plan: planName,
+      sliceId: slice.number,
+      sliceTitle: slice.title,
+      sliceType: inferSliceType(slice),
+      model: sliceResult.model || "unknown",
+      status: sliceResult.status,
+      attempts: sliceResult.attempts,
+      duration_ms: sliceResult.duration,
+      cost_usd: sliceCost.cost_usd,
+    });
+  } catch {
+    // Non-fatal — don't fail the slice over a tracking write error
+  }
 
   return sliceResult;
 }
@@ -1515,7 +2213,7 @@ export function loadQuorumConfig(cwd) {
   const defaults = {
     enabled: false,
     auto: true,
-    threshold: 7,
+    threshold: 6,
     models: ["claude-opus-4.6", "gpt-5.3-codex", "claude-sonnet-4.6"],
     reviewerModel: "claude-opus-4.6",
     dryRunTimeout: 300_000, // 5 min per dry-run leg
@@ -1865,6 +2563,244 @@ export async function quorumReview(dispatchResult, slice, config, options = {}) 
   }
 }
 
+// ─── Quorum Analysis ─────────────────────────────────────────────────
+
+/**
+ * Multi-model analysis of a plan or file.
+ * Dispatches independent analysis to N models, then synthesizes findings.
+ *
+ * Modes:
+ *   - plan: Analyze a hardened plan for consistency, coverage gaps, risk
+ *   - file: Analyze source file(s) for bugs, patterns, improvements
+ *
+ * @param {object} options - { target, mode, models, cwd }
+ * @returns {Promise<{ results, synthesis, cost }>}
+ */
+export async function analyzeWithQuorum(options = {}) {
+  const {
+    target,
+    mode = "plan",   // "plan" | "file" | "diagnose"
+    models = null,
+    cwd = process.cwd(),
+  } = options;
+
+  const config = loadQuorumConfig(cwd);
+  const analyzeModels = models || config.models;
+
+  // Build analysis prompt based on mode
+  let content;
+  try {
+    content = readFileSync(resolve(cwd, target), "utf-8");
+  } catch (err) {
+    throw new Error(`Cannot read analysis target: ${target} — ${err.message}`);
+  }
+
+  const prompt = mode === "plan"
+    ? buildPlanAnalysisPrompt(content, target)
+    : mode === "diagnose"
+      ? buildDiagnosePrompt(content, target)
+      : buildFileAnalysisPrompt(content, target);
+
+  console.log(`\n🗳️  Quorum Analysis — dispatching to ${analyzeModels.length} models...`);
+  console.log(`   Target: ${target} (${mode} mode)`);
+  console.log(`   Models: ${analyzeModels.join(", ")}\n`);
+
+  // Dispatch to all models in parallel
+  const startTime = Date.now();
+  const promises = analyzeModels.map(async (model) => {
+    const legStart = Date.now();
+    console.log(`   ⏳ ${model} — analyzing...`);
+    try {
+      const result = await spawnWorker(prompt, {
+        model,
+        cwd,
+        timeout: config.dryRunTimeout || 300_000,
+      });
+      const duration = Date.now() - legStart;
+      console.log(`   ✅ ${model} — done (${Math.round(duration / 1000)}s)`);
+      return {
+        model,
+        output: result.output || "",
+        tokens: result.tokens,
+        duration,
+        success: (result.output || "").trim().length > 50,
+        worker: result.worker,
+      };
+    } catch (err) {
+      const duration = Date.now() - legStart;
+      console.log(`   ❌ ${model} — failed: ${err.message}`);
+      return {
+        model,
+        output: "",
+        tokens: { tokens_in: 0, tokens_out: 0, model },
+        duration,
+        success: false,
+        error: err.message,
+        worker: "failed",
+      };
+    }
+  });
+
+  const results = await Promise.all(promises);
+  const successful = results.filter((r) => r.success);
+  const totalDuration = Date.now() - startTime;
+
+  console.log(`\n   📊 ${successful.length}/${results.length} models returned results (${Math.round(totalDuration / 1000)}s total)`);
+
+  // Synthesize findings if we have 2+ responses
+  let synthesis = null;
+  let synthesisCost = 0;
+  if (successful.length >= 2) {
+    console.log(`   🔄 Synthesizing with ${config.reviewerModel}...`);
+    const synthPrompt = buildAnalysisSynthesisPrompt(successful, target, mode);
+    try {
+      const synthResult = await spawnWorker(synthPrompt, {
+        model: config.reviewerModel,
+        cwd,
+        timeout: config.dryRunTimeout || 300_000,
+      });
+      synthesis = synthResult.output || "";
+      synthesisCost = calculateSliceCost(synthResult.tokens).cost_usd;
+      console.log(`   ✅ Synthesis complete`);
+    } catch (err) {
+      console.log(`   ⚠️  Synthesis failed: ${err.message} — returning raw results`);
+    }
+  } else if (successful.length === 1) {
+    synthesis = successful[0].output;
+  }
+
+  // Calculate total cost
+  let totalCost = synthesisCost;
+  for (const r of results) {
+    totalCost += calculateSliceCost(r.tokens).cost_usd;
+  }
+
+  return {
+    target,
+    mode,
+    models: analyzeModels,
+    results: results.map((r) => ({
+      model: r.model,
+      output: r.output,
+      duration: r.duration,
+      success: r.success,
+      worker: r.worker,
+      cost: calculateSliceCost(r.tokens).cost_usd,
+      error: r.error,
+    })),
+    synthesis,
+    totalDuration,
+    totalCost: Math.round(totalCost * 100) / 100,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Build analysis prompt for a hardened plan file.
+ */
+function buildPlanAnalysisPrompt(content, filename) {
+  return [
+    "You are a senior software architect performing an independent code review of a hardened execution plan.",
+    "Analyze the following plan and report on:",
+    "",
+    "1. **Consistency**: Are slice dependencies correct? Do scopes overlap or conflict?",
+    "2. **Coverage Gaps**: Are there untested edge cases, missing error handlers, or validation gaps?",
+    "3. **Risk Assessment**: Which slices have the highest failure risk and why?",
+    "4. **Naming & Style**: Are naming conventions consistent across slices?",
+    "5. **Security**: Any security concerns in the planned implementation?",
+    "6. **Improvement Suggestions**: Concrete, actionable improvements.",
+    "",
+    "Format your response as structured Markdown with clear headings for each category.",
+    "Rate each category as: ✅ Good | ⚠️ Needs Attention | ❌ Critical Issue",
+    "End with an overall confidence score (1-10) for plan readiness.",
+    "",
+    `--- PLAN: ${filename} ---`,
+    content,
+  ].join("\n");
+}
+
+/**
+ * Build analysis prompt for source file(s).
+ */
+function buildFileAnalysisPrompt(content, filename) {
+  return [
+    "You are a senior software engineer performing an independent code review.",
+    "Analyze the following file and report on:",
+    "",
+    "1. **Bugs**: Logic errors, null reference risks, race conditions, off-by-one errors",
+    "2. **Security**: Input validation gaps, injection risks, auth issues, secret exposure",
+    "3. **Performance**: Hot paths, unnecessary allocations, N+1 queries, missing caching",
+    "4. **Architecture**: Separation of concerns, testability, coupling issues",
+    "5. **Error Handling**: Missing error handlers, swallowed exceptions, incomplete recovery",
+    "6. **Improvements**: Concrete, actionable fixes with code snippets where helpful",
+    "",
+    "Format your response as structured Markdown with clear headings.",
+    "Rate each category as: ✅ Good | ⚠️ Needs Attention | ❌ Critical Issue",
+    "End with an overall code quality score (1-10).",
+    "",
+    `--- FILE: ${filename} ---`,
+    content,
+  ].join("\n");
+}
+
+/**
+ * Build diagnosis prompt for bug investigation.
+ * Focused on root cause analysis, failure modes, and fix recommendations.
+ */
+function buildDiagnosePrompt(content, filename) {
+  return [
+    "You are a senior software engineer performing a focused bug investigation.",
+    "The user suspects there may be bugs or reliability issues in this file.",
+    "Investigate thoroughly and report on:",
+    "",
+    "1. **Root Cause Analysis**: What bugs exist? Trace the exact code path for each.",
+    "2. **Failure Modes**: How will each bug manifest at runtime? Under what conditions?",
+    "3. **Reproduction Steps**: How would you trigger each bug? What inputs or state?",
+    "4. **Impact Assessment**: Severity (crash/data loss/wrong result/cosmetic) and blast radius",
+    "5. **Fix Recommendations**: Exact code changes needed. Show before/after snippets.",
+    "6. **Regression Risk**: Could the fixes break other functionality? What tests should be added?",
+    "",
+    "Be thorough — examine every code path, every edge case, every null/undefined risk.",
+    "Check for: race conditions, boundary values, error propagation, resource leaks,",
+    "unhandled promise rejections, type coercion bugs, off-by-one errors, stale closures.",
+    "",
+    "Format your response as structured Markdown with clear headings.",
+    "Rate overall reliability as: ✅ Solid | ⚠️ Has Issues | ❌ Unreliable",
+    "End with a prioritized fix list (fix most critical bugs first).",
+    "",
+    `--- FILE UNDER INVESTIGATION: ${filename} ---`,
+    content,
+  ].join("\n");
+}
+
+/**
+ * Build synthesis prompt from multiple model analysis results.
+ */
+function buildAnalysisSynthesisPrompt(successful, target, mode) {
+  const type = mode === "plan" ? "plan analysis" : mode === "diagnose" ? "bug investigation" : "code review";
+  let prompt = [
+    `You are a senior technical reviewer synthesizing ${type} results from ${successful.length} independent AI models.`,
+    `Each model independently analyzed: ${target}`,
+    "",
+    "Your job is to:",
+    "1. Identify findings that MULTIPLE models agree on (high confidence)",
+    "2. Flag unique findings from single models that seem valid (medium confidence)",
+    "3. Resolve any contradictions between models",
+    "4. Produce a unified, prioritized report",
+    "",
+    "Format: Structured Markdown with priority levels (🔴 Critical, 🟡 Important, 🟢 Minor).",
+    "Include a confidence indicator for each finding: [Consensus: N/M models agree]",
+    "End with an overall assessment and top 3 action items.",
+    "",
+  ].join("\n");
+
+  for (const r of successful) {
+    prompt += `\n--- ANALYSIS BY ${r.model} ---\n${r.output}\n`;
+  }
+
+  return prompt;
+}
+
 // ─── Pricing Table (Phase 2) ──────────────────────────────────────────
 // Per-token costs in USD. Updated April 2026.
 // Source: published API pricing pages. Rates are per 1 token.
@@ -1882,29 +2818,50 @@ const MODEL_PRICING = {
   "gpt-5.3-codex":          { input: 3 / 1_000_000,    output: 12 / 1_000_000 },
   "gpt-5.2-codex":          { input: 2 / 1_000_000,    output: 8 / 1_000_000 },
   "gpt-5.2":                { input: 2 / 1_000_000,    output: 8 / 1_000_000 },
-  "gpt-5.1-codex-max":      { input: 3 / 1_000_000,    output: 12 / 1_000_000 },
-  "gpt-5.1-codex":          { input: 2 / 1_000_000,    output: 8 / 1_000_000 },
-  "gpt-5.1":                { input: 2 / 1_000_000,    output: 8 / 1_000_000 },
-  "gpt-5.1-codex-mini":     { input: 0.3 / 1_000_000,  output: 1.2 / 1_000_000 },
+  "gpt-5.4-mini":           { input: 0.4 / 1_000_000,  output: 1.6 / 1_000_000 },
   "gpt-5-mini":             { input: 0.4 / 1_000_000,  output: 1.6 / 1_000_000 },
   "gpt-4.1":                { input: 2 / 1_000_000,    output: 8 / 1_000_000 },
   // Google Gemini
   "gemini-3-pro-preview":   { input: 1.25 / 1_000_000, output: 5 / 1_000_000 },
+  // xAI Grok (reasoning_tokens billed as output)
+  "grok-4.20":              { input: 3 / 1_000_000,    output: 15 / 1_000_000 },
+  "grok-4":                 { input: 2 / 1_000_000,    output: 10 / 1_000_000 },
+  "grok-4-0709":            { input: 2 / 1_000_000,    output: 10 / 1_000_000 },
+  "grok-3":                 { input: 3 / 1_000_000,    output: 15 / 1_000_000 },
+  "grok-3-mini":            { input: 0.30 / 1_000_000, output: 0.50 / 1_000_000 },
   // Fallback
   default:                  { input: 3 / 1_000_000,    output: 15 / 1_000_000 },
 };
 
 /**
  * Calculate cost for a single slice from its token data.
- * @param {{ tokens_in: number|null, tokens_out: number|null, model: string }} tokens
+ *
+ * CLI workers (gh-copilot, claude) are subscription-based — cost is estimated
+ * from premium request counts, not token-based API pricing.
+ * API workers use per-token MODEL_PRICING.
+ *
+ * @param {{ tokens_in: number|null, tokens_out: number|null, model: string, premiumRequests?: number }} tokens
+ * @param {string} [worker] - Worker type: "gh-copilot", "claude", "codex", "api-xai", etc.
  * @returns {{ cost_usd: number, model: string, tokens_in: number, tokens_out: number }}
  */
-export function calculateSliceCost(tokens) {
+export function calculateSliceCost(tokens, worker) {
   const model = tokens?.model || "unknown";
-  const pricing = MODEL_PRICING[model] || MODEL_PRICING.default;
   const tokensIn = typeof tokens?.tokens_in === "number" ? tokens.tokens_in : 0;
   const tokensOut = typeof tokens?.tokens_out === "number" ? tokens.tokens_out : 0;
-  const cost = (tokensIn * pricing.input) + (tokensOut * pricing.output);
+
+  let cost;
+  // CLI subscription workers: cost based on premium requests, not API token pricing
+  if (worker && !worker.startsWith("api-")) {
+    const premiumRequests = tokens?.premiumRequests || 0;
+    // GitHub Copilot premium request rate — approximate per-request cost
+    const PREMIUM_REQUEST_RATE = 0.01; // ~$0.01 per premium request
+    cost = premiumRequests * PREMIUM_REQUEST_RATE;
+  } else {
+    // API workers: use per-token pricing
+    const pricing = MODEL_PRICING[model] || MODEL_PRICING.default;
+    cost = (tokensIn * pricing.input) + (tokensOut * pricing.output);
+  }
+
   return {
     cost_usd: Math.round(cost * 1_000_000) / 1_000_000, // 6 decimal places
     model,
@@ -1927,7 +2884,7 @@ export function buildCostBreakdown(sliceResults) {
 
   for (const sr of sliceResults) {
     if (!sr.tokens || sr.status === "skipped") continue;
-    const cost = calculateSliceCost(sr.tokens);
+    const cost = calculateSliceCost(sr.tokens, sr.worker);
     totalCost += cost.cost_usd;
     totalIn += cost.tokens_in;
     totalOut += cost.tokens_out;
@@ -2027,11 +2984,48 @@ function buildEstimate(plan, model, cwd, quorumConfig = null) {
     };
   }
 
+  // Phase 3: Recommend cheapest model with >80% success rate from performance history
+  let modelRecommendation = null;
+  if (cwd) {
+    try {
+      const perfRecords = loadModelPerformance(cwd);
+      if (perfRecords.length > 0) {
+        const stats = aggregateModelStats(perfRecords);
+        // Minimum 3 slices of data before trusting a model's success rate
+        const MIN_SAMPLE = 3;
+        const qualified = Object.entries(stats)
+          .filter(([, s]) => s.total_slices >= MIN_SAMPLE && s.success_rate > 0.8)
+          .map(([m, s]) => ({
+            model: m,
+            success_rate: s.success_rate,
+            total_slices: s.total_slices,
+            avg_cost_usd: s.avg_cost_usd,
+          }))
+          .sort((a, b) => a.avg_cost_usd - b.avg_cost_usd);
+
+        if (qualified.length > 0) {
+          const best = qualified[0];
+          modelRecommendation = {
+            model: best.model,
+            reason: `Cheapest model with >${(0.8 * 100).toFixed(0)}% success rate`,
+            success_rate: best.success_rate,
+            avg_cost_usd_per_slice: best.avg_cost_usd,
+            based_on_slices: best.total_slices,
+            all_qualified: qualified,
+          };
+        }
+      }
+    } catch {
+      // Non-fatal — skip recommendation if performance data unavailable
+    }
+  }
+
   return {
     status: "estimate",
     sliceCount,
     executionOrder: plan.dag.order,
     model: model || "auto",
+    ...(modelRecommendation && { modelRecommendation }),
     tokens: {
       estimatedInput: totalInputTokens,
       estimatedOutput: totalOutputTokens,
@@ -2043,19 +3037,31 @@ function buildEstimate(plan, model, cwd, quorumConfig = null) {
       totalCostWithQuorumUSD: Math.round((estimatedCost + quorumOverhead.totalOverheadUSD) * 100) / 100,
     }),
     confidence: avgTokensPerSlice ? "historical" : "heuristic",
-    slices: plan.slices.map((s) => ({
-      number: s.number,
-      title: s.title,
-      depends: s.depends,
-      parallel: s.parallel,
-      scope: s.scope,
-      ...(quorumConfig && quorumConfig.enabled && {
-        complexityScore: scoreSliceComplexity(s, cwd).score,
-        quorumEligible: quorumConfig.auto
-          ? scoreSliceComplexity(s, cwd).score >= quorumConfig.threshold
-          : true,
-      }),
-    })),
+    slices: plan.slices.map((s) => {
+      const sliceType = inferSliceType(s);
+      const rec = cwd ? recommendModel(cwd, sliceType) : null;
+      return {
+        number: s.number,
+        title: s.title,
+        depends: s.depends,
+        parallel: s.parallel,
+        scope: s.scope,
+        sliceType,
+        ...(rec && {
+          recommendedModel: {
+            model: rec.model,
+            success_rate: rec.success_rate,
+            based_on_slices: rec.total_slices,
+          },
+        }),
+        ...(quorumConfig && quorumConfig.enabled && {
+          complexityScore: scoreSliceComplexity(s, cwd).score,
+          quorumEligible: quorumConfig.auto
+            ? scoreSliceComplexity(s, cwd).score >= quorumConfig.threshold
+            : true,
+        }),
+      };
+    }),
   };
 }
 
@@ -2419,6 +3425,16 @@ async function selfTest() {
     assert("Unknown model uses default pricing", cost2.cost_usd > 0);
     assert("Null tokens_in treated as 0", cost2.tokens_in === 0);
 
+    // CLI worker uses premium request costing, not token pricing
+    const cost3 = calculateSliceCost({ tokens_in: 500000, tokens_out: 5000, model: "claude-opus-4.6", premiumRequests: 3 }, "gh-copilot");
+    assert("CLI worker uses premium request rate", cost3.cost_usd === 0.03);
+    assert("CLI worker preserves token counts", cost3.tokens_in === 500000);
+
+    // API worker uses per-token pricing
+    const cost4 = calculateSliceCost({ tokens_in: 1000, tokens_out: 500, model: "grok-4" }, "api-xai");
+    assert("API worker uses token pricing", cost4.cost_usd > 0);
+    assert("API worker cost matches expected", Math.abs(cost4.cost_usd - 0.007) < 0.0001); // 1000*2/1M + 500*10/1M
+
     // Breakdown
     const mockResults = [
       { number: "1", tokens: { tokens_in: 500, tokens_out: 200, model: "claude-sonnet-4.6" }, status: "passed" },
@@ -2541,6 +3557,56 @@ async function selfTest() {
     assert(`Quorum config: ${err.message}`, false);
   }
 
+  // Test 18: CI config loading
+  console.log("\n─── CI/CD Integration ───");
+  try {
+    const ciConfig = loadCiConfig(process.cwd());
+    assert("loadCiConfig returns object", typeof ciConfig === "object");
+    assert("Has enabled flag", "enabled" in ciConfig);
+    assert("Has workflow field", "workflow" in ciConfig);
+    assert("Has ref field", "ref" in ciConfig);
+    assert("Has inputs field", typeof ciConfig.inputs === "object");
+    assert("Default enabled is false", ciConfig.enabled === false || typeof ciConfig.enabled === "boolean");
+    assert("Default ref is main (when no config)", ciConfig.workflow === null || typeof ciConfig.workflow === "string");
+  } catch (err) {
+    assert(`CI config: ${err.message}`, false);
+  }
+
+  // Test 19: Agent-Per-Slice Routing (Slice 1)
+  console.log("\n─── Agent-Per-Slice Routing ───");
+  try {
+    // inferSliceType detection
+    const testSlice = { title: "Write unit tests for auth module", tasks: ["Add spec coverage"] };
+    assert("Infers test type", inferSliceType(testSlice) === "test");
+
+    const reviewSlice = { title: "Code review and audit", tasks: ["Review PR changes"] };
+    assert("Infers review type", inferSliceType(reviewSlice) === "review");
+
+    const migrationSlice = { title: "Database migration", tasks: ["Add schema migration for users table"] };
+    assert("Infers migration type", inferSliceType(migrationSlice) === "migration");
+
+    const executeSlice2 = { title: "Implement auth service", tasks: ["Add login endpoint"] };
+    assert("Defaults to execute type", inferSliceType(executeSlice2) === "execute");
+
+    // recommendModel returns null when no performance data
+    const noRec = recommendModel(process.cwd(), "execute");
+    assert("recommendModel returns null or object", noRec === null || typeof noRec === "object");
+    if (noRec !== null) {
+      assert("Recommendation has model", typeof noRec.model === "string");
+      assert("Recommendation has success_rate", typeof noRec.success_rate === "number");
+      assert("Recommendation has total_slices", typeof noRec.total_slices === "number");
+    }
+
+    // slice-model-routed event is registered in the event bus
+    const events2 = [];
+    const handler2 = { handle: (e) => events2.push(e) };
+    const bus2 = new OrchestratorEventBus(handler2);
+    bus2.emit("slice-model-routed", { sliceId: "1", model: "test-model" });
+    assert("slice-model-routed event fires", events2.some((e) => e.type === "slice-model-routed"));
+  } catch (err) {
+    assert(`Agent-per-slice routing: ${err.message}`, false);
+  }
+
   // Summary
   console.log(`\n═══════════════════════════════════════════`);
   console.log(`  Results: ${passed} passed, ${failed} failed`);
@@ -2550,6 +3616,17 @@ async function selfTest() {
 }
 
 // ─── CLI Entry Point ──────────────────────────────────────────────────
+
+// Fix 1: Clean up zombie child processes when parent exits
+for (const sig of ["exit", "SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    if (global.__pforgeChildren) {
+      for (const child of global.__pforgeChildren) {
+        try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      }
+    }
+  });
+}
 
 const args = process.argv.slice(2);
 
@@ -2581,11 +3658,12 @@ if (args.includes("--test")) {
   const estimate = args.includes("--estimate");
   const dryRun = args.includes("--dry-run");
 
-  // Quorum mode: --quorum (force all) or --quorum=auto (threshold-based)
-  let quorum = false;
-  const quorumArg = args.find((a) => a.startsWith("--quorum"));
+  // Quorum mode: --quorum=auto (default), --quorum (force all), --no-quorum / --quorum=false (disable)
+  let quorum = "auto";
+  const quorumArg = args.find((a) => a.startsWith("--quorum") || a === "--no-quorum");
   if (quorumArg) {
     if (quorumArg === "--quorum=auto") quorum = "auto";
+    else if (quorumArg === "--no-quorum" || quorumArg === "--quorum=false") quorum = false;
     else quorum = true;
   }
   const quorumThreshold = getArg("--quorum-threshold") ? Number(getArg("--quorum-threshold")) : null;
@@ -2605,6 +3683,94 @@ if (args.includes("--test")) {
     process.exit(result.status === "failed" ? 1 : 0);
   } catch (err) {
     console.error(`Orchestrator error: ${err.message}`);
+    process.exit(1);
+  }
+} else if (args.includes("--analyze")) {
+  const target = getArg("--analyze");
+  if (!target) {
+    console.error("Usage: node orchestrator.mjs --analyze <plan-or-file> [--mode plan|file] [--models model1,model2,...]");
+    process.exit(1);
+  }
+
+  const mode = getArg("--mode") || (target.match(/plan/i) ? "plan" : "file");
+  const modelsArg = getArg("--models");
+  const models = modelsArg ? modelsArg.split(",").map((m) => m.trim()) : null;
+
+  try {
+    const result = await analyzeWithQuorum({
+      target,
+      mode,
+      models,
+      cwd: process.cwd(),
+    });
+
+    // Print synthesis (readable) to stdout
+    if (result.synthesis) {
+      console.log("\n" + "═".repeat(60));
+      console.log("  QUORUM ANALYSIS — SYNTHESIZED REPORT");
+      console.log("═".repeat(60) + "\n");
+      console.log(result.synthesis);
+    }
+
+    // Print cost summary
+    console.log("\n" + "─".repeat(40));
+    console.log(`  Models: ${result.models.join(", ")}`);
+    console.log(`  Duration: ${Math.round(result.totalDuration / 1000)}s`);
+    console.log(`  Cost: $${result.totalCost.toFixed(2)}`);
+    console.log("─".repeat(40));
+
+    // Save full JSON report to .forge/
+    const reportDir = resolve(process.cwd(), ".forge", "analysis");
+    mkdirSync(reportDir, { recursive: true });
+    const reportFile = resolve(reportDir, `${basename(target, ".md")}-${Date.now()}.json`);
+    writeFileSync(reportFile, JSON.stringify(result, null, 2));
+    console.log(`\n  📄 Full report saved: ${reportFile}\n`);
+
+    process.exit(0);
+  } catch (err) {
+    console.error(`Analysis error: ${err.message}`);
+    process.exit(1);
+  }
+} else if (args.includes("--diagnose")) {
+  const target = getArg("--diagnose");
+  if (!target) {
+    console.error("Usage: node orchestrator.mjs --diagnose <file> [--models model1,model2,...]");
+    process.exit(1);
+  }
+
+  const modelsArg = getArg("--models");
+  const models = modelsArg ? modelsArg.split(",").map((m) => m.trim()) : null;
+
+  try {
+    const result = await analyzeWithQuorum({
+      target,
+      mode: "diagnose",
+      models,
+      cwd: process.cwd(),
+    });
+
+    if (result.synthesis) {
+      console.log("\n" + "═".repeat(60));
+      console.log("  QUORUM DIAGNOSIS — BUG INVESTIGATION REPORT");
+      console.log("═".repeat(60) + "\n");
+      console.log(result.synthesis);
+    }
+
+    console.log("\n" + "─".repeat(40));
+    console.log(`  Models: ${result.models.join(", ")}`);
+    console.log(`  Duration: ${Math.round(result.totalDuration / 1000)}s`);
+    console.log(`  Cost: $${result.totalCost.toFixed(2)}`);
+    console.log("─".repeat(40));
+
+    const reportDir = resolve(process.cwd(), ".forge", "analysis");
+    mkdirSync(reportDir, { recursive: true });
+    const reportFile = resolve(reportDir, `diagnose-${basename(target)}-${Date.now()}.json`);
+    writeFileSync(reportFile, JSON.stringify(result, null, 2));
+    console.log(`\n  📄 Full report saved: ${reportFile}\n`);
+
+    process.exit(0);
+  } catch (err) {
+    console.error(`Diagnosis error: ${err.message}`);
     process.exit(1);
   }
 }

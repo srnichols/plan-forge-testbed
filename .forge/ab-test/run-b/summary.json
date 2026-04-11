@@ -1,0 +1,225 @@
+{
+  "plan": "docs/plans/Phase-3-INVOICE-ENGINE-PLAN.md",
+  "startTime": "2026-04-06T02:47:39.873Z",
+  "endTime": "2026-04-06T03:19:34.935Z",
+  "mode": "auto",
+  "model": "claude-opus-4.6",
+  "sliceCount": 4,
+  "results": {
+    "passed": 4,
+    "failed": 0,
+    "skipped": 0,
+    "total": 4
+  },
+  "totalDuration": 1914648,
+  "totalTokensOut": 32000,
+  "status": "completed",
+  "cost": {
+    "total_cost_usd": 34.84,
+    "total_tokens_in": 2162400,
+    "total_tokens_out": 32000,
+    "by_model": {
+      "claude-opus-4.6": {
+        "tokens_in": 2162400,
+        "tokens_out": 32000,
+        "cost_usd": 34.836,
+        "slices": 4
+      }
+    },
+    "by_slice": [
+      {
+        "slice": "1",
+        "cost_usd": 5.2065,
+        "model": "claude-opus-4.6",
+        "tokens_in": 338100,
+        "tokens_out": 1800
+      },
+      {
+        "slice": "2",
+        "cost_usd": 14.9385,
+        "model": "claude-opus-4.6",
+        "tokens_in": 878900,
+        "tokens_out": 23400
+      },
+      {
+        "slice": "3",
+        "cost_usd": 7.374,
+        "model": "claude-opus-4.6",
+        "tokens_in": 476100,
+        "tokens_out": 3100
+      },
+      {
+        "slice": "4",
+        "cost_usd": 7.317,
+        "model": "claude-opus-4.6",
+        "tokens_in": 469300,
+        "tokens_out": 3700
+      }
+    ]
+  },
+  "sliceResults": [
+    {
+      "sliceId": "1",
+      "number": "1",
+      "title": "Invoice + InvoiceLine entities and DbContext update",
+      "status": "passed",
+      "duration": 296033,
+      "exitCode": 0,
+      "gateStatus": "passed",
+      "gateOutput": "Determining projects to restore...\r\n  All projects are up-to-date for restore.\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\TimeTracker.Tests.csproj]\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\TimeTracker.Api.csproj]\r\n  TimeTracker.Core -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Core\\bin\\Debug\\net10.0\\TimeTracker.Core.dll\r\n  TimeTracker.Api -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\bin\\Debug\\net10.0\\TimeTracker.Api.dll\r\n  TimeTracker.Tests -> E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll\r\nTest run for E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll (.NETCoreApp,Version=v10.0)\r\nA total of 1 test files matched the specified pattern.\r\n\r\nPassed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 446 ms - TimeTracker.Tests.dll (net10.0)",
+      "gateError": null,
+      "failedCommand": null,
+      "tokens": {
+        "tokens_out": 1800,
+        "tokens_in": 338100,
+        "model": "claude-opus-4.6",
+        "premiumRequests": 3,
+        "apiDurationMs": 0,
+        "sessionDurationMs": 0,
+        "codeChanges": null
+      },
+      "worker": "gh-copilot",
+      "model": "claude-opus-4.6",
+      "attempts": 1,
+      "quorum": {
+        "score": 4,
+        "models": [
+          "claude-opus-4.6",
+          "gpt-5.3-codex",
+          "claude-sonnet-4.6"
+        ],
+        "reviewerFallback": false,
+        "reviewerCost": 10.449,
+        "dryRunTokens": {
+          "tokens_in": 874700,
+          "tokens_out": 11400
+        }
+      }
+    },
+    {
+      "sliceId": "2",
+      "number": "2",
+      "title": "InvoiceService — rate tiers, discounts, tax calculation",
+      "status": "passed",
+      "duration": 747639,
+      "exitCode": 0,
+      "gateStatus": "passed",
+      "gateOutput": "Determining projects to restore...\r\n  All projects are up-to-date for restore.\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\TimeTracker.Tests.csproj]\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\TimeTracker.Api.csproj]\r\n  TimeTracker.Core -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Core\\bin\\Debug\\net10.0\\TimeTracker.Core.dll\r\n  TimeTracker.Api -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\bin\\Debug\\net10.0\\TimeTracker.Api.dll\r\n  TimeTracker.Tests -> E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll\r\nTest run for E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll (.NETCoreApp,Version=v10.0)\r\nA total of 1 test files matched the specified pattern.\r\n\r\nPassed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 442 ms - TimeTracker.Tests.dll (net10.0)",
+      "gateError": null,
+      "failedCommand": null,
+      "tokens": {
+        "tokens_out": 23400,
+        "tokens_in": 878900,
+        "model": "claude-opus-4.6",
+        "premiumRequests": 3,
+        "apiDurationMs": 0,
+        "sessionDurationMs": 0,
+        "codeChanges": null
+      },
+      "worker": "gh-copilot",
+      "model": "claude-opus-4.6",
+      "attempts": 1,
+      "quorum": {
+        "score": 3,
+        "models": [
+          "claude-opus-4.6",
+          "gpt-5.3-codex",
+          "claude-sonnet-4.6"
+        ],
+        "reviewerFallback": false,
+        "reviewerCost": 10.581,
+        "dryRunTokens": {
+          "tokens_in": 1316100,
+          "tokens_out": 22900
+        }
+      }
+    },
+    {
+      "sliceId": "3",
+      "number": "3",
+      "title": "InvoiceServiceTests — comprehensive unit tests",
+      "status": "passed",
+      "duration": 606040,
+      "exitCode": 0,
+      "gateStatus": "passed",
+      "gateOutput": "Determining projects to restore...\r\n  All projects are up-to-date for restore.\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\TimeTracker.Tests.csproj]\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\TimeTracker.Api.csproj]\r\n  TimeTracker.Core -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Core\\bin\\Debug\\net10.0\\TimeTracker.Core.dll\r\n  TimeTracker.Api -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\bin\\Debug\\net10.0\\TimeTracker.Api.dll\r\n  TimeTracker.Tests -> E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll\r\nTest run for E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll (.NETCoreApp,Version=v10.0)\r\nA total of 1 test files matched the specified pattern.\r\n\r\nPassed!  - Failed:     0, Passed:    30, Skipped:     0, Total:    30, Duration: 664 ms - TimeTracker.Tests.dll (net10.0)",
+      "gateError": null,
+      "failedCommand": null,
+      "tokens": {
+        "tokens_out": 3100,
+        "tokens_in": 476100,
+        "model": "claude-opus-4.6",
+        "premiumRequests": 3,
+        "apiDurationMs": 0,
+        "sessionDurationMs": 0,
+        "codeChanges": null
+      },
+      "worker": "gh-copilot",
+      "model": "claude-opus-4.6",
+      "attempts": 1,
+      "quorum": {
+        "score": 4,
+        "models": [
+          "claude-opus-4.6",
+          "gpt-5.3-codex",
+          "claude-sonnet-4.6"
+        ],
+        "reviewerFallback": false,
+        "reviewerCost": 11.517,
+        "dryRunTokens": {
+          "tokens_in": 985300,
+          "tokens_out": 20100
+        }
+      }
+    },
+    {
+      "sliceId": "4",
+      "number": "4",
+      "title": "InvoicesController — HTTP endpoints",
+      "status": "passed",
+      "duration": 264936,
+      "exitCode": 0,
+      "gateStatus": "passed",
+      "gateOutput": "Determining projects to restore...\r\n  All projects are up-to-date for restore.\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\TimeTracker.Tests.csproj]\r\nC:\\Program Files\\dotnet\\sdk\\10.0.200-preview.0.26103.119\\Sdks\\Microsoft.NET.Sdk\\targets\\Microsoft.NET.RuntimeIdentifierInference.targets(383,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\TimeTracker.Api.csproj]\r\n  TimeTracker.Core -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Core\\bin\\Debug\\net10.0\\TimeTracker.Core.dll\r\n  TimeTracker.Api -> E:\\GitHub\\plan-forge-testbed\\src\\TimeTracker.Api\\bin\\Debug\\net10.0\\TimeTracker.Api.dll\r\n  TimeTracker.Tests -> E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll\r\nTest run for E:\\GitHub\\plan-forge-testbed\\tests\\TimeTracker.Tests\\bin\\Debug\\net10.0\\TimeTracker.Tests.dll (.NETCoreApp,Version=v10.0)\r\nA total of 1 test files matched the specified pattern.\r\n\r\nPassed!  - Failed:     0, Passed:    30, Skipped:     0, Total:    30, Duration: 530 ms - TimeTracker.Tests.dll (net10.0)",
+      "gateError": null,
+      "failedCommand": null,
+      "tokens": {
+        "tokens_out": 3700,
+        "tokens_in": 469300,
+        "model": "claude-opus-4.6",
+        "premiumRequests": 3,
+        "apiDurationMs": 0,
+        "sessionDurationMs": 0,
+        "codeChanges": null
+      },
+      "worker": "gh-copilot",
+      "model": "claude-opus-4.6",
+      "attempts": 1,
+      "quorum": {
+        "score": 3,
+        "models": [
+          "claude-opus-4.6",
+          "gpt-5.3-codex",
+          "claude-sonnet-4.6"
+        ],
+        "reviewerFallback": false,
+        "reviewerCost": 5.3415,
+        "dryRunTokens": {
+          "tokens_in": 698300,
+          "tokens_out": 7900
+        }
+      }
+    }
+  ],
+  "sweep": {
+    "ran": true,
+    "clean": false,
+    "error": "At E:\\GitHub\\plan-forge-testbed\\pforge.ps1:63 char:29\r\n+     Write-Host \"  new-phase <name>  Create a new phase plan file and  ...\r\n+                             ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:64 char:26\r\n+     Write-Host \"  branch <plan>     Create branch matching plan's dec ...\r\n+                          ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:66 char:32\r\n+     Write-Host \"  phase-status <plan> <status>  Update phase status i ...\r\n+                                ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:66 char:39\r\n+     Write-Host \"  phase-status <plan> <status>  Update phase status i ...\r\n+                                       ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:68 char:24\r\n+     Write-Host \"  diff <plan>       Compare changed files against pla ...\r\n+                        ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:55 char:20\r\n+ function Show-Help {\r\n+                    ~\r\nMissing closing '}' in statement block or type definition.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:237 char:46\r\n+ (To be added during Plan Hardening �?\" Step 2)\r\n+                                              ~\r\nUnexpected token ')' in expression or statement.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:241 char:17\r\n+     Write-Host \"CREATED  $filePath\" -ForegroundColor Green\r\n+                 ~~~~~~~\r\nUnexpected token 'CREATED' in expression or statement.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:249 char:4\r\n+ ---\r\n+    ~\r\nMissing expression after unary operator '-'.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:252 char:2\r\n+ **Goal**: (one-line description)\r\n+  ~\r\nYou must provide a value expression following the '*' operator.\r\nNot all parse errors were reported.  Correct the reported errors and try again.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordEx \r\n   ception\r\n    + FullyQualifiedErrorId : RedirectionNotSupported"
+  },
+  "analyze": {
+    "ran": true,
+    "score": null,
+    "error": "At E:\\GitHub\\plan-forge-testbed\\pforge.ps1:63 char:29\r\n+     Write-Host \"  new-phase <name>  Create a new phase plan file and  ...\r\n+                             ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:64 char:26\r\n+     Write-Host \"  branch <plan>     Create branch matching plan's dec ...\r\n+                          ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:66 char:32\r\n+     Write-Host \"  phase-status <plan> <status>  Update phase status i ...\r\n+                                ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:66 char:39\r\n+     Write-Host \"  phase-status <plan> <status>  Update phase status i ...\r\n+                                       ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:68 char:24\r\n+     Write-Host \"  diff <plan>       Compare changed files against pla ...\r\n+                        ~\r\nThe '<' operator is reserved for future use.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:55 char:20\r\n+ function Show-Help {\r\n+                    ~\r\nMissing closing '}' in statement block or type definition.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:237 char:46\r\n+ (To be added during Plan Hardening �?\" Step 2)\r\n+                                              ~\r\nUnexpected token ')' in expression or statement.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:241 char:17\r\n+     Write-Host \"CREATED  $filePath\" -ForegroundColor Green\r\n+                 ~~~~~~~\r\nUnexpected token 'CREATED' in expression or statement.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:249 char:4\r\n+ ---\r\n+    ~\r\nMissing expression after unary operator '-'.\r\nAt E:\\GitHub\\plan-forge-testbed\\pforge.ps1:252 char:2\r\n+ **Goal**: (one-line description)\r\n+  ~\r\nYou must provide a value expression following the '*' operator.\r\nNot all parse errors were reported.  Correct the reported errors and try again.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordEx \r\n   ception\r\n    + FullyQualifiedErrorId : RedirectionNotSupported"
+  },
+  "report": "All slices: 4 passed, 0 failed. Cost: $34.84. Sweep: ? markers."
+}

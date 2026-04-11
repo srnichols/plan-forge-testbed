@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step6-ship
+description = "Pipeline Step 6 — Ship the completed phase: commit, update roadmap, capture postmortem, optionally push and create PR."
+
+"""
+# Step 6: Ship
+"""

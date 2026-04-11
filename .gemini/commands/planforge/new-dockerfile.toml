@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-dockerfile
+description = "Scaffold a multi-stage Dockerfile for .NET with optimized layer caching, non-root user, and distroless runtime."
+
+"""
+# Create New Dockerfile
+"""

@@ -2,7 +2,7 @@
 
 > **Purpose**: Practical guide for running the Plan Forge Pipeline using GitHub Copilot's Agent Mode in VS Code  
 > **Audience**: Developers using GitHub Copilot (free, Pro, or Enterprise) in VS Code  
-> **Last Updated**: 2026-03-20
+> **Last Updated**: 2026-04-07
 
 ---
 
@@ -11,13 +11,15 @@
 1. [Prerequisites](#prerequisites)
 2. [How Copilot Reads Your Guardrails](#how-copilot-reads-your-guardrails)
 3. [The 3-Session Workflow in Practice](#the-3-session-workflow-in-practice)
-4. [Agent Mode vs Ask Mode vs Edit Mode](#agent-mode-vs-ask-mode-vs-edit-mode)
-5. [Managing Context Budget](#managing-context-budget)
-6. [Using Memory to Bridge Sessions](#using-memory-to-bridge-sessions)
-7. [Referencing Files in Prompts](#referencing-files-in-prompts)
-8. [Tips for Better Agent Execution](#tips-for-better-agent-execution)
+4. [Single-Session Pipeline with Nested Subagents](#single-session-pipeline-with-nested-subagents)
+5. [Agent Mode vs Ask Mode vs Edit Mode](#agent-mode-vs-ask-mode-vs-edit-mode)
+6. [Managing Context Budget](#managing-context-budget)
+7. [Using Memory to Bridge Sessions](#using-memory-to-bridge-sessions)
+8. [Referencing Files in Prompts](#referencing-files-in-prompts)
+9. [Tips for Better Agent Execution](#tips-for-better-agent-execution)
    - [Prompt Templates, Agent Definitions & Skills](#0-use-prompt-templates-agent-definitions--skills)
-9. [Troubleshooting](#troubleshooting)
+10. [Troubleshooting](#troubleshooting)
+11. [Using Plan Forge with Copilot Cloud Agent](#using-plan-forge-with-copilot-cloud-agent)
 
 ---
 
@@ -29,6 +31,7 @@
 | **GitHub Copilot** | Free, Pro, or Enterprise plan |
 | **Copilot Chat extension** | Latest version (auto-updates) |
 | **Agent Mode** | Enabled (Settings → `github.copilot.chat.agent.enabled`) |
+| **Nested subagents** *(optional)* | `chat.subagents.allowInvocationsFromSubagents: true` — required for single-session pipeline; manual handoff works without it |
 
 ### Verify Setup
 
@@ -87,11 +90,14 @@ The `ai-plan-hardening-runbook.instructions.md` file has `applyTo: 'docs/plans/*
 ```
 1. .github/copilot-instructions.md       ← Always loaded first
 2. .github/instructions/*.instructions.md ← Loaded if applyTo matches current file
+   • architecture-principles (applyTo: **)  — always active, includes Temper Guards
+   • context-fuel (applyTo: **)             — agent context management guidance
+   • domain-specific (applyTo: *.cs, etc.)  — loaded per file type
 3. Your prompt                            ← Your message in chat
 4. Attached files                         ← Files you explicitly reference
 ```
 
-> **Tip**: Keep `copilot-instructions.md` concise. Long files consume your context window and leave less room for code.
+> **Tip**: Keep `copilot-instructions.md` concise. Long files consume your context window and leave less room for code. The `context-fuel.instructions.md` file helps agents manage this budget.
 
 ---
 
@@ -164,6 +170,78 @@ Monitor at `localhost:3100/dashboard` for live slice progress, cost tracking, an
 | **Context exhaustion** | Runs out of context budget | Full budget per session |
 | **Drift accumulation** | Small drifts compound unseen | Each session re-grounds |
 | **Forgotten cleanup** | Manual commit/roadmap steps | Shipper agent automates |
+
+---
+
+## Single-Session Pipeline with Nested Subagents
+
+> **VS Code requirement**: `chat.subagents.allowInvocationsFromSubagents: true` (see [Prerequisites](#prerequisites))
+
+The 6 pipeline agents can run end-to-end in a **single session** by invoking each other as nested subagents. This collapses what would otherwise be 4 separate sessions into one continuous run — no manual handoff clicks required.
+
+### How It Works
+
+Each agent invokes the next automatically after completing its phase:
+
+```
+Single session:
+  Specifier ──subagent──► Plan Hardener ──subagent──► Executor
+                                                          │
+                                            ──subagent──► Reviewer Gate
+                                                          │
+                                              ──subagent──► Shipper
+```
+
+The plan file path is passed from agent to agent so context flows without any copy-pasting.
+
+### Enable Nested Subagents
+
+Add this to `.vscode/settings.json` (already included in `templates/vscode-settings.json.template`):
+
+```json
+"chat.subagents.allowInvocationsFromSubagents": true
+```
+
+Without this setting, agents still display **handoff buttons** at the end of each phase — context carries over automatically when you click them.
+
+### Starting a Single-Session Pipeline Run
+
+1. Open Copilot Chat (`Ctrl+Shift+I`)
+2. Confirm `chat.subagents.allowInvocationsFromSubagents: true` is in `.vscode/settings.json`
+3. Select **Agent** mode
+4. Select the **Specifier** agent from the agent picker
+5. Describe your feature — the Specifier interviews you, creates the plan file, then invokes Plan Hardener automatically
+6. Each subsequent agent completes its phase and hands off to the next without requiring input
+
+You can type at any point to pause and redirect before the next subagent invocation.
+
+### Recursion Safety — Termination Guards
+
+Each pipeline agent has built-in **termination guards** to prevent runaway subagent loops:
+
+| Agent | Invokes | Guard |
+|-------|---------|-------|
+| **Specifier** | Plan Hardener (once) | Stops if `[NEEDS CLARIFICATION]` markers remain |
+| **Plan Hardener** | Executor (once) | Stops if TBD entries are unresolved |
+| **Executor** | Reviewer Gate (once) | Stops if any validation gate fails |
+| **Reviewer Gate** | Shipper (PASS) or Executor (FAIL, **max 2×**) | After 2 LOCKOUT→fix cycles, requires human intervention |
+| **Shipper** | — *(terminal)* | Never invokes another pipeline agent |
+
+The LOCKOUT guard is the most critical: the Reviewer Gate → Executor → Reviewer Gate loop runs at most **2 fix cycles** before stopping and asking for human input.
+
+### Fallback: Manual Handoff
+
+If `chat.subagents.allowInvocationsFromSubagents` is not set (or if you prefer step-by-step control), the pipeline falls back to **manual handoff buttons** — the same clickable buttons that appear at the end of each agent's response:
+
+| Handoff button | From → To |
+|----------------|-----------|
+| **Start Plan Hardening →** | Specifier → Plan Hardener |
+| **Start Execution →** | Plan Hardener → Executor |
+| **Run Review Gate →** | Executor → Reviewer Gate |
+| **Ship It →** | Reviewer Gate → Shipper |
+| **Fix Issues →** | Reviewer Gate → Executor (on LOCKOUT) |
+
+Manual handoff provides the same context transfer — the only difference is that you click the button rather than the agent invoking automatically.
 
 ---
 
@@ -247,6 +325,23 @@ Load the Scope Contract and Stop Conditions before starting.
 ## Using Memory to Bridge Sessions
 
 Copilot's memory system lets you persist context between sessions. This is valuable for the 3-session pipeline.
+
+### Memory Layers
+
+Plan Forge works with three distinct memory systems. Understanding the difference helps you choose the right tool for each need:
+
+| Layer | What It Is | Scope | Managed By | Best For |
+|-------|-----------|-------|------------|---------|
+| **Copilot Memory** | Built-in `/memories/` note storage | User / Session / Repo | Copilot Chat natively | Personal patterns, general insights, ad-hoc notes |
+| **Plan Forge Session Bridge** | Structured `/memories/repo/current-phase.md` + `lessons-learned.md` | Repository | You (via pipeline prompts) | Carrying Session 1 → 2 → 3 state through the hardening pipeline |
+| **OpenBrain** | Semantic vector memory via MCP `search_thoughts` / `capture_thought` | Global (workspace-agnostic) | OpenBrain MCP server | Auto-injecting relevant prior decisions before each slice begins |
+
+**When to use each:**
+- Use **Copilot Memory** for free-form notes that don't fit the pipeline structure.
+- Use the **Plan Forge Session Bridge** files to hand off structured phase state between sessions — the pipeline prompts tell you exactly what to write.
+- Use **OpenBrain** when you want the agent to automatically surface relevant past decisions without any manual prompt — it hooks into `forge_run_plan` automatically.
+
+All three layers are complementary. A typical phase uses all three: Copilot Memory for quick notes, the session bridge files for structured handoffs, and OpenBrain for long-term pattern recall.
 
 ### Memory Scopes
 
@@ -435,11 +530,36 @@ Multi-step executable procedures that chain together tool calls. Each skill file
 | `release-notes/` | `/release-notes` | Generate release notes from git history and CHANGELOG |
 | `api-doc-gen/` | `/api-doc-gen` | Generate or update OpenAPI spec, validate consistency |
 | `onboarding/` | `/onboarding` | Walk a new developer through setup, architecture, and first task |
+| `health-check/` | `/health-check` | Forge diagnostic — environment, setup, completeness |
+| `forge-execute/` | `/forge-execute` | Guided plan execution with cost estimate |
 | `infra-deploy/` *(azure-iac)* | `/infra-deploy` | Pre-flight → what-if/plan → deploy → verify for Bicep/Terraform/azd |
 | `infra-test/` *(azure-iac)* | `/infra-test` | PSScriptAnalyzer → Bicep lint → Pester → Terraform validate |
 | `azure-sweep/` *(azure-iac)* | `/azure-sweep` | 8-layer governance sweep: WAF, CAF, Landing Zone, Policy, Org Rules, Resource Graph, Telemetry, Remediation |
 
 **Auto-invocation**: Skills can also load automatically without typing `/`. When you ask "help me test the login page", Copilot reads each skill's `description` field and loads the best match (e.g., `test-sweep`). You don't need to know the slash command name — just describe what you want.
+
+**Quorum mode**: The `/code-review` skill supports `--quorum` for multi-model code review. When invoked with `--quorum`, it dispatches analysis to multiple AI models independently and synthesizes findings:
+```
+/code-review --quorum
+```
+
+#### Multi-Model Analysis Tools
+
+Two MCP tools provide multi-model consensus analysis:
+
+1. **`forge_analyze`** — consistency scoring with optional quorum mode:
+   ```
+   Use forge_analyze with quorum=true to get multi-model consensus on this plan
+   ```
+
+2. **`forge_diagnose`** — multi-model bug investigation:
+   ```
+   Use forge_diagnose on src/services/billing.ts to investigate the race condition
+   ```
+
+Both tools dispatch to multiple models (including Grok via xAI API), then synthesize findings into a single report with confidence levels.
+
+**Setting up Grok**: To use xAI Grok models, set `XAI_API_KEY` in your environment before starting VS Code. Models like `grok-4.20`, `grok-4`, `grok-3`, `grok-3-mini` auto-route through the API provider registry. Get your key at [console.x.ai](https://console.x.ai/).
 
 #### AI Agent Discoverability
 
@@ -532,7 +652,32 @@ only what Slice 3 requires.
 
 ## Troubleshooting
 
-### "Copilot isn't reading my instruction files"
+### "Forge run failed — where do I start?"
+
+Use the `/forge-troubleshoot` skill to diagnose the failure:
+
+1. Type `/forge-troubleshoot` in Copilot Chat (Agent mode)
+2. Optionally describe the symptom: `/forge-troubleshoot slice 3 failed gate error`
+3. The skill will:
+   - Run `forge_smith` to check environment health
+   - Run `forge_validate` to verify setup files
+   - Run `forge_plan_status` to retrieve the last run report
+   - Run `forge_sweep` to detect stubs/TODOs blocking gate passage
+   - Identify the root cause and provide specific fix steps
+4. After fixing, resume with: `forge_run_plan resumeFrom: <failed-slice-number>`
+
+**Common root causes and fixes:**
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| Gate error: build failed | Stub or TODO in production code | Fill in the stub, then resume |
+| Gate error: test failed | Missing implementation or broken import | Fix the failing test, then resume |
+| CLI worker not found | `gh copilot` / `claude` / `codex` CLI not installed | Install CLI or switch to `mode: 'assisted'` |
+| MCP tools missing | `pforge-mcp/` dependencies not installed | Run `npm install --prefix pforge-mcp` |
+| Cost overrun warning | Model too expensive for slice count | Switch to a cheaper model in `.forge.json` |
+| Slice stalled, no output | Run hung | Use `forge_abort`, then `resumeFrom` the stalled slice |
+
+
 
 1. Verify the file is in `.github/instructions/` (exact path)
 2. Check the `applyTo` pattern matches the file you're editing
@@ -565,6 +710,63 @@ only what Slice 3 requires.
 2. Use specific `applyTo` patterns (not `'**'`)
 3. Keep each file under ~150 lines
 4. Move examples to a separate reference doc if needed
+
+---
+
+## Using Plan Forge with Copilot Cloud Agent
+
+> *"Copilot cloud agent plans. Plan Forge hardens."*
+
+GitHub Copilot's cloud agent can work on GitHub issues autonomously — cloning your repo, making code changes, and opening pull requests. Plan Forge integrates with this workflow so the cloud agent has your guardrails, MCP tools, and validation gates ready before it writes a single line of code.
+
+### How `copilot-setup-steps.yml` Works
+
+GitHub runs `.github/copilot-setup-steps.yml` to provision the cloud agent's environment before it starts on an issue. Add this file to your project to ensure Plan Forge is installed and validated every time:
+
+```bash
+# Copy the template from Plan Forge into your project
+cp templates/copilot-setup-steps.yml .github/copilot-setup-steps.yml
+```
+
+Then edit `.github/copilot-setup-steps.yml` to set the correct `--preset` for your stack. The template handles four steps:
+
+| Step | What It Does |
+|------|-------------|
+| **Install Node.js** | Ensures Node 20+ is available for the MCP server |
+| **Run `setup.sh --force`** | Installs guardrail files, instruction files, and pipeline prompts |
+| **Install MCP dependencies** | Runs `npm install` in `pforge-mcp/` so all 18 MCP tools are available |
+| **Configure `.vscode/mcp.json`** | Wires the MCP server into the agent's VS Code session |
+| **`pforge smith`** | Post-setup health check — logs any config issues before work begins |
+
+### How Instruction Files Auto-Load in the Cloud Agent
+
+The cloud agent reads `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md` using the same `applyTo` mechanism as local VS Code. Your guardrails load automatically:
+
+- **Security rules** activate when the agent edits auth files
+- **Database patterns** activate when the agent edits query files
+- **Architecture principles** load on every file (`applyTo: '**'`)
+
+No changes needed to your instruction files — they work identically in cloud and local sessions.
+
+### How Plan Forge Gates Complement CodeQL and Secret Scanning
+
+Copilot cloud agent already integrates with GitHub's code scanning (CodeQL, secret scanning, dependency review). Plan Forge adds a complementary layer that runs **before** the code reaches GitHub's scanners:
+
+| Layer | When | What It Catches |
+|-------|------|----------------|
+| **Plan Forge slice gates** | During cloud agent execution | Build failures, test regressions, scope drift |
+| **Copilot code review** | PR opened | Style, correctness, suggestions |
+| **CodeQL** | PR/push CI | Security vulnerabilities, data flow issues |
+| **Secret scanning** | Commit time | Leaked credentials |
+
+Use `pforge run-plan --assisted` if you want the orchestrator to prompt the cloud agent per slice and validate gates automatically. The cloud agent picks up the MCP `forge_run_plan` tool from `.vscode/mcp.json`.
+
+### Quick Setup
+
+1. Copy `templates/copilot-setup-steps.yml` → `.github/copilot-setup-steps.yml`
+2. Set `--preset` to your stack in the setup step
+3. Enable Copilot cloud agent on your repository (Settings → Copilot → Coding agent)
+4. Assign a GitHub issue to `@copilot` — it will provision the environment and start with your guardrails loaded
 
 ---
 

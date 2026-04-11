@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step5-review-gate
+description = "Pipeline Step 5 — Independent review gate and drift detection. Run in a fresh agent session (read-only audit)."
+
+"""
+# Step 5: Review & Audit Gate
+"""

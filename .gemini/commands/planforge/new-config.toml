@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-config
+description = "Scaffold strongly-typed configuration with IOptions<T>, validation, and environment-specific overrides."
+
+"""
+# Create New Configuration Section
+"""

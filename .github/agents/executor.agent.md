@@ -1,7 +1,7 @@
 ---
 description: "Execute a hardened phase plan slice-by-slice with validation gates, re-anchor checkpoints, and completeness sweeps."
 name: "Executor"
-tools: [read, search, editFiles, runCommands]
+tools: [read, search, editFiles, runCommands, agents]
 handoffs:
   - agent: "reviewer-gate"
     label: "Run Review Gate →"
@@ -19,6 +19,12 @@ You are the **Executor**. Your job is to execute a hardened phase plan one slice
 - Parallel group coordination and merge checkpoints
 
 ## Workflow
+
+### Session Start — Discover Capabilities
+
+Call `forge_capabilities` to discover all available tools, workflows, config, and memory integration.
+This tells you what MCP tools are available, whether OpenBrain memory is configured, and what
+workflow sequences to follow (e.g., estimate → execute → status → cost-report).
 
 ### Pre-Execution Traceability Check
 
@@ -146,9 +152,30 @@ Check `.github/skills/` for available skills before executing slice tasks that m
 
 If the OpenBrain MCP server is available:
 
-- **Before each slice**: `search_thoughts("<slice topic>", project: "MyTimeTracker", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
-- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "MyTimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
-- **After completeness sweep**: `capture_thoughts([...lessons], project: "MyTimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
+- **Before each slice**: `search_thoughts("<slice topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
+- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
+- **After completeness sweep**: `capture_thoughts([...lessons], project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
+
+## Nested Subagent Invocation
+
+> **Requires**: VS Code setting `chat.subagents.allowInvocationsFromSubagents: true` in `.vscode/settings.json`
+
+When all slices pass and the completeness sweep is clean, you may invoke the **Reviewer Gate** as a subagent instead of waiting for a manual handoff click:
+
+1. State: "Execution complete — invoking Reviewer Gate as subagent"
+2. Invoke `reviewer-gate` as a subagent with: "Audit the completed phase for `{PLAN_FILE_PATH}`. Read the hardened plan's Scope Contract and the list of changed files first."
+
+### Termination Guard
+
+| Rule | Detail |
+|------|--------|
+| ✅ **Invoke Reviewer Gate once** | Only after all slices pass and completeness sweep is clean |
+| ❌ **Never invoke yourself** | Recursion risk — Executor must not invoke Executor |
+| ❌ **Never invoke Specifier or Plan Hardener** | Pipeline is linear — backward invocation is forbidden |
+| ❌ **Never invoke Shipper** | Reviewer Gate must run between Executor and Shipper |
+| 🛑 **Stop if any validation gate fails** | Failed gates require human input or a plan amendment before invoking any subagent |
+
+If `chat.subagents.allowInvocationsFromSubagents` is not set, fall back to the **"Run Review Gate →"** handoff button — it carries context automatically.
 
 ## Completion
 

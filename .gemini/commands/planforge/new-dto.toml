@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-dto
+description = "Scaffold request/response DTOs with records, validation attributes, and mapping from domain entities."
+
+"""
+# Create New DTO (Data Transfer Object)
+"""

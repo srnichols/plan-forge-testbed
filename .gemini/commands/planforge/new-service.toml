@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-service
+description = "Scaffold a new service class with interface, DI registration, structured logging, input validation, and CancellationToken support."
+
+"""
+# Create New Service
+"""

@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-graphql-resolver
+description = "Scaffold a Hot Chocolate GraphQL resolver with query, mutation, subscription, and DataLoader patterns."
+
+"""
+# Create New GraphQL Resolver
+"""

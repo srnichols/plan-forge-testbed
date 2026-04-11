@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step0-specify-feature
+description = "Pipeline Step 0 — Specify what you want to build and why, before any technical planning. Surfaces ambiguities early with [NEEDS CLARIFICATION] markers."
+
+"""
+# Step 0: Specify Feature
+"""

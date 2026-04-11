@@ -1,15 +1,21 @@
 {
   "name": "plan-forge-mcp",
-  "version": "2.0.0",
+  "version": "2.22.1",
   "description": "MCP server exposing Plan Forge operations as tools for AI agents",
   "main": "server.mjs",
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "express": "^5.2.1",
+    "playwright": "^1.59.1",
+    "sharp": "^0.34.5",
     "ws": "^8.20.0"
   },
   "license": "MIT",

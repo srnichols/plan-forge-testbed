@@ -1,0 +1,6 @@
+# Invoked via: /planforge:deploy-helper
+description = "Guide deployments: build containers, run migrations, verify health endpoints. Use when deploying or troubleshooting."
+
+"""
+You are the **Deploy Helper**. Guide safe deployments to Docker and container orchestration environments.
+"""

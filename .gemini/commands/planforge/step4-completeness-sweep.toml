@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step4-completeness-sweep
+description = "Pipeline Step 4 — Completeness sweep to eliminate TODOs, mocks, stubs, and placeholder code before review."
+
+"""
+# Step 4: Completeness Sweep
+"""

@@ -1,0 +1,6 @@
+# Invoked via: /planforge:step3-execute-slice
+description = "Pipeline Step 3 — Execute a hardened plan slice-by-slice with validation gates, re-anchoring, and rollback protocol."
+
+"""
+# Step 3: Execute Slices
+"""

@@ -10,6 +10,8 @@ public class TimeTrackerDbContext : DbContext
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<TimeEntry> TimeEntries => Set<TimeEntry>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

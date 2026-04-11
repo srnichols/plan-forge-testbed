@@ -1,7 +1,7 @@
 # Instructions for Copilot — .NET Project
 
 > **Stack**: .NET 10+ / C# / ASP.NET Core  
-> **Last Updated**: 2026-04-04
+> **Last Updated**: 2026-04-10
 
 ---
 

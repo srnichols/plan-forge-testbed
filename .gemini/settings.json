@@ -1,0 +1,12 @@
+{
+  "theme": "Default",
+  "mcpServers": {
+    "plan-forge": {
+      "args": [
+        "pforge-mcp/server.mjs"
+      ],
+      "command": "node",
+      "cwd": "E:\\GitHub\\plan-forge-testbed"
+    }
+  }
+}

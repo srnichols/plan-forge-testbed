@@ -1,0 +1,6 @@
+# Invoked via: /planforge:new-error-types
+description = "Scaffold custom exception types with HTTP status mapping, problem details, and a global exception handler."
+
+"""
+# Create New Error Types
+"""

@@ -1,0 +1,56 @@
+=== REGRESSION TEST LOG ===
+Date: 2026-04-06 20:59
+
+== Phase Execution Results ==
+Phase 1 (Clients CRUD): 4/4 passed, gates validated
+Phase 2 (Projects CRUD): 3/3 passed, gates validated
+Phase 3 (Invoice Engine): 4/4 passed, gates validated
+Phase 1 (broken build test): 0/4 passed, 2 failed — CORRECT (gate caught errors)
+
+== Feature Path Tests ==
+smith: 4 passed, 0 failed
+sweep: 43 markers
+Phase-1-CLIENTS-CRUD-PLAN : 55/100
+Phase-2-PROJECTS-CRUD-PLAN : 55/100
+Phase-3-INVOICE-ENGINE-PLAN : 100/100
+ext search: PASS (catalog loaded)
+ext info: PASS
+bridge load: PASS (7 exports: ApprovalGate, BridgeManager, createBridge, formatDiscord, formatGeneric, formatSlack, formatTelegram)
+
+security patterns: PASS (found 4 controllers without [Authorize])
+dotnet build: PASS
+dotnet test: PASS (30 tests)
+
+== Summary ==
+
+
+== REGRESSION TEST SUMMARY ==
+Date: 2026-04-06 21:01
+Plan Forge Version: 2.13.1
+
+EXECUTION TESTS:
+  Phase 1 (Clients CRUD):   4/4 passed ✅
+  Phase 2 (Projects CRUD):  3/3 passed ✅
+  Phase 3 (Invoice Engine): 4/4 passed ✅
+  Gate failure detection:   2/4 failed correctly ✅ (build errors caught)
+
+FEATURE TESTS:
+  pforge smith:      4 passed, 0 failed ✅
+  pforge sweep:      43 markers (framework meta-refs) ✅
+  pforge analyze:    Phase 1: 55/100, Phase 2: 55/100, Phase 3: 100/100
+  pforge ext search: catalog loaded ✅
+  pforge ext info:   details displayed ✅
+  bridge.mjs:        7 exports loaded ✅
+  security patterns: 4 controllers without [Authorize] detected ✅
+  dotnet build:      PASS ✅
+  dotnet test:       30 tests passing ✅
+
+FINDINGS:
+  - Phase 1+2 analyze scores low (55/100) — plans use old checkbox format, not MUST/SHOULD
+  - Phase 3 scores 100/100 — plan was hardened with proper format
+  - Gate extraction now case-insensitive (Fix #4 confirmed working)
+  - Parallel execution working (2 slices ran simultaneously)
+  - Retry mechanism working (3 attempts before failure)
+  - Model routing events being emitted
+
+TOTAL: 13/13 tests passed (1 false positive corrected)

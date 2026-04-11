@@ -1,8 +1,8 @@
 # Agents & Automation Architecture
 
-> **Project**: MyTimeTracker  
+> **Project**: TimeTracker  
 > **Stack**: .NET / C# / ASP.NET Core  
-> **Last Updated**: 2026-04-04
+> **Last Updated**: 2026-04-10
 
 ---
 

@@ -17,6 +17,88 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
+ * Keyword patterns mapped to targeted search queries for `search_thoughts`.
+ * Matched against slice titles to generate domain-specific context requests.
+ */
+const KEYWORD_SEARCH_MAP = [
+  { pattern: /\b(database|migration|schema|alter|seed|index|ef\s+core|dbcontext|repository)\b/i, query: "database migration patterns" },
+  { pattern: /\b(auth|token|rbac|jwt|oauth|password|credential|permission|role)\b/i, query: "authentication authorization patterns" },
+  { pattern: /\b(api|endpoint|route|controller|http|rest|graphql)\b/i, query: "API endpoint design patterns" },
+  { pattern: /\b(test|spec|jest|xunit|mocha|vitest|coverage)\b/i, query: "testing patterns conventions" },
+  { pattern: /\b(deploy|ci|cd|pipeline|docker|kubernetes|container)\b/i, query: "deployment pipeline patterns" },
+  { pattern: /\b(ui|component|react|vue|angular|frontend|css)\b/i, query: "UI component patterns" },
+  { pattern: /\b(cache|redis|memcache|invalidat)\b/i, query: "caching invalidation patterns" },
+  { pattern: /\b(error|exception|logging|monitor|alert)\b/i, query: "error handling logging patterns" },
+  { pattern: /\b(memory|openbrain|context|semantic)\b/i, query: "memory context integration patterns" },
+];
+
+/**
+ * Load project-level context to prepend to slice prompts.
+ *
+ * Reads key project files (README, architecture docs) and generates
+ * slice-specific `search_thoughts` instructions based on keywords in the
+ * slice title.  Returns an empty string when cwd is falsy or nothing
+ * useful can be found — callers can concatenate unconditionally.
+ *
+ * @param {string} cwd - Working directory
+ * @param {string} projectName - Project name for scoping OpenBrain searches
+ * @param {string} sliceTitle - Title of the current slice (keyword matching)
+ * @returns {string} Context block to prepend to the slice prompt, or ""
+ */
+export function loadProjectContext(cwd, projectName, sliceTitle) {
+  if (!cwd) return "";
+
+  const parts = [];
+
+  // ── Project file snippets ──────────────────────────────────────────────
+  const candidates = [
+    { path: resolve(cwd, "README.md"),                   label: "Project README",  maxLines: 50 },
+    { path: resolve(cwd, "ARCHITECTURE.md"),             label: "Architecture",    maxLines: 80 },
+    { path: resolve(cwd, "docs", "ARCHITECTURE.md"),     label: "Architecture",    maxLines: 80 },
+    { path: resolve(cwd, ".github", "CONTRIBUTING.md"),  label: "Contributing",    maxLines: 30 },
+    { path: resolve(cwd, "CONTRIBUTING.md"),             label: "Contributing",    maxLines: 30 },
+  ];
+
+  const seen = new Set();
+  for (const { path: filePath, label, maxLines } of candidates) {
+    if (seen.has(label)) continue; // only first match per label
+    try {
+      if (existsSync(filePath)) {
+        const content = readFileSync(filePath, "utf-8");
+        const snippet = content.split("\n").slice(0, maxLines).join("\n");
+        parts.push(`### ${label}\n${snippet}`);
+        seen.add(label);
+      }
+    } catch { /* skip unreadable files */ }
+  }
+
+  if (parts.length > 0) {
+    parts.unshift("--- PROJECT CONTEXT ---");
+    parts.push("--- END PROJECT CONTEXT ---");
+  }
+
+  // ── Slice-specific deep-context searches ──────────────────────────────
+  if (sliceTitle && projectName) {
+    const matchedQueries = KEYWORD_SEARCH_MAP
+      .filter(({ pattern }) => pattern.test(sliceTitle))
+      .map(({ query }) => query);
+
+    if (matchedQueries.length > 0) {
+      parts.push("");
+      parts.push("--- DEEP CONTEXT (OpenBrain) ---");
+      parts.push("Search for domain-specific prior decisions before starting:");
+      for (const query of matchedQueries) {
+        parts.push(`  Use search_thoughts tool with query: "${query}", project: "${projectName}", limit: 5`);
+      }
+      parts.push("Apply findings to avoid repeating known patterns and mistakes.");
+      parts.push("--- END DEEP CONTEXT ---");
+    }
+  }
+
+  return parts.length > 0 ? parts.join("\n") + "\n" : "";
+}
+
+/**
  * Check if OpenBrain is configured in .vscode/mcp.json.
  */
 export function isOpenBrainConfigured(cwd) {

@@ -125,8 +125,8 @@ export const TOOL_METADATA = {
       addedIn: "2.5.0",
       description: "Multi-model consensus: dispatch to 3+ models for dry-run analysis, synthesize best approach, then execute",
       parameters: {
-        quorum: { type: "string", enum: ["false", "true", "auto"], description: "Quorum mode control" },
-        quorumThreshold: { type: "number", description: "Complexity score threshold for auto mode (1-10, default: 7)" },
+        quorum: { type: "string", enum: ["false", "true", "auto"], default: "auto", description: "Quorum mode (default: 'auto' — threshold-based; 'true' forces all slices; 'false' disables)" },
+        quorumThreshold: { type: "number", description: "Complexity score threshold for auto mode (1-10, default: 6)" },
       },
       config: ".forge.json → quorum { enabled, auto, threshold, models[], reviewerModel, dryRunTimeout }",
     },
@@ -179,10 +179,10 @@ export const TOOL_METADATA = {
     addedIn: "2.0.0",
     prerequisites: [],
     produces: [],
-    consumes: [".forge/cost-history.json"],
+    consumes: [".forge/cost-history.json", ".forge/model-performance.json"],
     sideEffects: [],
     errors: {},
-    example: { input: {}, output: { runs: 5, total_cost_usd: 1.23, by_model: {} } },
+    example: { input: {}, output: { runs: 5, total_cost_usd: 1.23, by_model: {}, forge_model_stats: { "claude-sonnet-4.6": { total_slices: 10, passed: 9, failed: 1, success_rate: 0.9, avg_cost_usd: 0.05 } } } },
   },
   forge_ext_search: {
     intent: ["search", "browse", "discover"],
@@ -352,7 +352,7 @@ export const CLI_SCHEMA = {
         "--resume-from": { type: "number", description: "Skip completed slices, resume from N" },
         "--dry-run": { type: "boolean", description: "Parse and validate without executing" },
         "--quorum": { type: "boolean|auto", description: "Force quorum on all slices, or 'auto' for threshold-based" },
-        "--quorum-threshold": { type: "number", description: "Override complexity threshold (1-10, default: 7)" },
+        "--quorum-threshold": { type: "number", description: "Override complexity threshold (1-10, default: 6)" },
       },
       examples: [
         "pforge run-plan docs/plans/Phase-1.md",
@@ -404,7 +404,7 @@ export const CONFIG_SCHEMA = {
     pipelineVersion: { type: "string", description: "Pipeline version", default: "2.0" },
     templateVersion: { type: "string", description: "Plan Forge template version" },
     projectName: { type: "string", description: "Project name (used for OpenBrain memory scoping)" },
-    preset: { type: "string", enum: ["dotnet", "typescript", "python", "java", "go", "azure-iac", "custom"] },
+    preset: { type: "string", enum: ["dotnet", "typescript", "python", "java", "go", "swift", "azure-iac", "custom"] },
     agents: { type: "array", items: { type: "string", enum: ["claude", "cursor", "codex"] }, description: "Configured agent adapters" },
     modelRouting: {
       type: "object",
@@ -427,7 +427,7 @@ export const CONFIG_SCHEMA = {
       properties: {
         enabled: { type: "boolean", default: false, description: "Master switch for quorum mode" },
         auto: { type: "boolean", default: true, description: "When enabled, only quorum high-complexity slices" },
-        threshold: { type: "number", default: 7, minimum: 1, maximum: 10, description: "Complexity score threshold for auto mode" },
+        threshold: { type: "number", default: 6, minimum: 1, maximum: 10, description: "Complexity score threshold for auto mode" },
         models: { type: "array", items: { type: "string" }, default: ["claude-opus-4.6", "gpt-5.3-codex", "gemini-3.1-pro"], description: "Models for dry-run fan-out" },
         reviewerModel: { type: "string", default: "claude-opus-4.6", description: "Model for synthesis review" },
         dryRunTimeout: { type: "number", default: 300000, description: "Timeout per dry-run worker (ms)" },
@@ -496,11 +496,12 @@ const SYSTEM_REFERENCE = {
   },
 
   guardrails: {
-    description: "17-18 instruction files per preset that auto-load based on the file being edited",
-    shared: ["architecture-principles", "git-workflow", "ai-plan-hardening-runbook", "project-principles"],
+    description: "15-18 instruction files per preset that auto-load based on the file being edited",
+    shared: ["architecture-principles", "git-workflow", "ai-plan-hardening-runbook", "project-principles", "status-reporting"],
     perStack: {
       dotnet: ["api-patterns", "auth", "caching", "dapr", "database", "deploy", "errorhandling", "graphql", "messaging", "multi-environment", "naming", "observability", "performance", "security", "testing", "version"],
       typescript: ["...same + frontend"],
+      swift: ["api-patterns", "auth", "caching", "database", "deploy", "errorhandling", "messaging", "multi-environment", "naming", "observability", "performance", "security", "testing", "version"],
     },
     mechanism: "YAML frontmatter applyTo glob pattern → Copilot loads matching files automatically",
   },
@@ -514,18 +515,20 @@ const SYSTEM_REFERENCE = {
   },
 
   skills: {
-    description: "8 multi-step executable procedures with validation gates",
+    description: "10 multi-step executable procedures with validation gates and MCP tool integration",
     available: {
       "/database-migration": "Generate, review, test, and deploy schema migrations",
-      "/staging-deploy": "Build, push, migrate, deploy, and verify on staging",
-      "/test-sweep": "Run all test suites and aggregate results",
+      "/staging-deploy": "Build, push, migrate, deploy, and verify on staging (forge_validate pre-flight)",
+      "/test-sweep": "Run all test suites, aggregate results, forge_sweep completeness scan",
       "/dependency-audit": "Scan dependencies for vulnerabilities, outdated, license issues",
-      "/code-review": "Comprehensive review: architecture, security, testing, patterns",
+      "/code-review": "Comprehensive review: architecture, security, testing, patterns (forge_analyze + forge_diff)",
       "/release-notes": "Generate release notes from git history and CHANGELOG",
-      "/api-doc-gen": "Generate or update OpenAPI spec, validate spec-to-code consistency",
-      "/onboarding": "Walk a new developer through project setup, architecture, first task",
+      "/api-doc-gen": "Generate or update OpenAPI spec, validate spec-to-code consistency (forge_analyze)",
+      "/onboarding": "Walk a new developer through project setup, architecture, first task (forge_smith)",
+      "/health-check": "Forge diagnostic: forge_smith → forge_validate → forge_sweep with structured report",
+      "/forge-execute": "Guided plan execution: list plans → estimate cost → choose mode → execute → report",
     },
-    invocation: "Type / in Copilot Chat to see available skills",
+    invocation: "Type / in Copilot Chat to see available skills, or use forge_run_skill MCP tool",
   },
 
   promptTemplates: {
@@ -551,11 +554,12 @@ const SYSTEM_REFERENCE = {
   },
 
   presets: {
-    available: ["dotnet", "typescript", "python", "java", "go", "azure-iac", "custom"],
+    available: ["dotnet", "typescript", "python", "java", "go", "swift", "azure-iac", "custom"],
     description: "Stack-specific guardrail configurations with domain-relevant instruction files, agents, and prompts",
     counts: {
       dotnet: { instructions: 17, agents: 19, prompts: 15, skills: 8 },
       typescript: { instructions: 18, agents: 19, prompts: 15, skills: 8 },
+      swift: { instructions: 15, agents: 17, prompts: 13, skills: 8 },
       "azure-iac": { instructions: 12, agents: 18, prompts: 6, skills: 3 },
     },
   },
@@ -606,8 +610,8 @@ const SYSTEM_REFERENCE = {
     "Dashboard": "Web UI at localhost:3100/dashboard. 8 tabs: Progress, Runs, Cost, Actions, Replay, Extensions, Config, Traces",
 
     // Infrastructure
-    "Guardrails": "Instruction files (.github/instructions/*.instructions.md) that auto-load based on the file being edited. 17-18 per preset",
-    "Preset": "Stack-specific configuration (dotnet, typescript, python, java, go, azure-iac). Determines which guardrails, agents, and prompts are installed",
+    "Guardrails": "Instruction files (.github/instructions/*.instructions.md) that auto-load based on the file being edited. 15-18 per preset",
+    "Preset": "Stack-specific configuration (dotnet, typescript, python, java, go, swift, azure-iac). Determines which guardrails, agents, and prompts are installed",
     "Extension": "A community add-on providing additional agents, prompts, or instructions for specific domains (e.g., azure-infrastructure)",
     "Lifecycle Hook": "Automatic actions during Copilot sessions — SessionStart, PreToolUse, PostToolUse, Stop",
 
@@ -631,7 +635,7 @@ const SYSTEM_REFERENCE = {
     "Quorum Dispatch": "The fan-out phase: sending the same slice to multiple models (Claude, GPT, Gemini) in parallel for independent analysis",
     "Quorum Reviewer": "A synthesis agent that merges multiple dry-run responses into a single unified execution plan",
     "Complexity Score": "A 1-10 rating of a slice's technical difficulty based on file scope, dependencies, security keywords, database operations, gate count, task count, and historical failure rate",
-    "Quorum Auto": "Threshold-based mode where only slices scoring above the configured threshold (default: 7) use quorum. Others run normally",
+    "Quorum Auto": "Threshold-based mode where only slices scoring above the configured threshold (default: 6) use quorum. Others run normally",
   },
 };
 
