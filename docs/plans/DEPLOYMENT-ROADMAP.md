@@ -18,17 +18,31 @@
 
 ## Phases
 
-### Phase 1: <Your First Feature>
-**Goal**: (one-line description of what this phase delivers)  
-**Plan**: [Phase-1-YOUR-FEATURE-PLAN.md](./Phase-1-YOUR-FEATURE-PLAN.md)  
-**Status**: 📋 Planned
+### Phase 1: Clients CRUD
+**Goal**: Full CRUD API for client management with validation and soft-delete  
+**Plan**: [Phase-1-CLIENTS-CRUD-PLAN.md](./Phase-1-CLIENTS-CRUD-PLAN.md)  
+**Status**: ✅ Complete
 
 ---
 
-### Phase 2: <Your Second Feature>
-**Goal**: (one-line description)  
-**Plan**: [Phase-2-YOUR-FEATURE-PLAN.md](./Phase-2-YOUR-FEATURE-PLAN.md)  
-**Status**: 📋 Planned
+### Phase 2: Projects CRUD
+**Goal**: Full CRUD API for project management with client relationship  
+**Plan**: [Phase-2-PROJECTS-CRUD-PLAN.md](./Phase-2-PROJECTS-CRUD-PLAN.md)  
+**Status**: ✅ Complete
+
+---
+
+### Phase 3: Invoice Engine
+**Goal**: Invoice generation with rate tiers, volume discounts, and state machine  
+**Plan**: [Phase-3-INVOICE-ENGINE-PLAN.md](./Phase-3-INVOICE-ENGINE-PLAN.md)  
+**Status**: ✅ Complete
+
+---
+
+### Phase 4: Time Entry Reports & Analytics
+**Goal**: Reporting endpoints for hours summary, project breakdown, and daily timeline  
+**Plan**: [Phase-4-TIME-ENTRY-REPORTS-PLAN.md](./Phase-4-TIME-ENTRY-REPORTS-PLAN.md)  
+**Status**: 🚧 In Progress
 
 ---
 
