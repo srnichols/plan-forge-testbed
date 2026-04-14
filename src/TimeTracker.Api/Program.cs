@@ -13,6 +13,7 @@ builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
 
 builder.Services.AddScoped<IBillingService, BillingService>();
 builder.Services.AddScoped<IClientService, ClientService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<ITimeEntryReportService, TimeEntryReportService>();
 

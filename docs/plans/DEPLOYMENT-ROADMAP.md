@@ -46,6 +46,13 @@
 
 ---
 
+### Phase 5: Dashboard Summary Endpoint
+**Goal**: Single endpoint returning aggregate metrics across all entities  
+**Plan**: [Phase-5-DASHBOARD-SUMMARY-PLAN.md](./Phase-5-DASHBOARD-SUMMARY-PLAN.md)  
+**Status**: ✅ Complete
+
+---
+
 <!-- Add more phases as needed. Each phase should link to its *-PLAN.md file. -->
 
 ---
