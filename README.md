@@ -68,3 +68,5 @@ dotnet test
 ## Plans
 
 - `Phase-1-CLIENTS-CRUD-PLAN.md` — 4 slices with `[P]` tags, `[depends:]`, `[scope:]`, validation gates
+- `Phase-2-PROJECTS-CRUD-PLAN.md` through `Phase-5-DASHBOARD-SUMMARY-PLAN.md` — backend feature phases (all complete)
+- `Phase-6-WEB-UI-PLAN.md` — **NEW**: Blazor Server + Microsoft Fluent UI front-end (`TimeTracker.Web` + typed `TimeTracker.Web.Client` SDK). 7 slices covering Web project scaffold, typed HttpClient, Dashboard, Clients CRUD, Projects/Time Entries/Invoices, bUnit tests, and solution wiring. Demonstrates pforge produces enterprise-grade UI (strict layering, WCAG 2.1 AA, bUnit-tested) — see plan header for the rationale.

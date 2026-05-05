@@ -53,6 +53,14 @@
 
 ---
 
+### Phase 6: Blazor Server Web UI
+**Goal**: Enterprise-grade Blazor Server + Microsoft Fluent UI front-end (`TimeTracker.Web`) calling the existing REST API via a typed HttpClient SDK (`TimeTracker.Web.Client`). Demonstrates that pforge produces UI with strict layering (no `DbContext` in components), full WCAG 2.1 AA accessibility, and bUnit-tested components — not vibe-coded UI.  
+**Plan**: [Phase-6-WEB-UI-PLAN.md](./Phase-6-WEB-UI-PLAN.md)  
+**Status**: 📋 Planned (7 slices)  
+**Depends on**: New Plan-Forge preset artifacts (`blazor-fluent-ui.instructions.md`, `blazor-reviewer.agent.md`, `ui-scaffold` skill) — added to repo `.github/` already.
+
+---
+
 <!-- Add more phases as needed. Each phase should link to its *-PLAN.md file. -->
 
 ---
