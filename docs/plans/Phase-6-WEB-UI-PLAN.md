@@ -268,9 +268,7 @@ See `.github/instructions/blazor-fluent-ui.instructions.md` for the canonical ex
 **Validation Gate**:
 ```bash
 dotnet build src/TimeTracker.Web.Client/TimeTracker.Web.Client.csproj
-test -f src/TimeTracker.Web.Client/IClientsApi.cs
-test -f src/TimeTracker.Web.Client/ServiceCollectionExtensions.cs
-grep -q "AddTimeTrackerClient" src/TimeTracker.Web.Client/ServiceCollectionExtensions.cs
+node -e "const f=require('fs');['src/TimeTracker.Web.Client/IClientsApi.cs','src/TimeTracker.Web.Client/ServiceCollectionExtensions.cs'].forEach(p=>f.statSync(p));if(!f.readFileSync('src/TimeTracker.Web.Client/ServiceCollectionExtensions.cs','utf8').includes('AddTimeTrackerClient'))throw new Error('AddTimeTrackerClient missing');console.log('OK')"
 ```
 
 ---
@@ -299,10 +297,7 @@ grep -q "AddTimeTrackerClient" src/TimeTracker.Web.Client/ServiceCollectionExten
 **Validation Gate**:
 ```bash
 dotnet build src/TimeTracker.Web/TimeTracker.Web.csproj
-test -f src/TimeTracker.Web/Program.cs
-test -f src/TimeTracker.Web/Components/Layout/MainLayout.razor
-grep -q "AddFluentUIComponents" src/TimeTracker.Web/Program.cs
-grep -q "AddTimeTrackerClient" src/TimeTracker.Web/Program.cs
+node -e "const f=require('fs');['src/TimeTracker.Web/Program.cs','src/TimeTracker.Web/Components/Layout/MainLayout.razor'].forEach(p=>f.statSync(p));const prog=f.readFileSync('src/TimeTracker.Web/Program.cs','utf8');if(!prog.includes('AddFluentUIComponents'))throw new Error('AddFluentUIComponents missing');if(!prog.includes('AddTimeTrackerClient'))throw new Error('AddTimeTrackerClient missing');console.log('OK')"
 ```
 
 ---
@@ -327,13 +322,7 @@ grep -q "AddTimeTrackerClient" src/TimeTracker.Web/Program.cs
 **Validation Gate**:
 ```bash
 dotnet build src/TimeTracker.Web/TimeTracker.Web.csproj
-test -f src/TimeTracker.Web/Pages/Dashboard.razor
-test -f src/TimeTracker.Web/Pages/Dashboard.razor.cs
-grep -q "@page \"/dashboard\"" src/TimeTracker.Web/Pages/Dashboard.razor
-grep -q "PageTitle" src/TimeTracker.Web/Pages/Dashboard.razor
-grep -q "IDashboardApi" src/TimeTracker.Web/Pages/Dashboard.razor.cs
-grep -q "CancellationTokenSource" src/TimeTracker.Web/Pages/Dashboard.razor.cs
-node -e "const fs=require('fs'); const ok=!fs.readFileSync('src/TimeTracker.Web/Pages/Dashboard.razor.cs','utf8').match(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./); if(!ok){console.error('layer violation in Dashboard'); process.exit(1)} console.log('layering OK')"
+node -e "const f=require('fs');['src/TimeTracker.Web/Pages/Dashboard.razor','src/TimeTracker.Web/Pages/Dashboard.razor.cs'].forEach(p=>f.statSync(p));const r=f.readFileSync('src/TimeTracker.Web/Pages/Dashboard.razor','utf8');const c=f.readFileSync('src/TimeTracker.Web/Pages/Dashboard.razor.cs','utf8');if(!r.includes('@page \"/dashboard\"'))throw new Error('@page /dashboard missing');if(!r.includes('PageTitle'))throw new Error('PageTitle missing');if(!c.includes('IDashboardApi'))throw new Error('IDashboardApi missing');if(!c.includes('CancellationTokenSource'))throw new Error('CancellationTokenSource missing');if(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./.test(c))throw new Error('layer violation in Dashboard.razor.cs');console.log('OK')"
 ```
 
 ---
@@ -361,13 +350,7 @@ node -e "const fs=require('fs'); const ok=!fs.readFileSync('src/TimeTracker.Web/
 **Validation Gate**:
 ```bash
 dotnet build src/TimeTracker.Web/TimeTracker.Web.csproj
-test -f src/TimeTracker.Web/Pages/Clients/ClientsList.razor
-test -f src/TimeTracker.Web/Pages/Clients/ClientEdit.razor
-grep -q "FluentDataGrid" src/TimeTracker.Web/Pages/Clients/ClientsList.razor
-grep -q "EditForm" src/TimeTracker.Web/Pages/Clients/ClientEdit.razor
-grep -q "DataAnnotationsValidator" src/TimeTracker.Web/Pages/Clients/ClientEdit.razor
-grep -q "ClientFormModel" src/TimeTracker.Web/Pages/Clients/ClientEdit.razor.cs
-node -e "const fs=require('fs'),p=require('path'); const dir='src/TimeTracker.Web/Pages/Clients'; for(const f of fs.readdirSync(dir).filter(x=>x.endsWith('.razor.cs'))){ const t=fs.readFileSync(p.join(dir,f),'utf8'); if(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./.test(t)){console.error('layer violation in '+f); process.exit(1)}} console.log('layering OK')"
+node -e "const f=require('fs'),p=require('path');['src/TimeTracker.Web/Pages/Clients/ClientsList.razor','src/TimeTracker.Web/Pages/Clients/ClientEdit.razor'].forEach(x=>f.statSync(x));const list=f.readFileSync('src/TimeTracker.Web/Pages/Clients/ClientsList.razor','utf8');const edit=f.readFileSync('src/TimeTracker.Web/Pages/Clients/ClientEdit.razor','utf8');if(!list.includes('FluentDataGrid'))throw new Error('FluentDataGrid missing');if(!edit.includes('EditForm'))throw new Error('EditForm missing');if(!edit.includes('DataAnnotationsValidator'))throw new Error('DataAnnotationsValidator missing');const dir='src/TimeTracker.Web/Pages/Clients';for(const fn of f.readdirSync(dir).filter(x=>x.endsWith('.razor.cs'))){const t=f.readFileSync(p.join(dir,fn),'utf8');if(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./.test(t))throw new Error('layer violation in '+fn)}if(!f.readFileSync('src/TimeTracker.Web/Pages/Clients/ClientEdit.razor.cs','utf8').includes('ClientFormModel'))throw new Error('ClientFormModel binding missing');console.log('OK')"
 ```
 
 ---
@@ -384,14 +367,7 @@ node -e "const fs=require('fs'),p=require('path'); const dir='src/TimeTracker.We
 **Validation Gate**:
 ```bash
 dotnet build src/TimeTracker.Web/TimeTracker.Web.csproj
-test -f src/TimeTracker.Web/Pages/Projects/ProjectsList.razor
-test -f src/TimeTracker.Web/Pages/Projects/ProjectEdit.razor
-test -f src/TimeTracker.Web/Pages/TimeEntries/TimeEntriesList.razor
-test -f src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor
-test -f src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor
-grep -q "ProjectFormModel" src/TimeTracker.Web/Pages/Projects/ProjectEdit.razor.cs
-grep -q "TimeEntryFormModel" src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor.cs
-node -e "const fs=require('fs'),p=require('path'); const dirs=['src/TimeTracker.Web/Pages/Projects','src/TimeTracker.Web/Pages/TimeEntries','src/TimeTracker.Web/Pages/Invoices']; for(const d of dirs) for(const f of fs.readdirSync(d).filter(x=>x.endsWith('.razor.cs'))){ const t=fs.readFileSync(p.join(d,f),'utf8'); if(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./.test(t)){console.error('layer violation in '+d+'/'+f); process.exit(1)}} console.log('layering OK')"
+node -e "const f=require('fs'),p=require('path');['src/TimeTracker.Web/Pages/Projects/ProjectsList.razor','src/TimeTracker.Web/Pages/Projects/ProjectEdit.razor','src/TimeTracker.Web/Pages/TimeEntries/TimeEntriesList.razor','src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor','src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor'].forEach(x=>f.statSync(x));if(!f.readFileSync('src/TimeTracker.Web/Pages/Projects/ProjectEdit.razor.cs','utf8').includes('ProjectFormModel'))throw new Error('ProjectFormModel missing');if(!f.readFileSync('src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor.cs','utf8').includes('TimeEntryFormModel'))throw new Error('TimeEntryFormModel missing');for(const d of ['src/TimeTracker.Web/Pages/Projects','src/TimeTracker.Web/Pages/TimeEntries','src/TimeTracker.Web/Pages/Invoices'])for(const fn of f.readdirSync(d).filter(x=>x.endsWith('.razor.cs'))){const t=f.readFileSync(p.join(d,fn),'utf8');if(/DbContext|EntityFrameworkCore|TimeTracker\.Api\./.test(t))throw new Error('layer violation in '+d+'/'+fn)}console.log('OK')"
 ```
 
 ---
@@ -418,11 +394,7 @@ node -e "const fs=require('fs'),p=require('path'); const dirs=['src/TimeTracker.
 ```bash
 dotnet build tests/TimeTracker.Web.Tests/TimeTracker.Web.Tests.csproj
 dotnet test tests/TimeTracker.Web.Tests/TimeTracker.Web.Tests.csproj --verbosity quiet --logger "console;verbosity=minimal"
-test -f tests/TimeTracker.Web.Tests/Pages/DashboardTests.cs
-test -f tests/TimeTracker.Web.Tests/Pages/ClientsListTests.cs
-test -f tests/TimeTracker.Web.Tests/Pages/ClientEditTests.cs
-test -f tests/TimeTracker.Web.Tests/Pages/TimeEntryCreateTests.cs
-test -f tests/TimeTracker.Web.Tests/Client/ClientsApiTests.cs
+node -e "['tests/TimeTracker.Web.Tests/Pages/DashboardTests.cs','tests/TimeTracker.Web.Tests/Pages/ClientsListTests.cs','tests/TimeTracker.Web.Tests/Pages/ClientEditTests.cs','tests/TimeTracker.Web.Tests/Pages/TimeEntryCreateTests.cs','tests/TimeTracker.Web.Tests/Client/ClientsApiTests.cs'].forEach(p=>require('fs').statSync(p));console.log('OK')"
 ```
 
 **Stop Condition**: If any test fails → STOP, do not proceed to Slice 7.
@@ -447,9 +419,7 @@ test -f tests/TimeTracker.Web.Tests/Client/ClientsApiTests.cs
 ```bash
 dotnet build TimeTracker.slnx
 dotnet test TimeTracker.slnx --verbosity quiet --logger "console;verbosity=minimal"
-grep -q "TimeTracker.Web" README.md
-grep -q "5100" README.md
-grep -q "Phase 6" docs/plans/DEPLOYMENT-ROADMAP.md
+node -e "const f=require('fs');const r=f.readFileSync('README.md','utf8');if(!r.includes('TimeTracker.Web'))throw new Error('README missing TimeTracker.Web');if(!r.includes('5100'))throw new Error('README missing port 5100');if(!f.readFileSync('docs/plans/DEPLOYMENT-ROADMAP.md','utf8').includes('Phase 6'))throw new Error('roadmap missing Phase 6');console.log('OK')"
 ```
 
 ---
