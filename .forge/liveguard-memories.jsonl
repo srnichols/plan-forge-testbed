@@ -1,0 +1,3 @@
+{"content":"LiveGuard health: drift 100/100, 24/24 gates, 0 open incidents, 0 vulnerabilities. Status: red.","project":"TimeTracker","type":"decision","source":"forge_liveguard_run","created_by":"liveguard-auto","captured_at":"2026-04-14T05:59:46.922Z"}
+{"content":"LiveGuard health: drift 100/100, 24/24 gates, 0 open incidents, 0 vulnerabilities. Status: red.","project":"TimeTracker","type":"decision","source":"forge_liveguard_run","created_by":"liveguard-auto","captured_at":"2026-04-14T08:15:35.465Z"}
+{"content":"LiveGuard health: drift 100/100, 24/24 gates, 0 open incidents, 0 vulnerabilities. Status: green.","project":"TimeTracker","type":"decision","source":"forge_liveguard_run","created_by":"liveguard-auto","captured_at":"2026-04-14T08:51:03.723Z"}

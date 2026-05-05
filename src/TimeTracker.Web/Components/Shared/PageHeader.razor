@@ -1,0 +1,12 @@
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+    <FluentLabel Typo="Typography.PageTitle">@Title</FluentLabel>
+    @if (!string.IsNullOrEmpty(Subtitle))
+    {
+        <FluentLabel Typo="Typography.Body">@Subtitle</FluentLabel>
+    }
+</FluentStack>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = default!;
+    [Parameter] public string? Subtitle { get; set; }
+}

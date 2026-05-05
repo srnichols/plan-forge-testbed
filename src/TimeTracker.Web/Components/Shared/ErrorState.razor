@@ -1,0 +1,8 @@
+<FluentMessageBar Intent="MessageIntent.Error" Title="@(Title ?? "Error")" aria-live="assertive">
+    @(Message ?? "An unexpected error occurred. Please try again.")
+</FluentMessageBar>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Message { get; set; }
+}

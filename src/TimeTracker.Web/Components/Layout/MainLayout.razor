@@ -1,0 +1,16 @@
+@inherits LayoutComponentBase
+
+<FluentLayout>
+    <FluentHeader>
+        <FluentLabel Typo="Typography.H4">TimeTracker</FluentLabel>
+    </FluentHeader>
+    <FluentStack Orientation="Orientation.Horizontal">
+        <NavMenu />
+        <FluentMain>
+            @Body
+        </FluentMain>
+    </FluentStack>
+</FluentLayout>
+
+<FluentToastProvider />
+<FluentDialogProvider />

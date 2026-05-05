@@ -1,0 +1,11 @@
+<div role="status" aria-live="polite" aria-label="@(Label ?? "Loading")">
+    <FluentProgressRing aria-label="@(Label ?? "Loading")" />
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <FluentLabel>@Label</FluentLabel>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Label { get; set; }
+}
