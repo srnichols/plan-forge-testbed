@@ -7,5 +7,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TimeTracker.Tests/TimeTracker.Tests.csproj" />
+    <Project Path="tests/TimeTracker.Web.Tests/TimeTracker.Web.Tests.csproj" />
   </Folder>
 </Solution>
