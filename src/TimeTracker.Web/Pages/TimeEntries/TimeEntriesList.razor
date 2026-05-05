@@ -1,0 +1,74 @@
+@page "/time-entries"
+@rendermode InteractiveServer
+
+<PageTitle>Time Entries</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Center">
+        <FluentLabel Typo="Typography.PageTitle">Time Entries</FluentLabel>
+        <FluentSpacer />
+        <FluentButton Appearance="Appearance.Accent"
+                      OnClick="@NavigateToCreate"
+                      aria-label="Add new time entry">
+            New Entry
+        </FluentButton>
+    </FluentStack>
+
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Bottom">
+        <FluentSelect TOption="string"
+                      Label="Filter by Project"
+                      Value="@_filterProjectIdStr"
+                      ValueChanged="@OnProjectFilterChangedAsync"
+                      aria-label="Filter by project"
+                      Style="min-width: 200px">
+            <FluentOption TOption="string" Value="">All Projects</FluentOption>
+            @foreach (ProjectFilterOption project in _projectOptions)
+            {
+                <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Name</FluentOption>
+            }
+        </FluentSelect>
+        @if (_filterProjectId.HasValue)
+        {
+            <FluentButton Appearance="Appearance.Lightweight"
+                          OnClick="@ClearFilterAsync"
+                          aria-label="Clear project filter">
+                Clear Filter
+            </FluentButton>
+        }
+    </FluentStack>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading time entries" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load time entries">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <FluentDataGrid Items="@_entries" GridTemplateColumns="1fr 2fr 1fr 2fr 1fr auto" aria-label="Time Entries">
+            <PropertyColumn Property="@(e => e.Date)" Title="Date" Format="yyyy-MM-dd" Sortable="true" />
+            <PropertyColumn Property="@(e => e.ProjectId)" Title="Project ID" Sortable="true" />
+            <PropertyColumn Property="@(e => e.Hours)" Sortable="true" />
+            <PropertyColumn Property="@(e => e.Description)" Sortable="false" />
+            <PropertyColumn Property="@(e => e.IsBillable)" Title="Billable" Sortable="true" />
+            <TemplateColumn Title="Actions">
+                <FluentButton Appearance="Appearance.Lightweight"
+                              OnClick="@(() => DeleteAsync(context.Id))"
+                              aria-label="@($"Delete entry {context.Id}")">
+                    Delete
+                </FluentButton>
+            </TemplateColumn>
+        </FluentDataGrid>
+    }
+
+    @if (_deleteError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Delete failed">
+            @_deleteError
+        </FluentMessageBar>
+    }
+</FluentStack>

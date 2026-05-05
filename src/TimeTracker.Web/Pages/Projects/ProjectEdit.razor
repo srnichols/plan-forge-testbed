@@ -1,0 +1,74 @@
+@page "/projects/new"
+@page "/projects/{Id:int}/edit"
+@rendermode InteractiveServer
+
+<PageTitle>@(Id.HasValue ? "Edit Project" : "New Project")</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16" Style="max-width: 480px;">
+    <FluentLabel Typo="Typography.PageTitle">@(Id.HasValue ? "Edit Project" : "New Project")</FluentLabel>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <EditForm Model="_model" OnValidSubmit="HandleSubmitAsync">
+            <DataAnnotationsValidator />
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+
+                <FluentTextField @bind-Value="_model.Name"
+                                 Label="Name"
+                                 Required="true"
+                                 aria-required="true"
+                                 Style="width: 100%" />
+                <ValidationMessage For="@(() => _model.Name)" />
+
+                <FluentTextArea @bind-Value="_model.Description"
+                                Label="Description"
+                                Rows="3"
+                                Style="width: 100%" />
+                <ValidationMessage For="@(() => _model.Description)" />
+
+                <FluentSelect TOption="string"
+                              Label="Client"
+                              Required="true"
+                              aria-required="true"
+                              @bind-Value="_clientIdStr">
+                    <FluentOption TOption="string" Value="">— Select a client —</FluentOption>
+                    @foreach (ClientOption client in _clientOptions)
+                    {
+                        <FluentOption TOption="string" Value="@client.Id.ToString()">@client.Name</FluentOption>
+                    }
+                </FluentSelect>
+                <ValidationMessage For="@(() => _model.ClientId)" />
+
+                @if (_saveError is not null)
+                {
+                    <FluentMessageBar Intent="MessageIntent.Error" Title="Save failed">
+                        @_saveError
+                    </FluentMessageBar>
+                }
+
+                <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                    <FluentButton Type="ButtonType.Submit"
+                                  Appearance="Appearance.Accent"
+                                  Disabled="@_saving">
+                        @(_saving ? "Saving…" : "Save")
+                    </FluentButton>
+                    <FluentButton Appearance="Appearance.Neutral"
+                                  OnClick="@Cancel">
+                        Cancel
+                    </FluentButton>
+                </FluentStack>
+
+            </FluentStack>
+        </EditForm>
+    }
+</FluentStack>

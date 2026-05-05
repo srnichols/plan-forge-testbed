@@ -1,0 +1,85 @@
+@page "/time-entries/new"
+@rendermode InteractiveServer
+
+<PageTitle>New Time Entry</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16" Style="max-width: 480px;">
+    <FluentLabel Typo="Typography.PageTitle">New Time Entry</FluentLabel>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <EditForm Model="_model" OnValidSubmit="HandleSubmitAsync">
+            <DataAnnotationsValidator />
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+
+                <FluentSelect TOption="string"
+                              Label="Project"
+                              Required="true"
+                              aria-required="true"
+                              @bind-Value="_projectIdStr">
+                    <FluentOption TOption="string" Value="">— Select a project —</FluentOption>
+                    @foreach (ProjectOption project in _projectOptions)
+                    {
+                        <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Name</FluentOption>
+                    }
+                </FluentSelect>
+                <ValidationMessage For="@(() => _model.ProjectId)" />
+
+                <FluentDatePicker Label="Date"
+                                  Required="true"
+                                  aria-required="true"
+                                  @bind-Value="_dateProxy" />
+                <ValidationMessage For="@(() => _model.Date)" />
+
+                <FluentNumberField Label="Hours"
+                                   Required="true"
+                                   aria-required="true"
+                                   Min="0.01"
+                                   Max="24"
+                                   Step="0.25"
+                                   Style="width: 100%"
+                                   @bind-Value="_hoursProxy" />
+                <ValidationMessage For="@(() => _model.Hours)" />
+
+                <FluentTextArea @bind-Value="_model.Description"
+                                Label="Description"
+                                Rows="3"
+                                Style="width: 100%" />
+                <ValidationMessage For="@(() => _model.Description)" />
+
+                <FluentCheckbox @bind-Value="_model.IsBillable"
+                                Label="Billable" />
+
+                @if (_saveError is not null)
+                {
+                    <FluentMessageBar Intent="MessageIntent.Error" Title="Save failed">
+                        @_saveError
+                    </FluentMessageBar>
+                }
+
+                <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                    <FluentButton Type="ButtonType.Submit"
+                                  Appearance="Appearance.Accent"
+                                  Disabled="@_saving">
+                        @(_saving ? "Saving…" : "Save")
+                    </FluentButton>
+                    <FluentButton Appearance="Appearance.Neutral"
+                                  OnClick="@Cancel">
+                        Cancel
+                    </FluentButton>
+                </FluentStack>
+
+            </FluentStack>
+        </EditForm>
+    }
+</FluentStack>

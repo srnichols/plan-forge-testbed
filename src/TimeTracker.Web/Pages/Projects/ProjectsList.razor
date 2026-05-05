@@ -1,0 +1,56 @@
+@page "/projects"
+@rendermode InteractiveServer
+
+<PageTitle>Projects</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Center">
+        <FluentLabel Typo="Typography.PageTitle">Projects</FluentLabel>
+        <FluentSpacer />
+        <FluentButton Appearance="Appearance.Accent"
+                      OnClick="@NavigateToCreate"
+                      aria-label="Add new project">
+            New Project
+        </FluentButton>
+    </FluentStack>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading projects" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load projects">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <FluentDataGrid Items="@_projects" GridTemplateColumns="2fr 2fr 1fr 1fr auto" aria-label="Projects">
+            <PropertyColumn Property="@(p => p.Name)" Sortable="true" />
+            <PropertyColumn Property="@(p => p.Description)" Sortable="false" />
+            <PropertyColumn Property="@(p => p.ClientId)" Title="Client ID" Sortable="true" />
+            <PropertyColumn Property="@(p => p.IsActive)" Title="Active" Sortable="true" />
+            <TemplateColumn Title="Actions">
+                <FluentButton Appearance="Appearance.Lightweight"
+                              OnClick="@(() => NavigateToEdit(context.Id))"
+                              aria-label="@($"Edit {context.Name}")">
+                    Edit
+                </FluentButton>
+                <FluentButton Appearance="Appearance.Lightweight"
+                              OnClick="@(() => DeleteAsync(context.Id, context.Name))"
+                              aria-label="@($"Delete {context.Name}")">
+                    Delete
+                </FluentButton>
+            </TemplateColumn>
+        </FluentDataGrid>
+    }
+
+    @if (_deleteError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Delete failed">
+            @_deleteError
+        </FluentMessageBar>
+    }
+</FluentStack>
+

@@ -1,0 +1,54 @@
+@page "/invoices"
+@rendermode InteractiveServer
+
+<PageTitle>Invoices</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+    <FluentLabel Typo="Typography.PageTitle">Invoices</FluentLabel>
+
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Bottom">
+        <FluentSelect TOption="string"
+                      Label="Client"
+                      Value="@_selectedClientIdStr"
+                      ValueChanged="@OnClientChangedAsync"
+                      aria-label="Select client to view invoices"
+                      Style="min-width: 200px">
+            <FluentOption TOption="string" Value="">— Select a client —</FluentOption>
+            @foreach (ClientInvoiceOption client in _clientOptions)
+            {
+                <FluentOption TOption="string" Value="@client.Id.ToString()">@client.Name</FluentOption>
+            }
+        </FluentSelect>
+    </FluentStack>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading invoices" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else if (!_selectedClientId.HasValue)
+    {
+        <FluentLabel>Select a client to view their invoices.</FluentLabel>
+    }
+    else
+    {
+        <FluentDataGrid Items="@_invoices" GridTemplateColumns="1fr 1fr 1fr 1fr 1fr 1fr" aria-label="Invoices">
+            <PropertyColumn Property="@(i => i.InvoiceNumber)" Title="Invoice #" Sortable="true" />
+            <PropertyColumn Property="@(i => i.PeriodStart)" Title="Period Start" Format="yyyy-MM-dd" Sortable="true" />
+            <PropertyColumn Property="@(i => i.PeriodEnd)" Title="Period End" Format="yyyy-MM-dd" Sortable="true" />
+            <PropertyColumn Property="@(i => i.Total)" Title="Total" Format="C2" Sortable="true" />
+            <TemplateColumn Title="Status">
+                <FluentBadge Appearance="@GetStatusAppearance(context.Status)"
+                             aria-label="@context.Status.ToString()">
+                    @context.Status
+                </FluentBadge>
+            </TemplateColumn>
+            <PropertyColumn Property="@(i => i.CreatedAt)" Title="Created" Format="yyyy-MM-dd" Sortable="true" />
+        </FluentDataGrid>
+    }
+</FluentStack>
