@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using System.ComponentModel.DataAnnotations;
 using TimeTracker.Api.Services;
 
@@ -7,11 +8,14 @@ namespace TimeTracker.Api.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [Produces("application/json")]
-public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
+public sealed class InvoicesController(IInvoiceService invoiceService) : ControllerBase
 {
     [HttpPost("generate")]
     public async Task<IActionResult> Generate([FromBody] GenerateInvoiceRequest request, CancellationToken ct)
     {
+        if (request.ClientId <= 0)
+            return BadRequest(new { error = "ClientId must be a positive integer." });
+
         try
         {
             var invoice = await invoiceService.GenerateInvoiceAsync(
@@ -22,9 +26,9 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
-            return NotFound();
+            return NotFound(new { error = ex.Message });
         }
     }
 
@@ -36,8 +40,11 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetByClient([FromQuery] int clientId, CancellationToken ct)
+    public async Task<IActionResult> GetByClient([FromQuery, BindRequired] int clientId, CancellationToken ct)
     {
+        if (clientId <= 0)
+            return BadRequest(new { error = "clientId must be a positive integer." });
+
         var invoices = await invoiceService.GetClientInvoicesAsync(clientId, ct);
         return Ok(invoices);
     }
@@ -50,9 +57,9 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
             var invoice = await invoiceService.IssueInvoiceAsync(id, ct);
             return Ok(invoice);
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
-            return NotFound();
+            return NotFound(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -68,9 +75,9 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
             var invoice = await invoiceService.MarkPaidAsync(id, ct);
             return Ok(invoice);
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
-            return NotFound();
+            return NotFound(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -81,6 +88,9 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
     [HttpPost("{id:int}/void")]
     public async Task<IActionResult> VoidInvoice(int id, [FromBody] VoidInvoiceRequest request, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            return BadRequest(new { error = "Reason is required to void an invoice." });
+
         try
         {
             var invoice = await invoiceService.VoidInvoiceAsync(id, request.Reason, ct);
@@ -90,9 +100,9 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
-            return NotFound();
+            return NotFound(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -101,5 +111,5 @@ public class InvoicesController(IInvoiceService invoiceService) : ControllerBase
     }
 }
 
-public record GenerateInvoiceRequest(int ClientId, DateTime PeriodStart, DateTime PeriodEnd);
-public record VoidInvoiceRequest(string Reason);
+public sealed record GenerateInvoiceRequest(int ClientId, DateTime PeriodStart, DateTime PeriodEnd);
+public sealed record VoidInvoiceRequest(string Reason);

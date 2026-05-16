@@ -1,0 +1,7 @@
+The controller was already substantially implemented. My work was polish and hardening rather than greenfield. The main concrete change was adding `[BindRequired]` and a `clientId > 0` guard on the `GetByClient` endpoint — both quorum models flagged this as the only real gap, since without it a missing or zero `clientId` would silently return an empty list instead of a clear 400. I also added boundary validation on `Generate` (ClientId > 0) and `VoidInvoice` (non-empty Reason) to pre-empt service-layer exceptions with cleaner HTTP responses.
+
+I made the class and DTOs `sealed` to match the spec and prevent unintended inheritance. All `KeyNotFoundException` catch blocks were updated from bare `NotFound()` to `NotFound(new { error = ex.Message })` for consistent structured error envelopes matching the sibling controllers' pattern.
+
+No dead-ends encountered — the file was close to spec and the service interface matched perfectly. Future slices touching auth or global error handling should note that this controller uses per-action try/catch with anonymous `{ error }` objects, not ProblemDetails. If a global `IExceptionHandler` is introduced later, these catch blocks can be removed, but that's explicitly out of scope for this phase.
+
+Key file: `src/TimeTracker.Api/Controllers/InvoicesController.cs` (116 lines). The service contract in `src/TimeTracker.Api/Services/InvoiceService.cs` was verified but not modified.
