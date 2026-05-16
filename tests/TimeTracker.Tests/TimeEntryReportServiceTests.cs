@@ -236,6 +236,104 @@ public class TimeEntryReportServiceTests : IDisposable
         Assert.Equal(8m, day.TotalHours);
     }
 
+    // ── Gap-Fill: Hours Summary ──
+
+    [Fact]
+    public async Task GetHoursSummary_AllBillable_NonBillableHoursIsZero()
+    {
+        var project = await SeedProjectAsync();
+        await SeedEntryAsync(project.Id, new DateTime(2026, 4, 7), 5m, isBillable: true);
+        await SeedEntryAsync(project.Id, new DateTime(2026, 4, 8), 3m, isBillable: true);
+
+        var result = await _service.GetHoursSummaryAsync(
+            new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+
+        Assert.Equal(0m, result.NonBillableHours);
+        Assert.Equal(result.TotalHours, result.BillableHours);
+    }
+
+    [Fact]
+    public async Task GetHoursSummary_StartEqualsEnd_IncludesSingleDayEntries()
+    {
+        var project = await SeedProjectAsync();
+        await SeedEntryAsync(project.Id, new DateTime(2026, 4, 15), 4m);
+
+        var result = await _service.GetHoursSummaryAsync(
+            new DateOnly(2026, 4, 15), new DateOnly(2026, 4, 15));
+
+        Assert.Equal(4m, result.TotalHours);
+        Assert.Equal(1, result.EntryCount);
+    }
+
+    [Fact]
+    public async Task GetHoursSummary_ReturnsPeriodMetadata()
+    {
+        DateOnly start = new(2026, 3, 1);
+        DateOnly end = new(2026, 3, 31);
+
+        var result = await _service.GetHoursSummaryAsync(start, end);
+
+        Assert.Equal(start, result.PeriodStart);
+        Assert.Equal(end, result.PeriodEnd);
+    }
+
+    // ── Gap-Fill: Project Breakdown ──
+
+    [Fact]
+    public async Task GetProjectBreakdown_ZeroTotalHours_PercentageIsZero()
+    {
+        var result = await _service.GetProjectBreakdownAsync(
+            new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31));
+
+        Assert.Equal(0m, result.TotalHours);
+        Assert.Empty(result.Projects);
+    }
+
+    [Fact]
+    public async Task GetProjectBreakdown_RoundsPercentageToTwoDecimals()
+    {
+        var projectA = await SeedProjectAsync("Project A");
+        var projectB = await SeedProjectAsync("Project B");
+        await SeedEntryAsync(projectA.Id, new DateTime(2026, 4, 7), 1m);
+        await SeedEntryAsync(projectB.Id, new DateTime(2026, 4, 7), 2m);
+
+        var result = await _service.GetProjectBreakdownAsync(
+            new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+
+        var a = result.Projects.First(p => p.ProjectName == "Project A");
+        var b = result.Projects.First(p => p.ProjectName == "Project B");
+        Assert.Equal(33.33m, a.PercentageOfTotal);
+        Assert.Equal(66.67m, b.PercentageOfTotal);
+    }
+
+    [Fact]
+    public async Task GetProjectBreakdown_NonExistentProjectFilter_ReturnsEmpty()
+    {
+        var project = await SeedProjectAsync();
+        await SeedEntryAsync(project.Id, new DateTime(2026, 4, 7), 5m);
+
+        var result = await _service.GetProjectBreakdownAsync(
+            new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30));
+
+        Assert.Empty(result.Projects);
+    }
+
+    // ── Gap-Fill: Daily Timeline ──
+
+    [Fact]
+    public async Task GetDailyTimeline_EntryOnEndDate_IsIncluded()
+    {
+        var project = await SeedProjectAsync();
+        await SeedEntryAsync(project.Id, new DateTime(2026, 4, 30), 7m);
+
+        var result = await _service.GetDailyTimelineAsync(
+            new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+
+        Assert.Equal(7m, result.TotalHours);
+        var day = result.Days.Single();
+        Assert.Equal(new DateOnly(2026, 4, 30), day.Date);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
