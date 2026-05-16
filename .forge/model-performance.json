@@ -322,5 +322,17 @@
     "attempts": 1,
     "duration_ms": 325793,
     "cost_usd": 0.01
+  },
+  {
+    "date": "2026-05-16T22:28:45.246Z",
+    "plan": "Phase-1-CLIENTS-CRUD-PLAN",
+    "sliceId": "4",
+    "sliceTitle": "PUT/DELETE endpoints + integration",
+    "sliceType": "test",
+    "model": "claude-sonnet-4.6",
+    "status": "passed",
+    "attempts": 1,
+    "duration_ms": 477160,
+    "cost_usd": 0.01
   }
 ]
