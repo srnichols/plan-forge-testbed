@@ -124,6 +124,33 @@ public class DashboardServiceTests : IDisposable
         Assert.Equal(1, summary.TotalProjects);   // 1 active
     }
 
+    [Fact]
+    public async Task GetSummaryAsync_OnlyInactiveClients_StillCountsTimeEntries()
+    {
+        // Arrange
+        var client = new Client { Name = "Inactive", Email = "i@t.com", HourlyRate = 50m, IsActive = false };
+        _db.Clients.Add(client);
+        await _db.SaveChangesAsync();
+
+        var project = new Project { Name = "Old Project", ClientId = client.Id, IsActive = false };
+        _db.Projects.Add(project);
+        await _db.SaveChangesAsync();
+
+        _db.TimeEntries.Add(new TimeEntry { ProjectId = project.Id, Date = DateTime.UtcNow, Hours = 5m, IsBillable = true });
+        await _db.SaveChangesAsync();
+
+        // Act
+        var summary = await _service.GetSummaryAsync();
+
+        // Assert
+        Assert.Equal(0, summary.TotalClients);
+        Assert.Equal(0, summary.TotalProjects);
+        Assert.Equal(1, summary.TotalTimeEntries);
+        Assert.Equal(5m, summary.TotalHoursLogged);
+        Assert.Equal(5m, summary.BillableHours);
+        Assert.Equal(0m, summary.NonBillableHours);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
