@@ -36,5 +36,42 @@ public class TimeTrackerDbContext : DbContext
             e.Property(t => t.Hours).HasPrecision(5, 2);
             e.HasOne(t => t.Project).WithMany(p => p.TimeEntries).HasForeignKey(t => t.ProjectId);
         });
+
+        modelBuilder.Entity<Invoice>(e =>
+        {
+            e.HasKey(i => i.Id);
+            e.Property(i => i.InvoiceNumber).IsRequired().HasMaxLength(50);
+            e.HasIndex(i => i.InvoiceNumber).IsUnique();
+            e.Property(i => i.Status).HasConversion<int>();
+            e.Property(i => i.Subtotal).HasPrecision(18, 2);
+            e.Property(i => i.DiscountPercent).HasPrecision(5, 2);
+            e.Property(i => i.DiscountAmount).HasPrecision(18, 2);
+            e.Property(i => i.TaxRate).HasPrecision(5, 2);
+            e.Property(i => i.TaxAmount).HasPrecision(18, 2);
+            e.Property(i => i.Total).HasPrecision(18, 2);
+            e.Property(i => i.VoidReason).HasMaxLength(500);
+            e.HasOne(i => i.Client)
+                .WithMany()
+                .HasForeignKey(i => i.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<InvoiceLine>(e =>
+        {
+            e.HasKey(l => l.Id);
+            e.Property(l => l.Description).IsRequired().HasMaxLength(500);
+            e.Property(l => l.Hours).HasPrecision(5, 2);
+            e.Property(l => l.HourlyRate).HasPrecision(10, 2);
+            e.Property(l => l.LineTotal).HasPrecision(18, 2);
+            e.Property(l => l.RateType).HasConversion<int>();
+            e.HasOne(l => l.Invoice)
+                .WithMany(i => i.InvoiceLines)
+                .HasForeignKey(l => l.InvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(l => l.Project)
+                .WithMany()
+                .HasForeignKey(l => l.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }
