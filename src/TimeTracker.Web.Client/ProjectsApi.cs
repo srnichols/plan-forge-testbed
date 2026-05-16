@@ -3,7 +3,7 @@ using TimeTracker.Web.Client.Models;
 
 namespace TimeTracker.Web.Client;
 
-public class ProjectsApi(HttpClient httpClient) : IProjectsApi
+public sealed class ProjectsApi(HttpClient httpClient) : IProjectsApi
 {
     public async Task<List<ProjectDto>> GetAllAsync(int? clientId = null, CancellationToken ct = default)
     {

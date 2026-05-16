@@ -3,7 +3,7 @@ using TimeTracker.Web.Client.Models;
 
 namespace TimeTracker.Web.Client;
 
-public class ClientsApi(HttpClient httpClient) : IClientsApi
+public sealed class ClientsApi(HttpClient httpClient) : IClientsApi
 {
     public async Task<List<ClientDto>> GetAllAsync(CancellationToken ct = default)
         => await httpClient.GetFromJsonAsync<List<ClientDto>>("api/clients", ct) ?? [];

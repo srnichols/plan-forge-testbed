@@ -3,7 +3,7 @@ using TimeTracker.Web.Client.Models;
 
 namespace TimeTracker.Web.Client;
 
-public class InvoicesApi(HttpClient httpClient) : IInvoicesApi
+public sealed class InvoicesApi(HttpClient httpClient) : IInvoicesApi
 {
     public async Task<InvoiceDto> GenerateAsync(GenerateInvoiceFormModel model, CancellationToken ct = default)
     {
