@@ -18,8 +18,11 @@ A simple billable hours tracker:
 # Start database
 docker compose up -d db
 
-# Run the app
+# Run the API
 dotnet run --project src/TimeTracker.Api
+
+# Run the web UI (Blazor Server) — http://localhost:5100
+dotnet run --project src/TimeTracker.Web
 
 # Run tests
 dotnet test
