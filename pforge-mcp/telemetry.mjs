@@ -281,6 +281,344 @@ export function pruneRunHistory(cwd, maxRunHistory = 50) {
   }
 }
 
+// ─── OTel Chat Span Emitter ────────────────────────────────────────────
+
+// Singleton tracer promise — resolved once per process lifetime.
+let _otelTracerPromise = null;
+
+// Singleton meter promise — resolved once per process lifetime.
+let _otelMeterPromise = null;
+
+/**
+ * Lazily initialize the OTel tracer when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+ * All OTel packages are loaded via dynamic import (optional deps).
+ * Returns null if the endpoint is unset or if packages are unavailable.
+ * @returns {Promise<object|null>}
+ */
+async function _getOtelTracer() {
+  if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return null;
+  if (_otelTracerPromise !== null) return _otelTracerPromise;
+
+  _otelTracerPromise = (async () => {
+    try {
+      const { initOtel } = await import("./otel-init.mjs");
+      await initOtel();
+      const { trace } = await import("@opentelemetry/api");
+      return trace.getTracer("pforge-mcp", "2.4.0");
+    } catch {
+      // Optional packages not installed — graceful no-op.
+      return null;
+    }
+  })();
+
+  return _otelTracerPromise;
+}
+
+/**
+ * Lazily initialize the OTel meter when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+ * All OTel packages are loaded via dynamic import (optional deps).
+ * Returns null if the endpoint is unset or if packages are unavailable.
+ * @returns {Promise<object|null>}
+ */
+async function _getOtelMeter() {
+  if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return null;
+  if (_otelMeterPromise !== null) return _otelMeterPromise;
+
+  _otelMeterPromise = (async () => {
+    try {
+      const { initOtel } = await import("./otel-init.mjs");
+      await initOtel();
+      const { metrics } = await import("@opentelemetry/api");
+      return metrics.getMeter("pforge-mcp", "2.4.0");
+    } catch {
+      // Optional packages not installed — graceful no-op.
+      return null;
+    }
+  })();
+
+  return _otelMeterPromise;
+}
+
+/**
+ * Record gen_ai.client.operation.duration and gen_ai.client.token.usage histograms.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * Histogram names follow the OpenTelemetry GenAI semantic conventions:
+ *   gen_ai.client.operation.duration — unit: s
+ *   gen_ai.client.token.usage        — unit: {token}, split by gen_ai.token.type
+ *
+ * @param {object} data - Same payload as _emitChatSpan.
+ */
+async function _recordChatMetrics(data) {
+  try {
+    const meter = await _getOtelMeter();
+    if (!meter) return;
+
+    const model = data?.model ?? "unknown";
+    const provider = data?.provider ?? _inferProvider(model);
+    const baseAttrs = {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.system": provider,
+      "gen_ai.request.model": data?.requestModel ?? model,
+      "gen_ai.response.model": data?.responseModel ?? model,
+    };
+
+    // gen_ai.client.operation.duration — seconds
+    const durationMs = data?.durationMs ?? data?.duration ?? 0;
+    const durationHist = meter.createHistogram("gen_ai.client.operation.duration", {
+      description: "GenAI operation duration",
+      unit: "s",
+    });
+    durationHist.record(durationMs / 1000, baseAttrs);
+
+    // gen_ai.client.token.usage — one recording per token type
+    const tokenHist = meter.createHistogram("gen_ai.client.token.usage", {
+      description: "GenAI token usage",
+      unit: "{token}",
+    });
+    const tokensIn = data?.tokens?.tokens_in ?? data?.tokensIn ?? 0;
+    const tokensOut = data?.tokens?.tokens_out ?? data?.tokensOut ?? 0;
+    if (tokensIn > 0) {
+      tokenHist.record(tokensIn, { ...baseAttrs, "gen_ai.token.type": "input" });
+    }
+    if (tokensOut > 0) {
+      tokenHist.record(tokensOut, { ...baseAttrs, "gen_ai.token.type": "output" });
+    }
+  } catch {
+    // Never surface OTel errors to the orchestrator.
+  }
+}
+
+/**
+ * Infer the gen_ai.provider.name from a model identifier string.
+ * @param {string} model
+ * @returns {string}
+ */
+function _inferProvider(model) {
+  if (!model) return "unknown";
+  if (/^gpt-|^o[1-9]/.test(model)) return "openai";
+  if (/^claude/.test(model)) return "anthropic";
+  if (/^grok/.test(model)) return "xai";
+  if (/^gemini/.test(model)) return "google";
+  if (/^mistral/.test(model)) return "mistralai";
+  return "unknown";
+}
+
+/**
+ * Emit a `gen_ai.chat <model>` span to the OTLP endpoint.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * @param {object} data - Payload from the `chat-completed` orchestrator event.
+ *   Expected fields: model, requestModel, responseModel, provider,
+ *   tokens.tokens_in, tokens.tokens_out, cost_usd, sliceId, runId.
+ */
+async function _emitChatSpan(data) {
+  try {
+    const tracer = await _getOtelTracer();
+    if (!tracer) return;
+
+    const model = data?.model ?? "unknown";
+    const span = tracer.startSpan(`gen_ai.chat ${model}`, {
+      kind: 3, // SpanKind.CLIENT
+      attributes: {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": data?.provider ?? _inferProvider(model),
+        "gen_ai.request.model": data?.requestModel ?? model,
+        "gen_ai.response.model": data?.responseModel ?? model,
+        "gen_ai.usage.input_tokens": data?.tokens?.tokens_in ?? data?.tokensIn ?? 0,
+        "gen_ai.usage.output_tokens": data?.tokens?.tokens_out ?? data?.tokensOut ?? 0,
+        "pforge.cost.usd": data?.cost_usd ?? data?.costUsd ?? 0,
+        "pforge.slice.number": String(data?.sliceId ?? ""),
+        "pforge.run.id": data?.runId ?? "",
+      },
+    });
+
+    span.end();
+
+    // Record GenAI metrics — operation duration + token usage histograms.
+    await _recordChatMetrics(data);
+  } catch {
+    // Never surface OTel errors to the orchestrator.
+  }
+}
+
+// ─── OTel Agent (Slice) Span Emitter ──────────────────────────────────
+
+/**
+ * Emit an `invoke_agent slice-N` span to the OTLP endpoint.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * @param {object} data - Payload from the `slice-started` orchestrator event.
+ *   Expected fields: sliceId, title, planName, planCommitSha, runId.
+ */
+async function _emitAgentSpan(data) {
+  try {
+    const tracer = await _getOtelTracer();
+    if (!tracer) return;
+
+    const sliceId = data?.sliceId ?? "";
+    const span = tracer.startSpan(`invoke_agent slice-${sliceId}`, {
+      kind: 3, // SpanKind.CLIENT
+      attributes: {
+        "gen_ai.agent.name": `slice-${sliceId}`,
+        "gen_ai.agent.version": data?.planCommitSha ?? "",
+        "pforge.plan.name": data?.planName ?? data?.plan ?? "",
+        "pforge.slice.number": String(sliceId),
+        "pforge.run.id": data?.runId ?? "",
+        "pforge.actor.source": data?.source ?? "",
+        "pforge.action.security_risk": data?.security_risk ?? "",
+      },
+    });
+
+    span.end();
+  } catch {
+    // Never surface OTel errors to the orchestrator.
+  }
+}
+
+/**
+ * Public fire-and-forget entry point for agent-span emission.
+ * Called by the telemetry handler on slice-started events.
+ *
+ * @param {{ sliceId: string|number, title?: string, planName?: string, planCommitSha?: string, runId?: string }} data
+ */
+export function emitAgentSpan(data) {
+  _emitAgentSpan(data).catch(() => {});
+}
+
+// ─── OTel Workflow (Plan) Span Emitter ────────────────────────────────
+
+/**
+ * Emit an `invoke_workflow <plan>` span to the OTLP endpoint.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * @param {object} data - Payload from the `run-started` orchestrator event.
+ *   Expected fields: plan, planCommitSha, mode, model, sliceCount, runId, quorumMode, quorumThreshold.
+ */
+async function _emitWorkflowSpan(data) {
+  try {
+    const tracer = await _getOtelTracer();
+    if (!tracer) return;
+
+    const plan = data?.plan ?? "unknown";
+    const span = tracer.startSpan(`invoke_workflow ${plan}`, {
+      kind: 3, // SpanKind.CLIENT
+      attributes: {
+        "gen_ai.workflow.name": plan,
+        "pforge.plan.path": plan,
+        "pforge.plan.commit_sha": data?.planCommitSha ?? "",
+        "pforge.quorum.mode": data?.quorumMode ?? data?.mode ?? "",
+        "pforge.quorum.threshold": data?.quorumThreshold ?? 0,
+        "pforge.run.id": data?.runId ?? "",
+      },
+    });
+
+    span.end();
+  } catch {
+    // Never surface OTel errors to the orchestrator.
+  }
+}
+
+/**
+ * Public fire-and-forget entry point for workflow-span emission.
+ * Called by the telemetry handler on run-started events.
+ *
+ * @param {{ plan: string, planCommitSha?: string, mode?: string, quorumMode?: string, quorumThreshold?: number, runId?: string }} data
+ */
+export function emitWorkflowSpan(data) {
+  _emitWorkflowSpan(data).catch(() => {});
+}
+
+// ─── OTel Tool Span Emitter ────────────────────────────────────────────
+
+/**
+ * Emit an `execute_tool <tool_name>` span to the OTLP endpoint.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * @param {object} data - Payload from the tool dispatcher wrapper.
+ *   Expected fields: toolName, durationMs, isError, runId.
+ */
+async function _emitToolSpan(data) {
+  try {
+    const tracer = await _getOtelTracer();
+    if (!tracer) return;
+
+    const toolName = data?.toolName ?? "unknown";
+    const durationMs = data?.durationMs ?? 0;
+    const startTime = new Date(Date.now() - durationMs);
+
+    const span = tracer.startSpan(`execute_tool ${toolName}`, {
+      kind: 3, // SpanKind.CLIENT
+      startTime,
+      attributes: {
+        "pforge.tool.name": toolName,
+        "pforge.tool.duration_ms": durationMs,
+        "pforge.tool.error": data?.isError ?? false,
+        "pforge.run.id": data?.runId ?? "",
+      },
+    });
+
+    span.end();
+  } catch {
+    // Never surface OTel errors to the dispatcher.
+  }
+}
+
+/**
+ * Public fire-and-forget entry point for tool-span emission.
+ * Called by the server.mjs wrap layer after each MCP tool invocation.
+ *
+ * @param {{ toolName: string, durationMs: number, isError: boolean, runId?: string }} data
+ */
+export function emitToolSpan(data) {
+  _emitToolSpan(data).catch(() => {});
+}
+
+// ─── OTel Gate Span Emitter ───────────────────────────────────────────
+
+/**
+ * Emit a `run_gate slice-N` span to the OTLP endpoint.
+ * Fires and forgets — caller should not await (never throws).
+ *
+ * @param {object} data - Payload from the `gate-passed` orchestrator event.
+ *   Expected fields: sliceId, runId, failOpen, durationMs.
+ */
+async function _emitGateSpan(data) {
+  try {
+    const tracer = await _getOtelTracer();
+    if (!tracer) return;
+
+    const sliceId = data?.sliceId ?? "";
+    const durationMs = data?.durationMs ?? 0;
+    const startTime = durationMs ? new Date(Date.now() - durationMs) : new Date();
+
+    const span = tracer.startSpan(`run_gate slice-${sliceId}`, {
+      kind: 3, // SpanKind.CLIENT
+      startTime,
+      attributes: {
+        "pforge.gate.passed": !(data?.failed ?? false),
+        "pforge.gate.fail_open": data?.failOpen ?? false,
+        "pforge.slice.number": String(sliceId),
+        "pforge.run.id": data?.runId ?? "",
+      },
+    });
+
+    span.end();
+  } catch {
+    // Never surface OTel errors to the orchestrator.
+  }
+}
+
+/**
+ * Public fire-and-forget entry point for gate-span emission.
+ * Called by the telemetry handler on gate-passed events.
+ *
+ * @param {{ sliceId: string|number, runId?: string, failOpen?: boolean, durationMs?: number }} data
+ */
+export function emitGateSpan(data) {
+  _emitGateSpan(data).catch(() => {});
+}
+
 // ─── Orchestrator Event Handler for Telemetry ─────────────────────────
 
 /**
@@ -302,6 +640,8 @@ export function createTelemetryHandler(trace, runDir) {
             model: data?.model,
             sliceCount: data?.sliceCount,
           });
+          // Fire-and-forget OTel workflow (plan) span emission.
+          _emitWorkflowSpan({ ...data, runId: trace.traceId }).catch(() => {});
           break;
         }
         case "slice-started": {
@@ -310,7 +650,11 @@ export function createTelemetryHandler(trace, runDir) {
             sliceId: data?.sliceId,
             title: data?.title,
             parallel: data?.parallel || false,
+            "pforge.actor.source": data?.source ?? null,
+            "pforge.action.security_risk": data?.security_risk ?? null,
           });
+          // Fire-and-forget OTel agent (slice) span emission.
+          _emitAgentSpan({ ...data, runId: trace.traceId }).catch(() => {});
           break;
         }
         case "slice-completed": {
@@ -412,6 +756,33 @@ export function createTelemetryHandler(trace, runDir) {
               modelCount: data?.modelCount,
             });
           }
+          break;
+        }
+        // ─── OTel gate span (Slice 5) ───
+        case "gate-passed": {
+          const parentSpan = trace._activeSpans.get(`slice-${data?.sliceId}`);
+          if (parentSpan) {
+            addEvent(parentSpan, "gate-passed", Severity.INFO, {
+              failOpen: data?.failOpen ?? false,
+            });
+          }
+          // Fire-and-forget OTel gate span emission — never blocks the event loop.
+          _emitGateSpan({ ...data, runId: trace.traceId }).catch(() => {});
+          break;
+        }
+        // ─── OTel chat span (Slice 2) ───
+        case "chat-completed": {
+          const parentSpan = trace._activeSpans.get(`slice-${data?.sliceId}`);
+          if (parentSpan) {
+            addEvent(parentSpan, "chat-completed", Severity.INFO, {
+              model: data?.model,
+              tokens_in: data?.tokens?.tokens_in ?? data?.tokensIn,
+              tokens_out: data?.tokens?.tokens_out ?? data?.tokensOut,
+              cost_usd: data?.cost_usd ?? data?.costUsd,
+            });
+          }
+          // Fire-and-forget OTel span emission — never blocks the event loop.
+          _emitChatSpan({ ...data, runId: trace.traceId }).catch(() => {});
           break;
         }
       }

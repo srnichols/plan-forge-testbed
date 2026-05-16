@@ -1,0 +1,12 @@
+{
+  "defaultLane": "feature",
+  "recursionDepth": 3,
+  "autoApproveAgent": false,
+  "sourceWeights": {
+    "memory": 34,
+    "principles": 33,
+    "plans": 33
+  },
+  "staleDefaultsHours": 24,
+  "quorumPreset": "speed"
+}

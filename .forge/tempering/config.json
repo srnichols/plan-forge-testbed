@@ -1,0 +1,70 @@
+{
+  "enabled": true,
+  "coverageMinima": {
+    "domain": 90,
+    "integration": 80,
+    "controller": 60,
+    "overall": 80
+  },
+  "runtimeBudgets": {
+    "unitMaxMs": 120000,
+    "integrationMaxMs": 300000,
+    "uiMaxMs": 600000,
+    "visualDiffMaxMs": 300000,
+    "flakinessMaxMs": 60000,
+    "perfBudgetMaxMs": 120000,
+    "loadStressMaxMs": 300000,
+    "mutationMaxMs": 600000
+  },
+  "scanners": {
+    "unit": true,
+    "integration": true,
+    "ui-playwright": true,
+    "ui-visual": true,
+    "ui-accessibility": true,
+    "visual-diff": true,
+    "load-stress": true,
+    "mutation": true,
+    "flakiness": true,
+    "contract": true,
+    "performance-budget": true
+  },
+  "visualAnalyzer": {
+    "mode": "quorum",
+    "models": [
+      "claude-opus-4.7",
+      "grok-4.20",
+      "gemini-3-pro-preview"
+    ],
+    "agreement": 2,
+    "enabled": true,
+    "ignorableDiff": 0.001,
+    "failureDiff": 0.02,
+    "maxCostUsd": 2,
+    "analyzerTimeoutMs": 60000,
+    "maxImageWidth": 1920
+  },
+  "bugRegistry": {
+    "integration": "github",
+    "githubRepo": null,
+    "autoCreateIssues": true,
+    "labelPrefix": "tempering",
+    "fallback": "jsonl"
+  },
+  "execution": {
+    "trigger": "post-slice",
+    "parallelism": "cpu-count",
+    "regressionFirst": true
+  },
+  "ui-playwright": {
+    "url": null,
+    "maxDepth": 5,
+    "maxPages": 100,
+    "allowProduction": false,
+    "captureScreenshots": true,
+    "runAccessibility": true,
+    "a11yMinSeverity": "moderate",
+    "a11yFailThreshold": 0
+  },
+  "stackOverrides": {}
+}

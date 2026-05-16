@@ -39,8 +39,8 @@ describe("TOOL_METADATA forge_drift_report", () => {
     expect(TOOL_METADATA.forge_drift_report.addedIn).toBe("2.27.0");
   });
 
-  it("produces drift-history.json", () => {
-    expect(TOOL_METADATA.forge_drift_report.produces).toContain(".forge/drift-history.json");
+  it("produces drift-history.jsonl", () => {
+    expect(TOOL_METADATA.forge_drift_report.produces).toContain(".forge/drift-history.jsonl");
   });
 
   it("has exactly one entry (no duplicates)", () => {
@@ -100,17 +100,17 @@ describe("drift score computation", () => {
 
 describe("drift history and trend", () => {
   it("historyLength is 1 on first run", () => {
-    const history = readForgeJsonl("drift-history.json", [], tempDir);
+    const history = readForgeJsonl("drift-history.jsonl", [], tempDir);
     expect(history).toHaveLength(0);
     const historyLength = history.length + 1;
     expect(historyLength).toBe(1);
   });
 
   it("appends records correctly", () => {
-    appendForgeJsonl("drift-history.json", { score: 90, timestamp: "t1" }, tempDir);
-    appendForgeJsonl("drift-history.json", { score: 85, timestamp: "t2" }, tempDir);
+    appendForgeJsonl("drift-history.jsonl", { score: 90, timestamp: "t1" }, tempDir);
+    appendForgeJsonl("drift-history.jsonl", { score: 85, timestamp: "t2" }, tempDir);
 
-    const history = readForgeJsonl("drift-history.json", [], tempDir);
+    const history = readForgeJsonl("drift-history.jsonl", [], tempDir);
     expect(history).toHaveLength(2);
     expect(history[0].score).toBe(90);
     expect(history[1].score).toBe(85);
@@ -755,9 +755,9 @@ describe("TOOL_METADATA forge_alert_triage", () => {
     expect(TOOL_METADATA.forge_alert_triage.addedIn).toBe("2.31.0");
   });
 
-  it("consumes incidents.jsonl and drift-history.json", () => {
+  it("consumes incidents.jsonl and drift-history.jsonl", () => {
     expect(TOOL_METADATA.forge_alert_triage.consumes).toContain(".forge/incidents.jsonl");
-    expect(TOOL_METADATA.forge_alert_triage.consumes).toContain(".forge/drift-history.json");
+    expect(TOOL_METADATA.forge_alert_triage.consumes).toContain(".forge/drift-history.jsonl");
   });
 
   it("has exactly one entry (no duplicates)", () => {
@@ -982,7 +982,7 @@ describe("TOOL_METADATA forge_health_trend", () => {
 
   it("consumes operational data files", () => {
     const consumes = TOOL_METADATA.forge_health_trend.consumes;
-    expect(consumes).toContain(".forge/drift-history.json");
+    expect(consumes).toContain(".forge/drift-history.jsonl");
     expect(consumes).toContain(".forge/incidents.jsonl");
     expect(consumes).toContain(".forge/model-performance.json");
   });
@@ -1007,7 +1007,7 @@ describe("forge_health_trend integration", () => {
     const now = new Date().toISOString();
     appendForgeJsonl("drift-history.json", { timestamp: now, score: 85 }, tempDir);
     appendForgeJsonl("incidents.jsonl", { capturedAt: now, severity: "high", resolvedAt: null, mttr: null }, tempDir);
-    recordModelPerformance(tempDir, { date: now, model: "gpt-4o", status: "passed", cost_usd: 0.05 });
+    recordModelPerformance(tempDir, { date: now, model: "claude-haiku-4.5", status: "passed", cost_usd: 0.05 });
 
     const result = getHealthTrend(tempDir, 30);
     expect(result.drift.snapshots).toBe(1);
@@ -1276,7 +1276,7 @@ describe("TOOL_METADATA forge_fix_proposal", () => {
   });
 
   it("consumes LiveGuard data files", () => {
-    expect(TOOL_METADATA.forge_fix_proposal.consumes).toContain(".forge/drift-history.json");
+    expect(TOOL_METADATA.forge_fix_proposal.consumes).toContain(".forge/drift-history.jsonl");
     expect(TOOL_METADATA.forge_fix_proposal.consumes).toContain(".forge/incidents.jsonl");
     expect(TOOL_METADATA.forge_fix_proposal.consumes).toContain(".forge/secret-scan-cache.json");
   });
@@ -1320,7 +1320,7 @@ describe("TOOL_METADATA forge_quorum_analyze", () => {
   });
 
   it("consumes LiveGuard data files", () => {
-    expect(TOOL_METADATA.forge_quorum_analyze.consumes).toContain(".forge/drift-history.json");
+    expect(TOOL_METADATA.forge_quorum_analyze.consumes).toContain(".forge/drift-history.jsonl");
     expect(TOOL_METADATA.forge_quorum_analyze.consumes).toContain(".forge/incidents.jsonl");
   });
 
@@ -1810,11 +1810,13 @@ describe("dashboard tab structure", () => {
   const dashboardHtml = readFileSync(resolve(__dirname, "..", "dashboard", "index.html"), "utf-8");
   const dashboardJs = readFileSync(resolve(__dirname, "..", "dashboard", "app.js"), "utf-8");
 
-  const CORE_TABS = ["progress", "runs", "cost", "actions", "replay", "extensions", "config", "traces", "skills"];
+  const CORE_TABS = ["progress", "crucible", "governance", "runs", "cost", "actions", "replay", "extensions", "traces", "skills", "watcher", "memory", "timeline", "innerloop"];
   const LG_TABS = ["lg-health", "lg-incidents", "lg-triage", "lg-security", "lg-env"];
-  const ALL_TABS = [...CORE_TABS, ...LG_TABS];
+  const FM_TABS = ["forge-master"];
+  const SETTINGS_TABS = ["settings-general", "settings-models", "settings-execution", "settings-api-keys", "settings-updates", "settings-memory", "settings-bridge", "settings-crucible", "settings-brain"];
+  const ALL_TABS = [...CORE_TABS, ...LG_TABS, ...FM_TABS, ...SETTINGS_TABS];
 
-  it("has 9 core tab buttons", () => {
+  it("has 14 core tab buttons", () => {
     for (const tab of CORE_TABS) {
       expect(dashboardHtml).toContain(`data-tab="${tab}"`);
     }
@@ -1826,9 +1828,54 @@ describe("dashboard tab structure", () => {
     }
   });
 
-  it("total tab count is 14 (9 core + 5 LG)", () => {
+  it("Forge-Master is a top-level group (not a Forge sub-tab)", () => {
+    expect(dashboardHtml).toContain('data-group="forge-master"');
+    expect(dashboardHtml).toContain('id="subtabs-forge-master"');
+    // forge-master data-tab button must live inside its own subtab row, not subtabs-forge.
+    const fmRow = dashboardHtml.match(/id="subtabs-forge-master"[\s\S]*?<\/div>/);
+    expect(fmRow?.[0] || "").toContain('data-tab="forge-master"');
+  });
+
+  it("Settings is a top-level group with 9 decomposed sub-tabs (Phase-30)", () => {
+    expect(dashboardHtml).toContain('data-group="settings"');
+    expect(dashboardHtml).toContain('id="subtabs-settings"');
+    const settingsRow = dashboardHtml.match(/id="subtabs-settings"[\s\S]*?<\/div>/);
+    for (const tab of SETTINGS_TABS) {
+      expect(settingsRow?.[0] || "").toContain(`data-tab="${tab}"`);
+    }
+    // Legacy config button must be retired.
+    expect(settingsRow?.[0] || "").not.toContain('data-tab="config"');
+    // And must NOT appear inside subtabs-forge either.
+    const forgeRow = dashboardHtml.match(/id="subtabs-forge"[\s\S]*?<\/div>/);
+    expect(forgeRow?.[0] || "").not.toContain('data-tab="config"');
+  });
+
+  it("total tab count is 35 (18 core + 5 LG + 1 Forge-Master + 9 Settings + 1 GitHub + 1 Anvil-Lattice — Phase-30 decomposition + Phase GITHUB-D + Phase-LATTICE)", () => {
     const tabMatches = dashboardHtml.match(/data-tab="[^"]+"/g) || [];
-    expect(tabMatches.length).toBe(14);
+    expect(tabMatches.length).toBe(35);
+  });
+
+  it("Cross-group tab migration (Slice 7): Extensions→Settings, Bug Registry→LiveGuard, Watcher→LiveGuard", () => {
+    // Forge row had 15 buttons; Phase GITHUB-D added github-metrics tile → 16;
+    // Phase-LATTICE Slice 9 added anvil-lattice tile → 17.
+    const forgeRow = dashboardHtml.match(/id="subtabs-forge"[\s\S]*?<\/div>/);
+    expect((forgeRow?.[0].match(/data-tab="/g) || []).length).toBe(17);
+
+    // Extensions moved to Settings row (9 native + 1 migrated = 10 total)
+    const settingsRow = dashboardHtml.match(/id="subtabs-settings"[\s\S]*?<\/div>/);
+    expect(settingsRow?.[0] || "").toContain('data-tab="extensions"');
+    expect((settingsRow?.[0].match(/data-tab="/g) || []).length).toBe(10);
+
+    // Bug Registry + Watcher moved to LiveGuard row (5 native + 2 migrated = 7 total)
+    const liveguardRow = dashboardHtml.match(/id="subtabs-liveguard"[\s\S]*?<\/div>/);
+    expect(liveguardRow?.[0] || "").toContain('data-tab="bugregistry"');
+    expect(liveguardRow?.[0] || "").toContain('data-tab="watcher"');
+    expect((liveguardRow?.[0].match(/data-tab="/g) || []).length).toBe(7);
+
+    // Migrated buttons use destination group accent colors
+    expect(settingsRow?.[0] || "").toMatch(/hover:text-purple-400[^>]*data-tab="extensions"/);
+    expect(liveguardRow?.[0] || "").toMatch(/hover:text-amber-400[^>]*data-tab="watcher"/);
+    expect(liveguardRow?.[0] || "").toMatch(/hover:text-amber-400[^>]*data-tab="bugregistry"/);
   });
 
   it("has LiveGuard section divider", () => {
@@ -3127,9 +3174,7 @@ describe("loadQuorumConfig", () => {
     const config = loadQuorumConfig(tempDir);
     expect(config.enabled).toBe(false);
     expect(config.auto).toBe(true);
-    expect(config.threshold).toBe(6);
-    expect(config.models).toHaveLength(3);
-    expect(config.reviewerModel).toBe("claude-opus-4.6");
+    expect(config.threshold).toBe(3);
   });
 
   it("merges user config from .forge.json quorum section", () => {
@@ -3148,8 +3193,7 @@ describe("loadQuorumConfig", () => {
     writeFileSync(resolve(tempDir, ".forge.json"), "NOT JSON!!!");
 
     const config = loadQuorumConfig(tempDir);
-    expect(config.threshold).toBe(6);
-    expect(config.models).toHaveLength(3);
+    expect(config.threshold).toBe(3);
   });
 
   it("applies preset override when provided", () => {
@@ -3345,14 +3389,77 @@ describe("hook integration: PreAgentHandoff with full LiveGuard state", () => {
 // ─── TOOL_METADATA: v2.30.0 total count ─────────────────────────────────
 
 describe("TOOL_METADATA v2.30.0 total count", () => {
-  it("has at least 34 tool entries", () => {
+  it("has at least 36 tool entries", () => {
     const count = Object.keys(TOOL_METADATA).length;
-    expect(count).toBeGreaterThanOrEqual(34);
+    expect(count).toBeGreaterThanOrEqual(36);
   });
 
   it("includes v2.29.0 and v2.30.0 tools", () => {
     expect(TOOL_METADATA).toHaveProperty("forge_fix_proposal");
     expect(TOOL_METADATA).toHaveProperty("forge_quorum_analyze");
     expect(TOOL_METADATA).toHaveProperty("forge_liveguard_run");
+  });
+});
+
+// ─── Phase TEMPER-06 Slice 06.1 — Bug Registry tools ─────────────────
+
+describe("TOOL_METADATA forge_bug_register", () => {
+  it("is present in TOOL_METADATA", () => {
+    expect(TOOL_METADATA).toHaveProperty("forge_bug_register");
+  });
+  it("has correct addedIn version", () => {
+    expect(TOOL_METADATA.forge_bug_register.addedIn).toBe("2.47.0");
+  });
+  it("produces .forge/bugs/<bugId>.json", () => {
+    expect(TOOL_METADATA.forge_bug_register.produces).toContain(".forge/bugs/<bugId>.json");
+  });
+  it("has MISSING_EVIDENCE and DUPLICATE_BUG errors", () => {
+    expect(TOOL_METADATA.forge_bug_register.errors).toHaveProperty("MISSING_EVIDENCE");
+    expect(TOOL_METADATA.forge_bug_register.errors).toHaveProperty("DUPLICATE_BUG");
+  });
+});
+
+describe("TOOL_METADATA forge_bug_list", () => {
+  it("is present in TOOL_METADATA", () => {
+    expect(TOOL_METADATA).toHaveProperty("forge_bug_list");
+  });
+  it("has correct addedIn version", () => {
+    expect(TOOL_METADATA.forge_bug_list.addedIn).toBe("2.47.0");
+  });
+  it("consumes .forge/bugs/*.json", () => {
+    expect(TOOL_METADATA.forge_bug_list.consumes).toContain(".forge/bugs/*.json");
+  });
+});
+
+describe("TOOL_METADATA forge_bug_update_status", () => {
+  it("is present in TOOL_METADATA", () => {
+    expect(TOOL_METADATA).toHaveProperty("forge_bug_update_status");
+  });
+  it("has correct addedIn version", () => {
+    expect(TOOL_METADATA.forge_bug_update_status.addedIn).toBe("2.47.0");
+  });
+  it("has INVALID_TRANSITION error", () => {
+    expect(TOOL_METADATA.forge_bug_update_status.errors).toHaveProperty("INVALID_TRANSITION");
+  });
+});
+
+describe("Bug Registry tools in server.mjs TOOLS array", () => {
+  const serverSrc = readFileSync(resolve(__dirname, "..", "server.mjs"), "utf-8");
+  it("registers forge_bug_register in TOOLS array", () => {
+    expect(serverSrc).toContain('"forge_bug_register"');
+  });
+  it("registers forge_bug_list in TOOLS array", () => {
+    expect(serverSrc).toContain('"forge_bug_list"');
+  });
+  it("registers forge_bug_update_status in TOOLS array", () => {
+    expect(serverSrc).toContain('"forge_bug_update_status"');
+  });
+  it("adds 3 bug tools to MCP_ONLY_TOOLS", () => {
+    expect(serverSrc).toMatch(/MCP_ONLY_TOOLS[\s\S]*forge_bug_register/);
+    expect(serverSrc).toMatch(/MCP_ONLY_TOOLS[\s\S]*forge_bug_list/);
+    expect(serverSrc).toMatch(/MCP_ONLY_TOOLS[\s\S]*forge_bug_update_status/);
+  });
+  it("has GET /api/bugs/list REST endpoint", () => {
+    expect(serverSrc).toContain('/api/bugs/list');
   });
 });

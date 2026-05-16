@@ -1,0 +1,3 @@
+{"version":"1.0","timestamp":"2026-05-07T22:52:53.671Z","type":"liveguard-tool-completed","tool":"forge_health_trend","status":"OK","durationMs":8}
+{"version":"1.0","timestamp":"2026-05-07T22:52:53.671Z","type":"liveguard","tool":"health-trend","status":"OK"}
+{"version":"1.0","timestamp":"2026-05-07T22:52:53.675Z","type":"memory-captured","thought":{"content":"Health trend: score 57/100, trend decreasing. Drift avg: 10.8, incidents: 1 open.","project":"plan-forge","type":"decision","source":"forge_health_trend","created_by":"liveguard-auto","captured_at":"2026-05-07T22:52:53.675Z","expiresAt":"2026-11-03T22:52:53.675Z"},"deduped":true}

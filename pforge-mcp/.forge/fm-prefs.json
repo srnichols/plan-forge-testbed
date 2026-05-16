@@ -1,0 +1,6 @@
+{
+  "tier": "medium",
+  "autoEscalate": false,
+  "quorumAdvisory": "auto",
+  "embeddingFallback": true
+}

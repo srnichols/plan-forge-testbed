@@ -17,6 +17,67 @@ const state = {
   runMeta: null,    // Current run metadata
   charts: {},       // Chart.js instances
   pendingApprovals: [], // Pending bridge approval gates
+  watcher: {        // v2.35: watcher feed (snapshots, anomalies, advice)
+    snapshots: [],     // [{ targetPath, runId, runState, anomalyCount, cursor, ts }]
+    anomalies: [],     // [{ targetPath, runId, code, severity, message, ts }]
+    advice: [],        // [{ targetPath, runId, model, tokensOut, ts }]
+  },
+  // Phase TEMPER-01 Slice 01.2 — local cache of the latest
+  // forge_tempering_status response for the Tempering tab.
+  tempering: {
+    initialized: false,
+    state: null,
+    scans: [],         // newest first — coverage-per-layer summaries
+    fetching: false,
+    lastError: null,
+    // TEMPER-02 Slice 02.2 — per-slice run verdicts keyed by sliceRef.slice.
+    // Populated by the `tempering-run-completed` hub event; read by
+    // renderSliceCards to render a tiny 🔨 pill next to the gate/retry
+    // indicators. Kept separate from the scan cache to keep the
+    // Tempering tab free of per-run state it doesn't render.
+    slicePills: {},
+    // TEMPER-04 Slice 04.2 — visual regression viewer cards keyed by urlHash.
+    visualRegressions: [],
+    visualIgnoredOnce: new Set(),
+    // TEMPER-05 Slice 05.1 — flakiness, perf-budget, load-stress panels.
+    flakyTests: [],
+    perfRegressions: [],
+    loadResults: [],
+    // TEMPER-05 Slice 05.2 — mutation scanner panel.
+    mutationResults: [],
+    // TEMPER-06 Slice 06.1 — bug registry.
+    bugs: [],
+    bugsFetching: false,
+    bugsLastError: null,
+    bugsFilter: { status: null, severity: null, scanner: null },
+  },
+  // Phase FORGE-SHOP-01 Slice 01.2 — Home tab state.
+  home: { snapshot: null, groupByCorrelation: false, refreshTimer: null, lastError: null },
+  // Phase GITHUB-D Slice 6 — GitHub Metrics tab state.
+  githubMetrics: { org: null, lastFetch: null },
+  // Phase FORGE-SHOP-05 Slice 05.2 — Timeline tab state.
+  timeline: {
+    events: [], threads: [], groupBy: "time", correlationId: null,
+    sources: ["hub-event", "run", "memory", "openbrain", "watch", "tempering", "bug", "incident", "forge-master"],
+    window: "24h", autoRefresh: false, refreshTimer: null, lastError: null,
+  },
+  // Phase FORGE-SHOP-02 Slice 02.2 — Review tab state.
+  review: {
+    items: [],
+    filters: { source: [], severity: [], status: ["open"] },
+    selectedItemId: null,
+    refreshTimer: null,
+    lastError: null,
+  },
+  // Phase-27.2 Slice 4 — plan-level cost projection, fetched once per
+  // plan-open via forge_estimate_quorum. Cached for the session and
+  // re-indexed client-side when the operator switches projectionMode.
+  // planProjection shape: { auto, power, speed, false, recommended,
+  // budgetCapUSD?, generatedAt } where each mode object contains a
+  // slices: [{ sliceNumber, projectedCostUSD, complexityScore, quorumEligible }].
+  planProjection: null,
+  projectionMode: "recommended",
+  projectionPlanPath: null, // last planPath the projection was fetched for
 };
 
 const API_BASE = `${window.location.protocol}//${window.location.host}`;
@@ -24,6 +85,23 @@ const API_BASE = `${window.location.protocol}//${window.location.host}`;
 // ─── Tab Switching ────────────────────────────────────────────────────
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
+    // Phase FORGE-SHOP-01 Slice 01.2 — teardown Home refresh timer on tab switch
+    if (state.home.refreshTimer) {
+      clearInterval(state.home.refreshTimer);
+      state.home.refreshTimer = null;
+    }
+    // Phase FORGE-SHOP-02 Slice 02.2 — teardown Review refresh timer on tab switch
+    if (state.review.refreshTimer) {
+      clearInterval(state.review.refreshTimer);
+      state.review.refreshTimer = null;
+    }
+    // Phase FORGE-SHOP-05 Slice 05.2 — teardown Timeline refresh timer on tab switch
+    if (state.timeline.refreshTimer) {
+      clearInterval(state.timeline.refreshTimer);
+      state.timeline.refreshTimer = null;
+    }
+
+    // Clear active from ALL tab-btn elements across all groups
     document.querySelectorAll(".tab-btn").forEach((b) => {
       b.classList.remove("tab-active");
       b.classList.add("text-gray-400");
@@ -36,11 +114,47 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (tab) tab.classList.remove("hidden");
 
     // Load data for the tab
-    if (btn.dataset.tab === "runs") { loadRuns(); tabBadgeState.runsNew = 0; updateTabBadges(); }
-    if (btn.dataset.tab === "cost") { loadCost(); tabBadgeState.hasAnomaly = false; updateTabBadges(); }
     if (tabLoadHooks[btn.dataset.tab]) tabLoadHooks[btn.dataset.tab]();
   });
 });
+
+// ─── Group Tab Switching ──────────────────────────────────────────────
+const GROUP_COLORS = { forge: "blue", liveguard: "amber", "forge-master": "cyan", settings: "purple" };
+const GROUP_ROWS = ["subtabs-forge", "subtabs-liveguard", "subtabs-forge-master", "subtabs-settings"];
+
+function switchGroup(group) {
+  // Update group tab styles
+  document.querySelectorAll(".group-tab").forEach((g) => {
+    g.classList.remove(
+      "group-active",
+      "text-blue-400", "text-amber-400", "text-cyan-400", "text-purple-400",
+      "border-blue-400", "border-amber-400", "border-cyan-400", "border-purple-400"
+    );
+    g.classList.add("text-gray-500", "border-transparent");
+  });
+  const activeGroup = document.querySelector(`.group-tab[data-group="${group}"]`);
+  if (activeGroup) {
+    activeGroup.classList.add("group-active");
+    activeGroup.classList.remove("text-gray-500", "border-transparent");
+    const color = GROUP_COLORS[group] || "blue";
+    activeGroup.classList.add(`text-${color}-400`, `border-${color}-400`);
+  }
+
+  // Show/hide subtab rows (group id → `subtabs-${group}`)
+  const activeRowId = `subtabs-${group}`;
+  for (const rowId of GROUP_ROWS) {
+    const row = document.getElementById(rowId);
+    if (row) row.classList.toggle("hidden", rowId !== activeRowId);
+  }
+
+  // Auto-click the first subtab in the group if none active
+  const subtabRow = document.getElementById(`subtabs-${group}`);
+  const activeSubtab = subtabRow?.querySelector(".tab-active");
+  if (!activeSubtab) {
+    const first = subtabRow?.querySelector(".tab-btn");
+    if (first) first.click();
+  }
+}
 
 // ─── WebSocket Connection ─────────────────────────────────────────────
 function connectWebSocket() {
@@ -83,6 +197,10 @@ function connectWebSocket() {
           } else if (data.type === "slice-failed") {
             const d = data.data || data;
             addNotification(`Slice ${d.sliceId} failed: ${d.error || ""}`, "error");
+          } else if (data.type === "liveguard-tool-completed" || data.type === "liveguard") {
+            const d = data.data || data;
+            const detail = d.score != null ? ` (score: ${d.score})` : d.gates != null ? ` (${d.passed}/${d.gates} passed)` : d.overallStatus ? ` [${d.overallStatus}]` : '';
+            addNotification(`LiveGuard: ${d.tool || 'unknown'}${detail}`, d.status === "error" ? "error" : "amber");
           }
         } catch { /* ignore malformed */ }
       };
@@ -120,6 +238,18 @@ function handleEvent(event) {
     case "slice-failed":
       handleSliceFailed(event.data || event);
       break;
+    case "slice-model-routed":
+      handleSliceModelRouted(event.data || event);
+      break;
+    case "quorum-dispatch-started":
+      handleQuorumDispatch(event.data || event);
+      break;
+    case "quorum-leg-completed":
+      handleQuorumLeg(event.data || event);
+      break;
+    case "quorum-review-completed":
+      handleQuorumReview(event.data || event);
+      break;
     case "run-completed":
       handleRunCompleted(event.data || event);
       loadRuns(); // Auto-refresh runs table
@@ -139,21 +269,110 @@ function handleEvent(event) {
     case "skill-completed":
       handleSkillCompleted(event.data || event);
       break;
+    case "liveguard-drift":
+      handleLGDrift(event.data || event);
+      break;
+    case "liveguard-incident":
+      handleLGIncident(event.data || event);
+      break;
+    case "liveguard-triage":
+      handleLGTriage(event.data || event);
+      break;
+    case "fix-proposal-ready":
+      handleFixProposal(event.data || event);
+      break;
+    case "liveguard-tool-completed":
+      handleLGToolCompleted(event.data || event);
+      break;
+    case "liveguard":
+      handleLGToolCompleted(event); // Use same handler — liveguard events include tool + status + summary
+      break;
+    case "liveguard-secret-scan":
+      handleLGSecretScan(event.data || event);
+      break;
+    case "watch-snapshot-completed":
+      handleWatchSnapshot(event.data || event);
+      break;
+    case "watch-anomaly-detected":
+      handleWatchAnomaly(event.data || event);
+      break;
+    case "watch-advice-generated":
+      handleWatchAdvice(event.data || event);
+      break;
+    case "tempering-run-completed":
+      handleTemperingRunCompleted(event.data || event);
+      break;
+    case "tempering-visual-regression-detected":
+      handleTemperingVisualRegression(event.data || event);
+      upsertVisualRegressionCard(event.data || event);
+      break;
+    case "tempering-baseline-promoted":
+      addNotification(`Baseline promoted: ${(event.data || event).url || (event.data || event).urlHash}`, "success");
+      break;
+    case "tempering-mutation-below-minimum":
+      handleMutationBelowMinimum(event.data || event);
+      break;
+    // TEMPER-06 Slice 06.1 — Bug Registry live updates
+    case "tempering-bug-registered":
+      if (event.data) {
+        state.tempering.bugs.unshift(event.data);
+        renderBugRegistry();
+        addNotification(`Bug registered: ${event.data.bugId || 'unknown'} (${event.data.scanner})`, "warning");
+      }
+      break;
+    case "tempering-bug-status-changed":
+      if (event.data) {
+        const idx = state.tempering.bugs.findIndex(b => b.bugId === event.data.bugId);
+        if (idx >= 0) state.tempering.bugs[idx].status = event.data.newStatus;
+        renderBugRegistry();
+      }
+      break;
+    // Phase-39 Slice 7 — Audit drain loop live events
+    case "drain-started":
+      addNotification(`Audit drain started (${(event.data || event).maxRounds || '?'} rounds max)`, "amber");
+      break;
+    case "drain-round-completed":
+      addNotification(`Drain round ${(event.data || event).round}: ${(event.data || event).realFindings} findings`, "amber");
+      break;
+    case "drain-completed":
+      if (typeof forgeMasterRenderDrainCurve === "function") forgeMasterRenderDrainCurve(event.data || event);
+      addNotification(`Audit drain ${(event.data || event).terminated}: ${((event.data || event).drainCurve || []).join(' → ')}`,
+        (event.data || event).terminated === "converged" ? "success" : "amber");
+      break;
+    case "drain-auto-estimate":
+      addNotification(`Auto-drain estimate: mode=${(event.data || event).mode}`, "amber");
+      break;
+    // Phase Hotfix-v2.90.8 Slice 3 — slice-output-stalled pill
+    case "slice-output-stalled":
+      handleSliceOutputStalled(event.data || event);
+      break;
   }
 }
 
 function handleRunStarted(data) {
+  const isSameRun = state.runMeta && state.runMeta.plan === data.plan && state.slices.length > 0;
   state.runMeta = data;
-  state.slices = [];
+
   const count = data.sliceCount || data.executionOrder?.length || 0;
   const order = data.executionOrder || [];
 
-  for (let i = 0; i < count; i++) {
-    state.slices.push({
-      id: order[i] || String(i + 1),
-      title: `Slice ${order[i] || i + 1}`,
-      status: "pending",
-    });
+  if (isSameRun) {
+    // Duplicate run-started (e.g. WS history replay) — preserve existing slice statuses
+    for (let i = 0; i < count; i++) {
+      const id = order[i] || String(i + 1);
+      if (!state.slices.find((s) => s.id === id)) {
+        state.slices.push({ id, title: `Slice ${id}`, status: "pending" });
+      }
+    }
+  } else {
+    state.slices = [];
+    for (let i = 0; i < count; i++) {
+      state.slices.push({
+        id: order[i] || String(i + 1),
+        title: `Slice ${order[i] || i + 1}`,
+        status: "pending",
+      });
+    }
   }
 
   document.getElementById("run-plan-name").textContent = shortName(data.plan);
@@ -162,6 +381,210 @@ function handleRunStarted(data) {
   document.getElementById("run-progress-fill").style.width = "0%";
   document.getElementById("run-status").textContent = "Running...";
 
+  // Show run mode + model badges
+  updateRunBadges(data);
+
+  renderSliceCards();
+  updateProgress();
+
+  // Phase-27.2 Slice 4 — fetch plan-level cost projection on plan-open.
+  // One call per plan; cached for the session. Hydrates
+  // state.slices[i].projectedCost so the projected-cost badge renders.
+  if (data.plan) fetchPlanProjection(data.plan).catch(() => {/* non-fatal */});
+}
+
+// Phase-27.2 Slice 4 — fetch plan-level cost projection (one call per plan,
+// cached for the session). Populates state.planProjection and hydrates
+// state.slices[i].projectedCost for the current projectionMode.
+async function fetchPlanProjection(planPath) {
+  if (!planPath) return;
+  // If projection already fetched for this exact plan, just re-hydrate.
+  if (state.projectionPlanPath === planPath && state.planProjection) {
+    hydrateSliceProjections();
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/tool/forge_estimate_quorum`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planPath }),
+    });
+    if (!res.ok) return;
+    const payload = await res.json();
+    // MCP tool results are wrapped: { content: [{ type: "text", text: "<json>" }] }
+    const text = payload?.content?.[0]?.text ?? payload?.text ?? payload;
+    let parsed = null;
+    if (typeof text === "string") {
+      try { parsed = JSON.parse(text); } catch { parsed = null; }
+    } else if (text && typeof text === "object") {
+      parsed = text;
+    }
+    if (!parsed || !parsed.recommended) return;
+    state.planProjection = parsed;
+    state.projectionPlanPath = planPath;
+    hydrateSliceProjections();
+    hydratePlanProjectionStrip();
+    renderSliceCards();
+  } catch { /* non-fatal — dashboard works without projection */ }
+}
+
+// Re-index projected costs onto state.slices from the cached planProjection.
+// Safe to call multiple times; idempotent. No server round-trip.
+function hydrateSliceProjections() {
+  if (!state.planProjection || !Array.isArray(state.slices)) return;
+  const modeKey = state.projectionMode === "recommended"
+    ? state.planProjection.recommended
+    : state.projectionMode;
+  const modeSummary = state.planProjection[modeKey];
+  if (!modeSummary || !Array.isArray(modeSummary.slices)) return;
+  const byNumber = new Map();
+  for (const entry of modeSummary.slices) {
+    byNumber.set(String(entry.sliceNumber), entry);
+  }
+  for (const s of state.slices) {
+    const match = byNumber.get(String(s.id));
+    if (match && typeof match.projectedCostUSD === "number") {
+      s.projectedCost = match.projectedCostUSD;
+      s.projectedQuorumEligible = !!match.quorumEligible;
+    } else {
+      delete s.projectedCost;
+      delete s.projectedQuorumEligible;
+    }
+  }
+}
+
+// Phase-27.2 Slice 5 — populate the plan-projection strip at the top of
+// the Progress tab. Renders four modes (auto/power/speed/false) + the
+// recommended mode. If runtime.cost.budget is set on the project
+// (surfaced as planProjection.budgetCapUSD), modes whose estimatedCostUSD
+// exceeds the cap render red with an "over budget" tooltip.
+function hydratePlanProjectionStrip() {
+  const strip = document.getElementById("plan-projection-strip");
+  if (!strip) return;
+  const proj = state.planProjection;
+  if (!proj || !proj.recommended) {
+    strip.classList.add("hidden");
+    return;
+  }
+  strip.classList.remove("hidden");
+
+  const budgetCap = typeof proj.budgetCapUSD === "number" ? proj.budgetCapUSD : null;
+  const fmt = (n) => (typeof n === "number" ? `$${n.toFixed(2)}` : "—");
+
+  const setMode = (mode) => {
+    const el = document.getElementById(`projection-${mode}`);
+    if (!el) return;
+    const summary = proj[mode];
+    if (!summary) { el.textContent = ""; return; }
+    const cost = summary.estimatedCostUSD;
+    const overBudget = budgetCap !== null && typeof cost === "number" && cost > budgetCap;
+    el.textContent = `${mode}: ${fmt(cost)}`;
+    el.className = overBudget
+      ? "text-xs text-red-400 font-semibold"
+      : "text-xs text-gray-300";
+    el.title = overBudget
+      ? `Over budget (${fmt(cost)} > ${fmt(budgetCap)})`
+      : `Projected cost for mode '${mode}'`;
+  };
+
+  setMode("auto");
+  setMode("power");
+  setMode("speed");
+  setMode("false");
+
+  const recEl = document.getElementById("projection-recommended");
+  if (recEl) {
+    recEl.textContent = `Recommended: ${proj.recommended}`;
+    recEl.title = budgetCap !== null
+      ? `Cheapest mode under budget cap ${fmt(budgetCap)}`
+      : `Default recommendation (no runtime.cost.budget configured)`;
+  }
+
+  const details = document.getElementById("projection-details");
+  if (details) {
+    const rows = ["auto", "power", "speed", "false"]
+      .map((m) => {
+        const s = proj[m];
+        if (!s) return "";
+        const overBudget = budgetCap !== null && typeof s.estimatedCostUSD === "number" && s.estimatedCostUSD > budgetCap;
+        const costClass = overBudget ? "text-red-400" : "text-gray-200";
+        return `<div><span class="text-gray-500 uppercase">${m}</span> · <span class="${costClass}">${fmt(s.estimatedCostUSD)}</span> · ${s.quorumSliceCount ?? 0}/${s.totalSliceCount ?? 0} quorum · ${fmt(s.overheadUSD)} overhead</div>`;
+      })
+      .join("");
+    details.innerHTML = rows;
+  }
+}
+
+function updateRunBadges(data) {
+  const modeBadge = document.getElementById("run-mode-badge");
+  const modelBadge = document.getElementById("run-model-badge");
+  const execBadge = document.getElementById("run-exec-mode-badge");
+  if (!modeBadge || !modelBadge) return;
+
+  // Quorum vs single-pass
+  if (data.quorum && data.quorum.enabled) {
+    modeBadge.textContent = `\u26a1 Quorum${data.quorum.auto ? " (auto)" : ""}${data.quorum.threshold ? " T" + data.quorum.threshold : ""}`;
+    modeBadge.className = "text-xs px-2 py-0.5 rounded-full bg-purple-900/60 text-purple-300 border border-purple-700";
+    modeBadge.classList.remove("hidden");
+  } else {
+    modeBadge.textContent = "Single-pass";
+    modeBadge.className = "text-xs px-2 py-0.5 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700";
+    modeBadge.classList.remove("hidden");
+  }
+
+  // Model
+  const model = data.model || "";
+  if (model) {
+    modelBadge.textContent = model;
+    modelBadge.className = "text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-300";
+    modelBadge.classList.remove("hidden");
+  } else {
+    modelBadge.classList.add("hidden");
+  }
+
+  // Execution mode (autonomous / assisted)
+  if (execBadge) {
+    const mode = data.mode || "";
+    if (mode) {
+      execBadge.textContent = mode === "assisted" ? "\ud83d\udc64 Assisted" : "\ud83e\udd16 Autonomous";
+      execBadge.classList.remove("hidden");
+    } else {
+      execBadge.classList.add("hidden");
+    }
+  }
+}
+
+function handleSliceModelRouted(data) {
+  const slice = state.slices.find((s) => s.id === String(data.sliceId));
+  if (slice) {
+    slice.model = data.model;
+    slice.sliceType = data.sliceType;
+  }
+  renderSliceCards();
+}
+
+function handleQuorumDispatch(data) {
+  const slice = state.slices.find((s) => s.id === String(data.sliceId));
+  if (slice) {
+    slice.quorum = { models: data.models, legs: [], status: "dispatched" };
+  }
+  renderSliceCards();
+}
+
+function handleQuorumLeg(data) {
+  const slice = state.slices.find((s) => s.id === String(data.sliceId));
+  if (slice && slice.quorum) {
+    slice.quorum.legs.push({ model: data.model, success: data.success, duration: data.duration });
+  }
+  renderSliceCards();
+}
+
+function handleQuorumReview(data) {
+  const slice = state.slices.find((s) => s.id === String(data.sliceId));
+  if (slice && slice.quorum) {
+    slice.quorum.status = "reviewed";
+    slice.quorum.winner = data.winner || data.selectedModel;
+  }
   renderSliceCards();
 }
 
@@ -170,6 +593,7 @@ function handleSliceStarted(data) {
   if (slice) {
     slice.status = "executing";
     slice.title = data.title || slice.title;
+    if (typeof data.complexityScore === "number") slice.complexityScore = data.complexityScore;
   }
   startSliceTimer(data.sliceId);
   updateProgress();
@@ -179,6 +603,8 @@ function handleSliceStarted(data) {
     const card = document.querySelector(`[data-slice-id="${data.sliceId}"]`);
     if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, 100);
+  // Auto-load slice log panel for executing slice
+  loadSliceLog(data.sliceId);
 }
 
 function handleSliceCompleted(data) {
@@ -189,10 +615,18 @@ function handleSliceCompleted(data) {
     slice.model = data.model;
     slice.cost = data.cost_usd;
     Object.assign(slice, data);
+    // Phase-27.2 Slice 6 — projected→actual flourish. Keep the projected
+    // badge visible for ~5s after completion so the operator sees
+    // "expected vs actual" side-by-side, then fade it out.
+    if (typeof slice.projectedCost === "number" && slice.projectedCost > 0) {
+      slice.flourishUntil = Date.now() + 5000;
+      scheduleFlourishClear(slice.id, 5000);
+    }
   }
   stopSliceTimer(data.sliceId);
   updateProgress();
   renderSliceCards();
+  if (activeSliceLogId === data.sliceId) fetchSliceLogContent(data.sliceId);
 }
 
 function handleSliceFailed(data) {
@@ -201,10 +635,41 @@ function handleSliceFailed(data) {
     slice.status = "failed";
     slice.error = data.error;
     Object.assign(slice, data);
+    if (typeof slice.projectedCost === "number" && slice.projectedCost > 0) {
+      slice.flourishUntil = Date.now() + 5000;
+      scheduleFlourishClear(slice.id, 5000);
+    }
   }
   stopSliceTimer(data.sliceId);
   updateProgress();
   renderSliceCards();
+  if (activeSliceLogId === data.sliceId) fetchSliceLogContent(data.sliceId);
+}
+
+// Phase Hotfix-v2.90.8 Slice 3 — slice-output-stalled pill.
+// Marks the slice with outputStalled=true so renderSliceCards can render
+// the amber ⏸ stalled pill. Clears automatically when the slice completes
+// or fails (outputStalled is not carried forward via Object.assign there).
+function handleSliceOutputStalled(data) {
+  const slice = state.slices.find((s) => s.id === data.sliceId);
+  if (slice) {
+    slice.outputStalled = true;
+    if (typeof data.stallDuration === "number") slice.stallDuration = data.stallDuration;
+  }
+  renderSliceCards();
+}
+
+// Phase-27.2 Slice 6 — schedule a single re-render after the flourish
+// window expires so the projected badge fades out cleanly.
+function scheduleFlourishClear(sliceId, ms) {
+  setTimeout(() => {
+    const slice = state.slices.find((s) => s.id === sliceId);
+    if (!slice) return;
+    if (slice.flourishUntil && Date.now() >= slice.flourishUntil) {
+      delete slice.flourishUntil;
+      renderSliceCards();
+    }
+  }, ms + 50);
 }
 
 function handleRunCompleted(data) {
@@ -225,6 +690,35 @@ function handleRunCompleted(data) {
 function handleRunAborted(data) {
   document.getElementById("run-status").textContent = "Aborted";
   document.getElementById("run-progress-text").textContent = `Aborted at slice ${data.sliceId}: ${data.reason}`;
+}
+
+// ─── Tempering run pill (TEMPER-02 Slice 02.2) ────────────────────────
+//
+// The runner emits `tempering-run-completed` with a primitives-only
+// payload (verdict, pass/fail/skipped, durationMs, sliceRef). We bucket
+// it per-slice in `state.tempering.slicePills[sliceRef.slice]` and
+// re-render the slice cards so the new pill appears next to
+// gate/retry indicators. No network calls, no per-scanner detail — the
+// Tempering tab handles that.
+function handleTemperingRunCompleted(data) {
+  if (!data || !data.sliceRef || !data.sliceRef.slice) return;
+  state.tempering.slicePills[data.sliceRef.slice] = {
+    verdict: data.verdict || "unknown",
+    pass: data.pass || 0,
+    fail: data.fail || 0,
+    skipped: data.skipped || 0,
+    durationMs: data.durationMs || 0,
+    stack: data.stack || null,
+    ts: Date.now(),
+  };
+  renderSliceCards();
+}
+
+// TEMPER-04 Slice 04.1 — visual regression detected toast + action
+function handleTemperingVisualRegression(data) {
+  const pct = data.diffPercent != null ? `${(data.diffPercent * 100).toFixed(2)}%` : "unknown";
+  const sev = data.severity || data.band || "unknown";
+  addNotification(`Visual regression: ${data.url || data.urlHash} (${pct}) – ${sev}`, "error");
 }
 
 // ─── Rendering ────────────────────────────────────────────────────────
@@ -249,7 +743,11 @@ function renderSliceCards() {
     const statusIcon = { pending: "⏳", executing: "⚡", passed: "✅", failed: "❌", skipped: "⏭️" }[s.status] || "❓";
     const bgColor = { pending: "bg-gray-800", executing: "bg-blue-900/50 slice-executing", passed: "bg-green-900/30", failed: "bg-red-900/30", skipped: "bg-gray-800/50" }[s.status] || "bg-gray-800";
     const duration = s.duration ? `${(s.duration / 1000).toFixed(1)}s` : "";
-    const cost = s.cost ? `$${s.cost.toFixed(4)}` : "";
+    // Format cost: 2 decimals when >= $0.01, else compact '<$0.01' so sub-cent
+    // slices don't render as meaningless $0.00 and don't waste badge width on
+    // 4-decimal scientific-looking strings.
+    const fmtCost = (c) => (c < 0.01 ? "<$0.01" : `$${c.toFixed(2)}`);
+    const cost = s.cost ? fmtCost(s.cost) : "";
     const model = s.model || "";
     const isApiModel = /^grok-/.test(model);
     const modelBadge = isApiModel ? `<span class="text-purple-400">${model}</span> <span class="text-xs text-purple-600">API</span>` : model;
@@ -258,15 +756,169 @@ function renderSliceCards() {
       ? `<span class="text-amber-400 text-xs ml-1" title="Awaiting bridge approval">🔔</span>`
       : "";
 
+    // Quorum leg indicators
+    let quorumHtml = "";
+    if (s.quorum) {
+      const q = s.quorum;
+      const legDots = (q.models || []).map((m) => {
+        const leg = (q.legs || []).find((l) => l.model === m);
+        if (!leg) return `<span class="inline-block w-2 h-2 rounded-full bg-gray-600" title="${m}: pending"></span>`;
+        return leg.success
+          ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500" title="${m}: done ${leg.duration ? (leg.duration / 1000).toFixed(1) + 's' : ''}"></span>`
+          : `<span class="inline-block w-2 h-2 rounded-full bg-red-500" title="${m}: failed"></span>`;
+      }).join(" ");
+      const winnerLabel = q.winner ? `<span class="text-green-400 text-xs ml-1">→ ${q.winner}</span>` : "";
+      quorumHtml = `<div class="flex items-center gap-1 mt-1"><span class="text-xs text-purple-400">⚡ Quorum</span> ${legDots}${winnerLabel}</div>
+        <p class="text-xs text-gray-600 mt-0.5">${(q.models || []).join(", ")}</p>`;
+    }
+
+    // Quorum vs single-pass badge on card
+    const sliceModeBadge = s.quorum
+      ? `<span class="text-xs px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300 border border-purple-800" title="Quorum mode">Q</span>`
+      : (s.status !== "pending" ? `<span class="text-xs px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 border border-blue-800" title="Single-pass">S</span>` : "");
+
+    // Phase CRUCIBLE-02 Slice 02.1 — Complexity Score badge (⚙ 1-10)
+    // Color-graded: green 1-3 (low), amber 4-6 (medium), red 7-10 (high)
+    let complexityBadge = "";
+    if (typeof s.complexityScore === "number" && Number.isFinite(s.complexityScore)) {
+      const c = s.complexityScore;
+      const color = c >= 7
+        ? "bg-red-900/50 text-red-300 border-red-800"
+        : c >= 4
+        ? "bg-amber-900/50 text-amber-300 border-amber-800"
+        : "bg-green-900/40 text-green-400 border-green-800";
+      complexityBadge = `<span class="text-xs px-1.5 py-0.5 rounded ${color} border" title="Complexity score (1-10)">⚙ ${c}/10</span>`;
+    }
+
+    // Phase CRUCIBLE-02 Slice 02.1 — Total-Spend badge ($0.xxxx)
+    // Only shows once a cost has been recorded. Separate from the existing
+    // footer-level model+cost line so the spend is scannable at-a-glance.
+    const spendBadge = (typeof s.cost === "number" && s.cost > 0)
+      ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-emerald-300 border border-gray-700" title="Model spend for this slice: $${s.cost.toFixed(4)}">💰 ${fmtCost(s.cost)}</span>`
+      : "";
+
+    // Phase-27.2 Slice 4 — Projected-cost badge (💵 ~$0.xxxx).
+    // Hydrated from forge_estimate_quorum's per-slice breakdown under the
+    // active projectionMode. Only renders when a projection is present in
+    // state. Order on the card: complexity → projected → spend.
+    //
+    // Phase-27.2 Slice 6 — flourish: once a slice completes and has an
+    // actual cost, suppress the projected badge EXCEPT during the
+    // 5-second flourish window (slice.flourishUntil) where both badges
+    // render side-by-side so the operator sees expected → actual.
+    const modeLabel = state.projectionMode === "recommended" && state.planProjection?.recommended
+      ? `recommended (${state.planProjection.recommended})`
+      : state.projectionMode;
+    const actualCostPresent = typeof s.cost === "number" && s.cost > 0;
+    const flourishing = typeof s.flourishUntil === "number" && s.flourishUntil > Date.now();
+    const showProjected = (typeof s.projectedCost === "number" && s.projectedCost > 0)
+      && (!actualCostPresent || flourishing);
+    const projectedBadge = showProjected
+      ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-sky-300 border border-gray-700 transition-opacity duration-700 ${flourishing ? "opacity-70" : ""}" title="Projected cost (mode: ${modeLabel}): $${s.projectedCost.toFixed(4)}">💵 ~${fmtCost(s.projectedCost)}</span>`
+      : "";;
+
+    // Gate status indicator
+    let gateHtml = "";
+    if (s.gateStatus === "passed") {
+      gateHtml = `<span class="text-xs text-green-500" title="Gate passed">⛩ pass</span>`;
+    } else if (s.gateStatus === "failed") {
+      gateHtml = `<span class="text-xs text-red-400" title="Gate failed: ${s.failedCommand || ''}">⛩ fail</span>`;
+    }
+
+    // Phase FORGE-SHOP-06 Slice 06.2 — Gate check result indicator
+    let gateCheckHtml = "";
+    if (s.gateCheck) {
+      const gc = s.gateCheck;
+      if (gc.proceed === false) {
+        const chips = [];
+        if (gc.openBlockingReviews > 0) chips.push(`📋${gc.openBlockingReviews}`);
+        if (gc.openIncidents > 0) chips.push(`🚨${gc.openIncidents}`);
+        if (gc.driftScore != null) chips.push(`📉${gc.driftScore}`);
+        const chipStr = chips.length ? ` (${chips.join(" ")})` : "";
+        gateCheckHtml = `<span class="text-xs text-amber-400" title="Gate blocked: ${gc.reason || ''}${chipStr}">⛩✗</span>`;
+      } else {
+        gateCheckHtml = gc.failOpen
+          ? `<span class="text-xs text-gray-400" title="Gate passed (fail-open)">⛩~</span>`
+          : `<span class="text-xs text-green-400" title="Gate check passed">⛩✓</span>`;
+      }
+    }
+
+    // Retry indicator
+    const retryHtml = s.attempts && s.attempts > 1
+      ? `<span class="text-xs text-yellow-400" title="${s.attempts} attempts">🔄${s.attempts}</span>`
+      : "";
+
+    // TEMPER-02 Slice 02.2 — Tempering run pill. Keyed by slice id.
+    // Verdict colour-graded green/red/amber so operators can scan the
+    // grid and spot the failing slice without opening the Tempering
+    // tab. Tooltip shows pass/fail/skipped totals + stack.
+    let temperingPillHtml = "";
+    const pill = state.tempering?.slicePills?.[s.id];
+    if (pill) {
+      const pillColor = pill.verdict === "pass"
+        ? "text-green-400"
+        : pill.verdict === "skipped"
+        ? "text-gray-400"
+        : "text-red-400";
+      const pillIcon = pill.verdict === "pass" ? "✓" : pill.verdict === "skipped" ? "◌" : "✗";
+      const pillTitle = `Tempering ${pill.verdict} — ${pill.pass} pass / ${pill.fail} fail / ${pill.skipped} skipped${pill.stack ? " (" + pill.stack + ")" : ""}`;
+      temperingPillHtml = `<span class="text-xs ${pillColor}" title="${pillTitle}">🔨${pillIcon}</span>`;
+    }
+
+    // Phase Hotfix-v2.90.8 Slice 3 — slice-output-stalled pill.
+    // Shown while the slice is still executing but has produced no output for
+    // an extended period. Amber ⏸ so it is visually distinct from gate/retry
+    // indicators. Tooltip shows the stall duration when available.
+    let stallPillHtml = "";
+    if (s.outputStalled) {
+      const stallTitle = typeof s.stallDuration === "number"
+        ? `No output for ${s.stallDuration}s — slice may be stuck`
+        : "No output for extended period — slice may be stuck";
+      stallPillHtml = `<span class="text-xs text-amber-400" data-testid="slice-output-stalled-pill" title="${stallTitle}">⏸ stalled</span>`;
+    }
+
+    // Duration bar (proportional to max duration across all slices)
+    const maxDuration = Math.max(...state.slices.map((x) => x.duration || 0), 1);
+    const durationPct = s.duration ? Math.round((s.duration / maxDuration) * 100) : 0;
+    const durationBarColor = s.status === "failed" ? "bg-red-500/40" : s.status === "passed" ? "bg-green-500/30" : "bg-blue-500/30";
+    const durationBar = s.duration ? `<div class="mt-1.5 h-1 rounded-full bg-gray-700 overflow-hidden"><div class="${durationBarColor} h-full rounded-full" style="width:${durationPct}%"></div></div>` : "";
+
+    // Phase GITHUB-B Slice 4 / Hotfix-v2.90.8 — Clickable Issue/PR badges for
+    // copilot-coding-agent slices. When trajectory has full GitHub URLs, render
+    // clickable <a> badges that open the issue/PR in a new tab and stop the
+    // click from bubbling up to the slice-card loadSliceLog handler.
+    // Falls back to plain renderHint text when URLs are absent (e.g. timeout).
+    let trajectoryHtml = "";
+    if (s.trajectory) {
+      const t = s.trajectory;
+      const parts = [];
+      if (t.issueUrl && t.issueNumber) {
+        parts.push(`<a href="${t.issueUrl}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-xs text-cyan-400 hover:text-cyan-200 underline" title="Open GitHub issue #${t.issueNumber}">🔗 #${t.issueNumber}</a>`);
+      }
+      if (t.prUrl && t.prNumber) {
+        const prLinkColor = t.prStatus === "merged" ? "text-purple-400 hover:text-purple-200" : "text-cyan-400 hover:text-cyan-200";
+        parts.push(`<a href="${t.prUrl}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-xs ${prLinkColor} underline" title="Open GitHub PR #${t.prNumber} (${t.prStatus || "unknown"})">⤴ PR #${t.prNumber}</a>`);
+      }
+      if (parts.length > 0) {
+        trajectoryHtml = `<div class="flex items-center gap-1.5 mt-1">${parts.join('<span class="text-gray-600 text-xs">→</span>')}</div>`;
+      } else if (t.renderHint) {
+        trajectoryHtml = `<p class="text-xs text-cyan-500 mt-1 truncate" title="${t.renderHint}">${t.renderHint}</p>`;
+      }
+    }
+
     return `
-      <div class="slice-card ${bgColor} rounded-lg p-3 border border-gray-700" data-slice-id="${s.id}">
+      <div class="slice-card ${bgColor} rounded-lg p-3 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors" data-slice-id="${s.id}" onclick="loadSliceLog('${s.id}')">
         <div class="flex items-center justify-between mb-1">
-          <span class="font-semibold text-sm">${statusIcon} Slice ${s.id}${escalatedMark}</span>
-          <span class="text-xs text-gray-500">${duration}${elapsed}</span>
+          <span class="font-semibold text-sm">${statusIcon} Slice ${s.id} ${sliceModeBadge}${escalatedMark}</span>
+          <span class="text-xs text-gray-500 flex items-center gap-1.5">${retryHtml}${temperingPillHtml}${stallPillHtml}${gateCheckHtml}${gateHtml}${duration}${elapsed}</span>
         </div>
         <p class="text-xs text-gray-400 truncate">${s.title}</p>
+        ${(complexityBadge || projectedBadge || spendBadge) ? `<div class="flex items-center gap-1.5 mt-1.5">${complexityBadge}${projectedBadge}${spendBadge}</div>` : ""}
         ${model ? `<p class="text-xs text-gray-500 mt-1">${modelBadge} ${cost}</p>` : ""}
+        ${quorumHtml}
         ${s.error ? `<p class="text-xs text-red-400 mt-1 truncate">${s.error}</p>` : ""}
+        ${trajectoryHtml}
+        ${durationBar}
       </div>
     `;
   }).join("");
@@ -281,6 +933,180 @@ function updateProgress() {
   document.getElementById("run-progress-fill").style.width = `${pct}%`;
   document.getElementById("run-progress-text").textContent =
     executing ? `Slice ${executing.id} of ${total} executing — ${pct}% complete` : `${done} of ${total} slices — ${pct}%`;
+}
+
+// ─── Slice Log Panel ──────────────────────────────────────────────────
+let activeSliceLogId = null;
+let sliceLogPollInterval = null;
+
+function loadSliceLog(sliceId) {
+  activeSliceLogId = sliceId;
+  const label = document.getElementById("slice-log-label");
+  if (label) label.textContent = `— Slice ${sliceId}`;
+
+  // Highlight selected card
+  document.querySelectorAll(".slice-card").forEach((c) => {
+    c.classList.toggle("ring-1", c.dataset.sliceId === sliceId);
+    c.classList.toggle("ring-blue-500", c.dataset.sliceId === sliceId);
+  });
+
+  fetchSliceLogContent(sliceId);
+
+  // Poll while executing
+  const slice = state.slices.find((s) => s.id === sliceId);
+  if (sliceLogPollInterval) clearInterval(sliceLogPollInterval);
+  if (slice && slice.status === "executing") {
+    sliceLogPollInterval = setInterval(() => {
+      if (activeSliceLogId === sliceId) fetchSliceLogContent(sliceId);
+      else clearInterval(sliceLogPollInterval);
+    }, 3000);
+  }
+}
+
+function fetchSliceLogContent(sliceId) {
+  const logEl = document.getElementById("slice-log");
+  if (!logEl) return;
+
+  // Try recent run indices (0 = latest, then 1, 2...) until we find a log
+  tryFetchSliceLog(sliceId, 0, logEl);
+}
+
+function tryFetchSliceLog(sliceId, runIdx, logEl) {
+  if (runIdx > 5) {
+    // Exhausted search — show status-based message
+    const slice = state.slices.find((s) => s.id === sliceId);
+    if (slice && slice.status === "executing") {
+      logEl.innerHTML = '<div class="text-blue-300 animate-pulse py-2">⚡ Slice executing — log will appear when worker output is captured...</div>';
+    } else if (slice && slice.status === "pending") {
+      logEl.innerHTML = '<div class="text-gray-500 py-2">⏳ Slice not started yet</div>';
+    } else {
+      logEl.innerHTML = '<div class="text-gray-500 py-2">No log available for this slice</div>';
+    }
+    return;
+  }
+
+  fetch(`${API_BASE}/api/replay/${runIdx}/${sliceId}`)
+    .then((r) => {
+      if (!r.ok) throw new Error("not found");
+      return r.json();
+    })
+    .then((data) => {
+      const text = data.log || "";
+      if (!text.trim()) throw new Error("empty");
+      // Preserve expanded/collapsed state of sections before re-render
+      const expandedSections = new Set();
+      logEl.querySelectorAll("[id^='sec-']").forEach((el) => {
+        if (!el.classList.contains("hidden")) expandedSections.add(el.previousElementSibling?.textContent?.trim());
+      });
+      logEl.innerHTML = formatSliceLog(text);
+      // Restore expanded sections
+      if (expandedSections.size > 0) {
+        logEl.querySelectorAll("[id^='sec-']").forEach((el) => {
+          const header = el.previousElementSibling?.textContent?.trim();
+          if (expandedSections.has(header)) el.classList.remove("hidden");
+        });
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    })
+    .catch(() => {
+      // Try next older run
+      tryFetchSliceLog(sliceId, runIdx + 1, logEl);
+    });
+}
+
+function formatSliceLog(text) {
+  const lines = text.split("\n");
+  const sections = [];
+  let currentSection = null;
+  let sectionLines = [];
+
+  for (const line of lines) {
+    if (line.startsWith("=== ") && line.endsWith(" ===")) {
+      if (currentSection) {
+        sections.push({ title: currentSection, lines: sectionLines });
+      }
+      currentSection = line.replace(/^=== | ===$/g, "");
+      sectionLines = [];
+    } else {
+      sectionLines.push(line);
+    }
+  }
+  if (currentSection) sections.push({ title: currentSection, lines: sectionLines });
+  if (sections.length === 0) {
+    return lines.map((l) => `<div class="text-gray-400">${escapeHtml(l) || "&nbsp;"}</div>`).join("");
+  }
+
+  return sections.map((sec) => {
+    const lineCount = sec.lines.filter((l) => l.trim()).length;
+    const isOutput = /STDOUT|STDERR/.test(sec.title);
+    const isCollapsed = isOutput && lineCount > 15;
+    const id = `sec-${Math.random().toString(36).slice(2, 8)}`;
+
+    let headerCls = "text-blue-400 font-semibold";
+    if (/STDERR/.test(sec.title)) headerCls = "text-yellow-400 font-semibold";
+
+    const formatted = sec.lines.map((line) => {
+      let cls = "text-gray-400";
+      if (/\bFAIL|\bERROR|\bfailed|❌/.test(line)) cls = "text-red-400";
+      else if (/\bPASS|\bsuccess|✅|passed/.test(line)) cls = "text-green-400";
+      else if (/^Worker:|^Model:|^Started:/.test(line)) cls = "text-cyan-400";
+      else if (/RETRY|GATE FAILED|TIMED OUT/.test(line)) cls = "text-yellow-400";
+      else if (/^\s*\d+\s+(passing|failing)/.test(line)) cls = line.includes("failing") ? "text-red-400" : "text-green-400";
+      return `<div class="${cls}">${escapeHtml(line) || "&nbsp;"}</div>`;
+    }).join("");
+
+    if (isCollapsed) {
+      return `<div class="mt-1">
+        <div class="${headerCls} cursor-pointer select-none" onclick="document.getElementById('${id}').classList.toggle('hidden')">
+          ▶ ${escapeHtml(sec.title)} <span class="text-gray-600 font-normal">(${lineCount} lines — click to expand)</span>
+        </div>
+        <div id="${id}" class="hidden pl-2 border-l border-gray-700 ml-1">${formatted}</div>
+      </div>`;
+    }
+
+    return `<div class="mt-1">
+      <div class="${headerCls}">${escapeHtml(sec.title)} <span class="text-gray-600 font-normal">${lineCount > 0 ? `(${lineCount} lines)` : ""}</span></div>
+      <div class="pl-2 border-l border-gray-700 ml-1">${formatted}</div>
+    </div>`;
+  }).join("");
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function clearSliceLog() {
+  activeSliceLogId = null;
+  if (sliceLogPollInterval) clearInterval(sliceLogPollInterval);
+  const label = document.getElementById("slice-log-label");
+  const logEl = document.getElementById("slice-log");
+  const searchEl = document.getElementById("slice-log-search");
+  if (label) label.textContent = "";
+  if (searchEl) searchEl.value = "";
+  if (logEl) logEl.innerHTML = '<p class="py-4 text-center text-gray-500">Click a slice card to view its log</p>';
+  document.querySelectorAll(".slice-card").forEach((c) => {
+    c.classList.remove("ring-1", "ring-blue-500");
+  });
+}
+
+function filterSliceLog(query) {
+  const logEl = document.getElementById("slice-log");
+  if (!logEl) return;
+  const q = query.toLowerCase().trim();
+  logEl.querySelectorAll("div").forEach((line) => {
+    if (!q) {
+      line.style.display = "";
+      return;
+    }
+    // Always show section headers and containers
+    if (line.id?.startsWith("sec-") || line.querySelector("[id^='sec-']") || line.classList.contains("mt-1")) {
+      line.style.display = "";
+      return;
+    }
+    // Filter leaf lines
+    const text = line.textContent?.toLowerCase() || "";
+    line.style.display = text.includes(q) ? "" : "none";
+  });
 }
 
 function shortName(path) {
@@ -714,10 +1540,14 @@ async function loadCost() {
       renderChart("chart-monthly", "bar", months, values, "Monthly Spend ($)");
     }
 
-    // Cost Trend Line 
+    // Cost Trend Line
     if (runs.length > 0) {
       const runCosts = runs.slice().reverse().map((r) => r.cost?.total_cost_usd || 0);
-      const runLabels = runs.slice().reverse().map((r) => r.startTime ? new Date(r.startTime).toLocaleDateString() : "?");
+      const runLabels = runs.slice().reverse().map((r) => {
+        const d = r.startTime ? new Date(r.startTime) : null;
+        const plan = r.plan ? r.plan.split("/").pop().replace(/\.md$/, "").replace(/Phase-/i, "").substring(0, 20) : "?";
+        return d ? `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : plan;
+      });
       const avg = runCosts.reduce((a, b) => a + b, 0) / runCosts.length;
       const pointColors = runCosts.map((c) => {
         if (c > avg * 3) return "#ef4444";
@@ -775,7 +1605,7 @@ async function loadCost() {
         });
       }
 
-      // Anomaly banner 
+      // Anomaly banner
       const recent = runs.slice(0, 5);
       const anomaly = recent.find((r) => (r.cost?.total_cost_usd || 0) > avg * 3 && avg > 0);
       if (anomaly) {
@@ -789,7 +1619,7 @@ async function loadCost() {
         updateTabBadges();
       }
 
-      // Duration Per Run Chart 
+      // Duration Per Run Chart
       const runDurations = runs.slice().reverse().map((r) => r.totalDuration ? r.totalDuration / 1000 : 0);
       const durCtx = document.getElementById("chart-duration-trend");
       if (durCtx && runDurations.some((d) => d > 0)) {
@@ -1038,6 +1868,14 @@ async function openLaunchPanel() {
   } catch {
     workersEl.textContent = "";
   }
+
+  // Mutual exclusion: --resume-from and --only-slices cannot both have values
+  const resumeFromEl = document.getElementById("launch-resume-from");
+  const onlySlicesEl = document.getElementById("launch-only-slices");
+  if (resumeFromEl && onlySlicesEl) {
+    resumeFromEl.addEventListener("input", () => { onlySlicesEl.disabled = !!resumeFromEl.value; });
+    onlySlicesEl.addEventListener("input", () => { resumeFromEl.disabled = !!onlySlicesEl.value; });
+  }
 }
 
 function closeLaunchPanel() {
@@ -1051,10 +1889,24 @@ async function submitLaunch(estimateOnly) {
   const model = document.getElementById("launch-model").value;
   const quorum = document.getElementById("launch-quorum").value;
   const estimate = estimateOnly || document.getElementById("launch-estimate").checked;
+  const dryRun = document.getElementById("launch-dry-run")?.checked;
+  const resumeFromRaw = document.getElementById("launch-resume-from")?.value;
+  const resumeFrom = resumeFromRaw && /^\d+$/.test(resumeFromRaw.trim()) ? resumeFromRaw.trim() : "";
+  const onlySlicesRaw = document.getElementById("launch-only-slices")?.value?.trim() || "";
+  const noTempering = document.getElementById("launch-no-tempering")?.checked;
   const statusEl = document.getElementById("launch-status");
 
   if (!plan) { statusEl.textContent = "Select a plan first"; return; }
-  if (!confirm(`${estimate ? "Estimate" : "Launch"} "${plan}"?\nMode: ${mode}, Model: ${model}, Quorum: ${quorum}`)) return;
+  const summary = [
+    `Mode: ${mode}`,
+    `Model: ${model}`,
+    `Quorum: ${quorum}`,
+    resumeFrom ? `Resume from slice ${resumeFrom}` : null,
+    dryRun ? "Dry run" : null,
+    onlySlicesRaw ? `Only slices: ${onlySlicesRaw}` : null,
+    noTempering ? "Skip tempering" : null,
+  ].filter(Boolean).join(", ");
+  if (!confirm(`${estimate ? "Estimate" : "Launch"} "${plan}"?\n${summary}`)) return;
 
   statusEl.textContent = estimate ? "Estimating..." : "Launching...";
   try {
@@ -1062,6 +1914,10 @@ async function submitLaunch(estimateOnly) {
     if (mode !== "auto") args += ` --${mode}`;
     if (model !== "auto") args += ` --model ${model}`;
     if (quorum !== "false") args += ` --quorum ${quorum}`;
+    if (resumeFrom) args += ` --resume-from ${resumeFrom}`;
+    if (dryRun) args += " --dry-run";
+    if (onlySlicesRaw) args += ` --only-slices ${onlySlicesRaw}`;
+    if (noTempering) args += " --no-tempering";
     if (estimate) args += " --estimate";
 
     const res = await fetch(`${API_BASE}/api/tool/run-plan`, {
@@ -1763,7 +2619,7 @@ async function loadConfig() {
     document.getElementById("cfg-version").value = currentConfig.templateVersion || "";
     document.getElementById("cfg-model-default").value = currentConfig.modelRouting?.default || "auto";
 
-    // Image generation model 
+    // Image generation model
     const imgModel = document.getElementById("cfg-model-image");
     if (imgModel) imgModel.value = currentConfig.modelRouting?.imageGeneration || "";
 
@@ -1779,22 +2635,37 @@ async function loadConfig() {
 
     document.getElementById("cfg-status").textContent = "Configuration loaded.";
 
-    // Advanced settings 
+    // Advanced settings
     const maxP = document.getElementById("cfg-max-parallel");
     const maxR = document.getElementById("cfg-max-retries");
     const maxH = document.getElementById("cfg-max-history");
     const qEnabled = document.getElementById("cfg-quorum-enabled");
     const qThresh = document.getElementById("cfg-quorum-threshold");
     const qModels = document.getElementById("cfg-quorum-models");
+    const qPreset = document.getElementById("cfg-quorum-preset");
     if (maxP) maxP.value = currentConfig.maxParallelism ?? 3;
     if (maxR) maxR.value = currentConfig.maxRetries ?? 1;
     if (maxH) maxH.value = currentConfig.maxRunHistory ?? 50;
     if (qEnabled) qEnabled.checked = currentConfig.quorum?.enabled || false;
     if (qThresh) qThresh.value = currentConfig.quorum?.threshold ?? 7;
     if (qModels) qModels.value = (currentConfig.quorum?.models || []).join(", ");
+    if (qPreset) qPreset.value = currentConfig.quorum?.preset || "";
+
+    // Update source preference (v2.56.0)
+    const updSrcSel = document.getElementById("cfg-update-source");
+    if (updSrcSel) {
+      updSrcSel.value = currentConfig.updateSource || "auto";
+      updateUpdateSourceHint(updSrcSel.value);
+      // Bind change handler once (idempotent)
+      if (!updSrcSel.dataset.bound) {
+        updSrcSel.addEventListener("change", onUpdateSourceChange);
+        updSrcSel.dataset.bound = "1";
+      }
+    }
 
     // Check API provider availability
     loadApiProviderStatus();
+    loadApiKeys();
     loadOpenBrainStatus();
     loadMemoryPresets();
     loadWorkerStatus();
@@ -1809,26 +2680,127 @@ async function loadConfig() {
   }
 }
 
+// Provider status registry — must mirror KNOWN_PROVIDER_KEYS below.
+// Order matches recommendation order; GitHub Copilot first (Phase-33 / v2.67.0 default).
+const PROVIDER_STATUS_REGISTRY = [
+  { key: "GITHUB_TOKEN",      label: "GitHub Copilot",   models: "gpt-4o-mini, gpt-4o, claude-sonnet-4 (via models.github.ai)" },
+  { key: "XAI_API_KEY",       label: "xAI Grok",          models: "grok-4.20, grok-4, grok-3-mini" },
+  { key: "ANTHROPIC_API_KEY", label: "Anthropic Claude", models: "claude-sonnet-4.5, claude-opus" },
+  { key: "OPENAI_API_KEY",    label: "OpenAI",            models: "gpt-5, dall-e-3" },
+];
+
 async function loadApiProviderStatus() {
   const el = document.getElementById("cfg-api-providers");
   if (!el) return;
   try {
-    const res = await fetch(`${API_BASE}/api/tool/smith`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ args: "" }),
-    });
+    const res = await fetch(`${API_BASE}/api/secrets`);
     const data = await res.json();
-    const output = data.output || "";
-    // Look for API provider info in smith output
-    const hasXai = /XAI_API_KEY/.test(output) || /api-xai/.test(output) || /grok/.test(output);
-    if (hasXai) {
-      el.innerHTML = '<span class="text-green-400">xAI Grok</span> <span class="text-gray-500">— XAI_API_KEY configured</span>';
-    } else {
-      el.innerHTML = '<span class="text-gray-500">No API providers detected. Set XAI_API_KEY for Grok models.</span>';
+    const keys = data.keys || {};
+
+    const configured = PROVIDER_STATUS_REGISTRY.filter((p) => keys[p.key]?.set);
+    if (configured.length === 0) {
+      el.innerHTML =
+        '<span class="text-gray-500">No API providers detected. ' +
+        'Set <code class="text-forge-400">GITHUB_TOKEN</code> for Copilot (recommended), ' +
+        'or any of <code>XAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>.</span>';
+      return;
     }
+
+    el.innerHTML = configured
+      .map((p) => {
+        const info = keys[p.key];
+        const src = info?.source === "env" ? "env var" : ".forge/secrets.json";
+        return (
+          `<div class="flex items-center gap-2 text-xs mt-1">` +
+            `<span class="text-green-400">✓</span> ` +
+            `<span class="text-gray-200 font-medium">${p.label}</span> ` +
+            `<span class="text-gray-500">— ${p.key} (${src})</span> ` +
+            `<span class="text-gray-600">· ${p.models}</span>` +
+          `</div>`
+        );
+      })
+      .join("");
   } catch {
     el.textContent = "Unable to check";
+  }
+}
+
+// ─── Provider API Keys ────────────────────────────────────────
+const KNOWN_PROVIDER_KEYS = [
+  { key: "GITHUB_TOKEN", label: "GitHub (Copilot, recommended)", placeholder: "ghp_..." },
+  { key: "XAI_API_KEY", label: "xAI (Grok)", placeholder: "xai-..." },
+  { key: "OPENAI_API_KEY", label: "OpenAI (GPT / DALL-E)", placeholder: "sk-..." },
+  { key: "ANTHROPIC_API_KEY", label: "Anthropic (Claude API)", placeholder: "sk-ant-..." },
+  { key: "OPENCLAW_API_KEY", label: "OpenClaw Analytics", placeholder: "oc-..." },
+];
+
+async function loadApiKeys() {
+  const container = document.getElementById("cfg-api-keys");
+  if (!container) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/secrets`);
+    const data = await res.json();
+    const keys = data.keys || {};
+
+    container.innerHTML = KNOWN_PROVIDER_KEYS.map((pk) => {
+      const info = keys[pk.key];
+      const isSet = info?.set;
+      const source = info?.source === "env" ? " (env var)" : "";
+      const masked = info?.masked || "";
+      const statusIcon = isSet ? '<span class="text-green-400">✓</span>' : '<span class="text-gray-600">○</span>';
+      const statusText = isSet ? `<span class="text-xs text-gray-500">${masked}${source}</span>` : '<span class="text-xs text-gray-600">not set</span>';
+
+      return `
+        <div class="flex items-center gap-2 bg-gray-700/50 rounded px-3 py-1.5">
+          <span class="text-xs w-40 text-gray-300">${statusIcon} ${pk.label}</span>
+          ${statusText}
+          <input type="password" id="secret-${pk.key}" placeholder="${pk.placeholder}" class="flex-1 bg-gray-700 text-white text-xs rounded px-2 py-1 border border-gray-600 focus:border-blue-500 outline-none" autocomplete="off">
+          <button onclick="saveApiKey('${pk.key}')" class="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded">Save</button>
+          ${isSet && info?.source !== "env" ? `<button onclick="removeApiKey('${pk.key}')" class="text-xs px-2 py-1 bg-red-900 hover:bg-red-800 text-red-300 rounded">✗</button>` : ""}
+        </div>`;
+    }).join("");
+  } catch (err) {
+    container.innerHTML = `<div class="text-xs text-red-400">Error loading keys: ${err.message}</div>`;
+  }
+}
+
+async function saveApiKey(key) {
+  const input = document.getElementById(`secret-${key}`);
+  if (!input || !input.value.trim()) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/secrets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value: input.value.trim() }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      input.value = "";
+      addNotification(`${key} saved`, "success");
+      loadApiKeys(); // Refresh display
+    } else {
+      addNotification(`Error: ${data.error}`, "error");
+    }
+  } catch (err) {
+    addNotification(`Error saving key: ${err.message}`, "error");
+  }
+}
+
+async function removeApiKey(key) {
+  if (!confirm(`Remove ${key} from .forge/secrets.json?`)) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/secrets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value: "" }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      addNotification(`${key} removed`, "success");
+      loadApiKeys();
+    }
+  } catch (err) {
+    addNotification(`Error: ${err.message}`, "error");
   }
 }
 
@@ -1890,7 +2862,7 @@ async function saveConfig() {
     const agents = [...document.querySelectorAll(".cfg-agent-checkbox:checked")].map((c) => c.value);
     const modelDefault = document.getElementById("cfg-model-default").value;
     const modelImage = document.getElementById("cfg-model-image")?.value || "";
-    // Advanced settings 
+    // Advanced settings
     const maxP = parseInt(document.getElementById("cfg-max-parallel")?.value, 10);
     const maxR = parseInt(document.getElementById("cfg-max-retries")?.value, 10);
     const maxH = parseInt(document.getElementById("cfg-max-history")?.value, 10);
@@ -1898,6 +2870,7 @@ async function saveConfig() {
     const qThresh = parseInt(document.getElementById("cfg-quorum-threshold")?.value, 10);
     const qModelsStr = document.getElementById("cfg-quorum-models")?.value || "";
     const qModels = qModelsStr ? qModelsStr.split(",").map((m) => m.trim()).filter(Boolean) : [];
+    const qPreset = document.getElementById("cfg-quorum-preset")?.value || "";
 
     const updated = {
       ...currentConfig,
@@ -1911,6 +2884,7 @@ async function saveConfig() {
         enabled: qEnabled,
         threshold: isNaN(qThresh) ? 7 : qThresh,
         models: qModels.length > 0 ? qModels : (currentConfig.quorum?.models || []),
+        ...(qPreset ? { preset: qPreset } : {}),
       },
     };
     const res = await fetch(`${API_BASE}/api/config`, {
@@ -1928,6 +2902,53 @@ async function saveConfig() {
 
 window.loadConfig = loadConfig;
 window.saveConfig = saveConfig;
+
+// ─── Update Source preference (v2.56.0) ──────────────────────────────
+const UPDATE_SOURCE_HINTS = {
+  "auto": "Picks the newer of your sibling clone (../plan-forge) and the latest GitHub tag. If the sibling is on a -dev build, GitHub tags win. This is the right default for most users.",
+  "github-tags": "Always downloads the latest tagged release from GitHub and ignores any sibling clone. Best for teams that want reproducible, pinned updates.",
+  "local-sibling": "Always uses the sibling clone at ../plan-forge. Preserves the contributor workflow where master may be on -dev. You are responsible for keeping the sibling current with 'git pull'.",
+};
+
+function updateUpdateSourceHint(value) {
+  const hintEl = document.getElementById("cfg-update-source-hint");
+  if (hintEl) hintEl.textContent = UPDATE_SOURCE_HINTS[value] || "";
+}
+
+async function onUpdateSourceChange(e) {
+  const newValue = e.target.value;
+  const oldValue = currentConfig.updateSource || "auto";
+  if (newValue === oldValue) return;
+  updateUpdateSourceHint(newValue);
+  try {
+    const updated = { ...currentConfig, updateSource: newValue };
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    });
+    const result = await res.json();
+    if (result.success) {
+      currentConfig.updateSource = newValue;
+      if (typeof addNotification === "function") {
+        addNotification(`Update source → ${newValue}`, "success");
+      }
+    } else {
+      // Revert on failure
+      e.target.value = oldValue;
+      updateUpdateSourceHint(oldValue);
+      if (typeof addNotification === "function") {
+        addNotification(`Error: ${result.error || "save failed"}`, "error");
+      }
+    }
+  } catch (err) {
+    e.target.value = oldValue;
+    updateUpdateSourceHint(oldValue);
+    if (typeof addNotification === "function") {
+      addNotification(`Error: ${err.message}`, "error");
+    }
+  }
+}
 
 // ─── Bridge Status & Escalation ───────────────────────────────────────
 async function checkBridgeEscalation() {
@@ -2058,7 +3079,7 @@ function renderDAGView(slices) {
 }
 
 // ─── Tab Badges ───────────────────────────────────────────────
-let tabBadgeState = { runsNew: 0, hasAnomaly: false, skillsActive: 0 };
+let tabBadgeState = { runsNew: 0, hasAnomaly: false, skillsActive: 0, lgHealthAlert: false, lgIncidentsNew: 0, lgCritical: false, lgSecurityAlert: false };
 
 function updateTabBadges() {
   const tabs = document.querySelectorAll(".tab-btn[data-tab]");
@@ -2074,6 +3095,16 @@ function updateTabBadges() {
       badgeText = "!";
     } else if (tab.dataset.tab === "skills" && tabBadgeState.skillsActive > 0) {
       badgeText = tabBadgeState.skillsActive;
+    } else if (tab.dataset.tab === "lg-health" && tabBadgeState.lgHealthAlert) {
+      badgeText = "!";
+    } else if (tab.dataset.tab === "lg-incidents" && tabBadgeState.lgIncidentsNew > 0) {
+      badgeText = tabBadgeState.lgIncidentsNew;
+    } else if (tab.dataset.tab === "lg-security" && tabBadgeState.lgSecurityAlert) {
+      badgeText = "!";
+    } else if (tab.dataset.tab === "lg-triage" && tabBadgeState.lgCritical) {
+      badgeText = "⚠";
+    } else if (tab.dataset.tab === "watcher" && tabBadgeState.watcherNew > 0) {
+      badgeText = tabBadgeState.watcherNew;
     }
 
     if (badgeText !== null) {
@@ -2155,7 +3186,310 @@ async function pollHubClients() {
   } catch { /* ignore */ }
 }
 
+// ─── Phase FORGE-SHOP-04 Slice 04.2 — Global Search Bar ───────────────
+
+function searchEscapeHtml(str) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(str).replace(/[&<>"']/g, c => map[c]);
+}
+
+function highlightTokens(snippet, tokens) {
+  if (!tokens || tokens.length === 0) return searchEscapeHtml(snippet);
+  let safe = searchEscapeHtml(snippet);
+  for (const t of tokens) {
+    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    safe = safe.replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>');
+  }
+  return safe;
+}
+
+function parseSearchSyntax(inputStr) {
+  const result = { query: '', tags: null, since: null, sources: null, correlationId: null };
+  if (!inputStr) return result;
+  const parts = inputStr.trim().split(/\s+/);
+  const queryParts = [];
+  for (const p of parts) {
+    const lower = p.toLowerCase();
+    if (lower.startsWith('tags:')) {
+      result.tags = p.slice(5).split(',').filter(Boolean);
+    } else if (lower.startsWith('since:')) {
+      result.since = p.slice(6);
+    } else if (lower.startsWith('source:')) {
+      result.sources = p.slice(7).split(',').filter(Boolean);
+    } else if (lower.startsWith('correlation:')) {
+      result.correlationId = p.slice(12);
+    } else {
+      queryParts.push(p);
+    }
+  }
+  result.query = queryParts.join(' ');
+  return result;
+}
+
+function manageSearchHistory(query) {
+  if (!query || !query.trim()) return;
+  const KEY = 'pforge.search.history';
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { history = []; }
+  history = history.filter(h => h !== query.trim());
+  history.unshift(query.trim());
+  if (history.length > 5) history = history.slice(0, 5);
+  try { localStorage.setItem(KEY, JSON.stringify(history)); } catch { /* quota exceeded — degrade silently */ }
+}
+
+function getSearchHistory() {
+  try { return JSON.parse(localStorage.getItem('pforge.search.history') || '[]'); } catch { return []; }
+}
+
+function deepLinkResult(source, recordRef) {
+  const tabMap = {
+    run: 'runs', bug: 'bugregistry', incident: 'lg-incidents',
+    review: 'review', plan: null, tempering: 'tempering',
+    memory: 'memory', 'hub-event': 'home',
+  };
+  const tabName = tabMap[source];
+  if (source === 'plan' && recordRef) {
+    // Plans are file-based — no tab deep-link, just show an info message
+    return;
+  }
+  if (source === 'lg-incidents') {
+    const lgGroupBtn = document.querySelector('.group-tab[data-group="liveguard"]');
+    if (lgGroupBtn) lgGroupBtn.click();
+  }
+  if (tabName) {
+    const tabBtn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+    if (tabBtn) tabBtn.click();
+  }
+}
+
+function renderSearchResults(data, tokens) {
+  const container = document.getElementById('search-results');
+  if (!container) return;
+
+  if (!data || !data.hits || data.hits.length === 0) {
+    container.innerHTML = `<div class="p-4 text-center text-gray-500 text-sm" data-testid="search-empty">
+      <p>No results found</p>
+      <p class="mt-1 text-xs">Try <code class="bg-gray-700 px-1 rounded">tags:blocker</code> or <code class="bg-gray-700 px-1 rounded">since:24h</code></p>
+    </div>`;
+    container.classList.remove('hidden');
+    return;
+  }
+
+  // Group by source
+  const groups = {};
+  for (const hit of data.hits) {
+    const src = hit.source || 'unknown';
+    if (!groups[src]) groups[src] = [];
+    groups[src].push(hit);
+  }
+
+  const sourceLabels = {
+    run: 'Runs', bug: 'Bugs', incident: 'Incidents', review: 'Review',
+    plan: 'Plans', tempering: 'Tempering', memory: 'Memories', 'hub-event': 'Hub Events',
+  };
+
+  let html = '';
+  let idx = 0;
+  for (const [src, hits] of Object.entries(groups)) {
+    html += `<div class="px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">${searchEscapeHtml(sourceLabels[src] || src)}</div>`;
+    for (const hit of hits) {
+      const snippet = hit.snippet ? highlightTokens(hit.snippet, tokens) : '';
+      const score = hit.score != null ? `<span class="text-gray-600 text-xs ml-2">${hit.score.toFixed(1)}</span>` : '';
+      const ts = hit.timestamp ? `<span class="text-gray-600 text-xs ml-2">${new Date(hit.timestamp).toLocaleDateString()}</span>` : '';
+      html += `<div class="search-result-item px-3 py-2 border-b border-gray-700/50 flex items-start gap-2"
+        role="option" data-source="${searchEscapeHtml(src)}" data-ref="${searchEscapeHtml(hit.recordRef || '')}" data-index="${idx}" aria-selected="false">
+        <span class="search-source-badge" data-source="${searchEscapeHtml(src)}">${searchEscapeHtml(src)}</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-gray-200 truncate">${searchEscapeHtml(hit.recordRef || hit.text?.slice(0, 60) || '')}</div>
+          <div class="search-snippet text-xs text-gray-400 mt-0.5 line-clamp-2">${snippet}</div>
+        </div>
+        <div class="flex-shrink-0 flex items-center">${ts}${score}</div>
+      </div>`;
+      idx++;
+    }
+  }
+
+  html += `<div class="px-3 py-1.5 text-xs text-gray-600 text-right border-t border-gray-700">${data.total} result${data.total !== 1 ? 's' : ''} (${data.durationMs}ms)${data.truncated ? ' — truncated' : ''}</div>`;
+  container.innerHTML = html;
+  container.classList.remove('hidden');
+}
+
+function bindGlobalSearch() {
+  const input = document.getElementById('global-search');
+  const results = document.getElementById('search-results');
+  const hint = document.getElementById('search-hint');
+  if (!input || !results) return;
+
+  let debounceTimer = null;
+  let abortController = null;
+
+  // / hotkey
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) && !e.target.isContentEditable) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+
+  // Input events
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      input.value = '';
+      results.classList.add('hidden');
+      input.blur();
+      if (hint) hint.classList.remove('hidden');
+      return;
+    }
+
+    const items = results.querySelectorAll('[role="option"]');
+    if (items.length === 0) return;
+    const currentIdx = [...items].findIndex(i => i.getAttribute('aria-selected') === 'true');
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = currentIdx < items.length - 1 ? currentIdx + 1 : 0;
+      items.forEach(i => { i.setAttribute('aria-selected', 'false'); i.classList.remove('search-active'); });
+      items[next].setAttribute('aria-selected', 'true');
+      items[next].classList.add('search-active');
+      items[next].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prev = currentIdx > 0 ? currentIdx - 1 : items.length - 1;
+      items.forEach(i => { i.setAttribute('aria-selected', 'false'); i.classList.remove('search-active'); });
+      items[prev].setAttribute('aria-selected', 'true');
+      items[prev].classList.add('search-active');
+      items[prev].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = results.querySelector('[aria-selected="true"]');
+      if (selected) {
+        deepLinkResult(selected.dataset.source, selected.dataset.ref);
+        results.classList.add('hidden');
+        input.blur();
+      }
+    }
+  });
+
+  input.addEventListener('input', () => {
+    const val = input.value.trim();
+    if (hint) hint.classList.toggle('hidden', val.length > 0);
+
+    if (!val) {
+      results.classList.add('hidden');
+      return;
+    }
+
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => executeSearch(val), 150);
+  });
+
+  input.addEventListener('focus', () => {
+    if (hint) hint.classList.toggle('hidden', input.value.trim().length > 0);
+    if (!input.value.trim()) {
+      const history = getSearchHistory();
+      if (history.length > 0) {
+        results.innerHTML = `<div class="px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent</div>`
+          + history.map(h => `<div class="search-result-item px-3 py-2 border-b border-gray-700/50 text-sm text-gray-300 cursor-pointer" data-history="${searchEscapeHtml(h)}">${searchEscapeHtml(h)}</div>`).join('');
+        results.classList.remove('hidden');
+        // Click on history item fills input and triggers search
+        results.querySelectorAll('[data-history]').forEach(el => {
+          el.addEventListener('click', () => {
+            input.value = el.dataset.history;
+            input.dispatchEvent(new Event('input'));
+          });
+        });
+      }
+    }
+  });
+
+  // Click on result item deep-links
+  results.addEventListener('click', (e) => {
+    const item = e.target.closest('[role="option"]');
+    if (item) {
+      deepLinkResult(item.dataset.source, item.dataset.ref);
+      results.classList.add('hidden');
+      input.blur();
+    }
+  });
+
+  // Blur hides results with delay (allow click to fire first)
+  input.addEventListener('blur', () => {
+    setTimeout(() => { results.classList.add('hidden'); }, 200);
+  });
+
+  async function executeSearch(queryStr) {
+    if (queryStr.length > 500) queryStr = queryStr.slice(0, 500);
+    const parsed = parseSearchSyntax(queryStr);
+
+    if (!parsed.query && !parsed.tags && !parsed.since && !parsed.sources && !parsed.correlationId) {
+      results.classList.add('hidden');
+      return;
+    }
+
+    // Show loading
+    results.innerHTML = '<div class="search-loading" data-testid="search-loading"><span>Searching…</span></div>';
+    results.classList.remove('hidden');
+
+    // Abort previous in-flight request
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+
+    const params = new URLSearchParams();
+    if (parsed.query) params.set('query', parsed.query);
+    if (parsed.tags) params.set('tags', parsed.tags.join(','));
+    if (parsed.since) params.set('since', parsed.since);
+    if (parsed.sources) params.set('sources', parsed.sources.join(','));
+    if (parsed.correlationId) params.set('correlationId', parsed.correlationId);
+    params.set('limit', '20');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/search?${params}`, { signal: abortController.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      manageSearchHistory(queryStr);
+      renderSearchResults(data, parsed.query ? parsed.query.toLowerCase().split(/\s+/) : []);
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      results.innerHTML = `<div class="search-error" data-testid="search-error">Search failed: ${searchEscapeHtml(err.message)}</div>`;
+      results.classList.remove('hidden');
+    }
+  }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────
+// Bootstrap version check — detect stale core files and show upgrade banner
+// This code reaches existing users via `pforge update` which copies dashboard/app.js
+(function checkBootstrapVersion() {
+  const MIN_FRAMEWORK_VERSION = '2.30.2';
+  fetch(`${API_BASE}/api/version`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.framework) return;
+      // Simple semver compare: "2.30.2" > "2.29.3"
+      const current = data.framework.split('.').map(Number);
+      const required = MIN_FRAMEWORK_VERSION.split('.').map(Number);
+      const isStale = current[0] < required[0] ||
+        (current[0] === required[0] && current[1] < required[1]) ||
+        (current[0] === required[0] && current[1] === required[1] && current[2] < required[2]);
+      if (isStale) {
+        const banner = document.createElement('div');
+        banner.className = 'fixed top-0 left-0 right-0 z-[200] bg-amber-900/95 border-b-2 border-amber-500 px-6 py-3 text-center';
+        banner.innerHTML = `
+          <p class="text-amber-100 font-semibold">⚠️ Plan Forge core v${data.framework} is outdated (v${MIN_FRAMEWORK_VERSION}+ required)</p>
+          <p class="text-amber-200 text-sm mt-1">Your dashboard is updated but the CLI and MCP server are not. Run this one-time bootstrap:</p>
+          <code class="block bg-slate-900 text-amber-400 rounded px-4 py-2 mt-2 text-xs font-mono select-all max-w-2xl mx-auto">
+            ${navigator.platform.includes('Win')
+              ? 'Invoke-WebRequest -Uri "https://raw.githubusercontent.com/srnichols/plan-forge/master/pforge.ps1" -OutFile pforge.ps1; .\\pforge.ps1 update --force'
+              : 'curl -sO https://raw.githubusercontent.com/srnichols/plan-forge/master/pforge.sh && bash pforge.sh update --force'}
+          </code>
+          <button onclick="this.parentElement.remove()" class="text-amber-400 hover:text-white text-xs mt-2 underline block mx-auto">Dismiss</button>
+        `;
+        document.body.prepend(banner);
+      }
+    })
+    .catch(() => {}); // Server may not support /api/version yet — silently skip
+})();
+
 // Load initial status + reconstruct slice state from latest run
 fetch(`${API_BASE}/api/status`)
   .then((r) => r.json())
@@ -2175,6 +3509,14 @@ fetch(`${API_BASE}/api/status`)
 fetch(`${API_BASE}/api/runs/latest`)
   .then((r) => { if (!r.ok) throw new Error("no runs"); return r.json(); })
   .then((run) => {
+    // Skip REST init if WebSocket history replay has already populated slice state.
+    // WS is the authoritative real-time source; REST is only a fallback.
+    if (state.slices.length > 0) {
+      // Still update metadata if not set
+      if (!state.runMeta) state.runMeta = run;
+      return;
+    }
+
     // Build run metadata
     state.runMeta = run;
     state.slices = [];
@@ -2209,6 +3551,7 @@ fetch(`${API_BASE}/api/runs/latest`)
 
         document.getElementById("run-plan-name").textContent = shortName(run.plan);
         document.getElementById("run-progress-bar").classList.remove("hidden");
+        updateRunBadges(run);
         renderSliceCards();
         updateProgress();
       });
@@ -2218,15 +3561,264 @@ fetch(`${API_BASE}/api/runs/latest`)
 // Connect WebSocket
 connectWebSocket();
 
-// Load version in footer
+// Phase FORGE-SHOP-04 Slice 04.2 — bind global search bar
+bindGlobalSearch();
+
+// Load version in footer + header badge
 fetch(`${API_BASE}/api/capabilities`)
   .then((r) => r.json())
   .then((data) => {
     const ver = data.version || data.serverVersion || "";
-    const el = document.getElementById("footer-version");
-    if (el && ver) el.textContent = `v${ver}`;
+    const footerEl = document.getElementById("footer-version");
+    if (footerEl && ver) footerEl.textContent = `v${ver}`;
+    const badgeEl = document.getElementById("version-badge");
+    if (badgeEl && ver) {
+      badgeEl.textContent = `v${ver}`;
+      // Link to the matching tag if it looks like a release version (not *-dev)
+      const isDev = /-dev$/i.test(ver);
+      badgeEl.href = isDev
+        ? "https://github.com/srnichols/plan-forge/releases"
+        : `https://github.com/srnichols/plan-forge/releases/tag/v${ver}`;
+      badgeEl.title = isDev
+        ? `Plan Forge v${ver} (development build) — click to view all releases`
+        : `Plan Forge v${ver} — click to view release on GitHub`;
+      if (isDev) {
+        badgeEl.classList.remove("bg-gray-700", "text-gray-400");
+        badgeEl.classList.add("bg-amber-900/60", "text-amber-200", "border-amber-700");
+      }
+    }
   })
   .catch(() => {});
+
+// ─── Phase UPDATE-01 — update-available banner ─────────────
+// Dashboard asks the server (which caches 24h) whether a newer release
+// exists. If so, show a small dismissible banner in the header that
+// links to the release. Dismissal is remembered per-release via
+// localStorage so we don't nag after the user clicked "later".
+function dismissUpdateBanner() {
+  const banner = document.getElementById("update-banner");
+  if (!banner) return;
+  banner.classList.add("hidden");
+  banner.classList.remove("flex");
+  const latest = banner.dataset.latest;
+  if (latest) {
+    try { localStorage.setItem("pforge-update-dismissed", latest); } catch { /* ignore */ }
+  }
+}
+window.dismissUpdateBanner = dismissUpdateBanner;
+
+fetch(`${API_BASE}/api/update-status`)
+  .then((r) => (r.ok ? r.json() : null))
+  .then((data) => {
+    if (!data || !data.available || !data.latest) return;
+    let dismissed = null;
+    try { dismissed = localStorage.getItem("pforge-update-dismissed"); } catch { /* ignore */ }
+    if (dismissed === data.latest) return;
+    const banner = document.getElementById("update-banner");
+    const text = document.getElementById("update-banner-text");
+    if (!banner || !text) return;
+    banner.href = data.url || "https://github.com/srnichols/plan-forge/releases/latest";
+    banner.dataset.latest = data.latest;
+    text.textContent = `v${data.latest} available (you have v${data.current})`;
+    banner.classList.remove("hidden");
+    banner.classList.add("inline-flex");
+  })
+  .catch(() => {});
+
+// Manual "check for updates now" button (header). Bypasses the 24h cache via
+// ?force=1 and surfaces the result either through the existing update banner
+// (when newer) or an inline notification (when current / unreachable).
+async function triggerUpdateCheck() {
+  const btn = document.getElementById("check-updates-btn");
+  if (!btn) return;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "…";
+  btn.title = "Checking GitHub…";
+  try {
+    const r = await fetch(`${API_BASE}/api/update-status?force=1`, { cache: "no-store" });
+    if (!r.ok) {
+      addNotification(`Update check failed (HTTP ${r.status})`, "error");
+      return;
+    }
+    const data = await r.json();
+    if (!data) {
+      addNotification("Update check unavailable (network or suppressed)", "warning");
+      return;
+    }
+    if (data.available && data.latest) {
+      // Force-show the banner even if previously dismissed for this version.
+      try { localStorage.removeItem("pforge-update-dismissed"); } catch { /* ignore */ }
+      const banner = document.getElementById("update-banner");
+      const text = document.getElementById("update-banner-text");
+      if (banner && text) {
+        banner.href = data.url || "https://github.com/srnichols/plan-forge/releases/latest";
+        banner.dataset.latest = data.latest;
+        text.textContent = `v${data.latest} available (you have v${data.current})`;
+        banner.classList.remove("hidden");
+        banner.classList.add("inline-flex");
+      }
+      addNotification(`Update available: v${data.latest} (you are on v${data.current})`, "info");
+    } else {
+      addNotification(`Up to date (v${data.current || "?"})`, "success");
+    }
+  } catch (err) {
+    addNotification(`Update check error: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    btn.title = "Check GitHub for a newer Plan Forge release (bypasses 24h cache)";
+  }
+}
+window.triggerUpdateCheck = triggerUpdateCheck;
+
+// Phase AUTO-UPDATE-01 Slice 2 — self-update from dashboard
+function triggerSelfUpdate() {
+  const btn = document.getElementById("update-now-btn");
+  const progress = document.getElementById("update-progress");
+  if (!btn || !progress) return;
+
+  btn.disabled = true;
+  btn.textContent = "Updating…";
+  progress.classList.remove("hidden");
+  progress.textContent = "Checking…";
+
+  fetch(`${API_BASE}/api/self-update`, { method: "POST" })
+    .then((r) => {
+      if (r.status === 429) {
+        progress.textContent = "Rate limited — try again later";
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        return;
+      }
+      if (r.status === 409) {
+        progress.textContent = "Cannot update during active run";
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        return;
+      }
+      if (!r.ok && !r.body) {
+        progress.textContent = `Error: HTTP ${r.status}`;
+        btn.disabled = false;
+        btn.textContent = "Retry";
+        return;
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) return;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop();
+          for (const frame of frames) {
+            const match = frame.match(/^data:\s*(.+)/);
+            if (!match) continue;
+            try {
+              const msg = JSON.parse(match[1]);
+              progress.textContent = `${msg.state}: ${escapeHtml(msg.detail || "")}`;
+              if (msg.state === "done") {
+                btn.textContent = "✓ Updated";
+                btn.disabled = true;
+                progress.textContent = escapeHtml(msg.detail || "Update complete");
+              }
+              if (msg.state === "failed") {
+                btn.disabled = false;
+                btn.textContent = "Retry";
+                progress.textContent = `❌ ${escapeHtml(msg.detail || "Update failed")}`;
+              }
+            } catch { /* ignore malformed frame */ }
+          }
+          read();
+        }).catch(() => {
+          progress.textContent = "Connection lost";
+          btn.disabled = false;
+          btn.textContent = "Retry";
+        });
+      }
+      read();
+    })
+    .catch((err) => {
+      progress.textContent = `Error: ${err.message}`;
+      btn.disabled = false;
+      btn.textContent = "Retry";
+    });
+}
+window.triggerSelfUpdate = triggerSelfUpdate;
+
+// Restart the MCP/HTTP server process. After self-update replaces files on
+// disk, the running Node process still has old code in memory — only a
+// restart picks it up. The MCP client (VS Code, etc.) respawns the server
+// automatically on the next tool call, so the dashboard just needs to wait
+// for /api/status to come back online, then reload.
+function triggerServerRestart() {
+  const btn = document.getElementById("restart-server-btn");
+  if (!btn) return;
+  if (!confirm("Restart the Plan Forge MCP server?\n\nThe dashboard will reconnect automatically once it's back.")) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  btn.title = "Restarting…";
+  fetch(`${API_BASE}/api/server/restart`, { method: "POST" })
+    .then(async (r) => {
+      if (r.status === 409) {
+        const body = await r.json().catch(() => ({}));
+        alert(body.error || "Cannot restart during active plan run");
+        btn.disabled = false;
+        btn.textContent = "⟳";
+        btn.title = "Restart MCP server";
+        return;
+      }
+      if (r.status === 429) {
+        alert("Restart rate-limited — wait a few seconds and try again");
+        btn.disabled = false;
+        btn.textContent = "⟳";
+        btn.title = "Restart MCP server";
+        return;
+      }
+      // Server accepted (202). It will exit ~500ms later; poll /api/status
+      // until it comes back, then reload the page.
+      btn.textContent = "…";
+      btn.title = "Waiting for server to come back online…";
+      const started = Date.now();
+      const TIMEOUT_MS = 45_000;
+      const POLL_MS = 1500;
+      const poll = () => {
+        if (Date.now() - started > TIMEOUT_MS) {
+          btn.disabled = false;
+          btn.textContent = "⟳";
+          btn.title = "Restart MCP server";
+          alert("Server did not come back online within 45s. Check the terminal where it was launched.");
+          return;
+        }
+        fetch(`${API_BASE}/api/status`, { cache: "no-store" })
+          .then((s) => { if (s.ok) location.reload(); else setTimeout(poll, POLL_MS); })
+          .catch(() => setTimeout(poll, POLL_MS));
+      };
+      setTimeout(poll, 1500);
+    })
+    .catch((err) => {
+      // Network error is expected once the process exits — treat as success
+      // and start polling.
+      const started = Date.now();
+      const poll = () => {
+        if (Date.now() - started > 45_000) {
+          btn.disabled = false;
+          btn.textContent = "⟳";
+          btn.title = "Restart MCP server";
+          alert(`Restart request failed and server did not recover: ${err.message}`);
+          return;
+        }
+        fetch(`${API_BASE}/api/status`, { cache: "no-store" })
+          .then((s) => { if (s.ok) location.reload(); else setTimeout(poll, 1500); })
+          .catch(() => setTimeout(poll, 1500));
+      };
+      setTimeout(poll, 1500);
+    });
+}
+window.triggerServerRestart = triggerServerRestart;
 
 // Load notifications from localStorage
 renderNotifications();
@@ -2244,16 +3836,1477 @@ loadPlans();
   }
 })();
 
+// ─── Phase FORGE-SHOP-03 Slice 03.2 — Notifications Config Subtab ─────
+
+const KNOWN_ADAPTERS = ["webhook", "slack", "teams", "email", "pagerduty"];
+
+
+// Phase FORGE-SHOP-07 Slice 07.2 — Brain subtab data loader
+async function loadBrainSubtab() {
+  const tierTbody = document.getElementById("brain-tier-tbody");
+  const topKeysTbody = document.getElementById("brain-topkeys-tbody");
+  const missesList = document.getElementById("brain-misses-list");
+  if (!tierTbody) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/brain/stats`);
+    if (res.status === 404) throw new Error("STALE_SERVER");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    // Tier counters
+    const tiers = data.tiers || { l1: { recalls: 0, misses: 0 }, l2: { recalls: 0, misses: 0 }, l3: { recalls: 0, misses: 0 } };
+    tierTbody.innerHTML = Object.entries(tiers).map(([tier, counts]) => {
+      const desc = tier === "l1" ? "Session (in-process)" : tier === "l2" ? "Durable (.forge/)" : "Semantic (OpenBrain)";
+      return `<tr class="border-t border-gray-700">
+        <td class="py-1 text-gray-300 font-mono">${tier.toUpperCase()}</td>
+        <td class="py-1 text-gray-400">${desc}</td>
+        <td class="py-1 text-right text-gray-300">${counts.recalls ?? 0}</td>
+        <td class="py-1 text-right text-gray-400">${counts.misses ?? 0}</td>
+      </tr>`;
+    }).join("");
+    // Top keys
+    const topKeys = data.topKeys || [];
+    if (topKeys.length === 0) {
+      topKeysTbody.innerHTML = '<tr class="text-gray-500 text-center"><td colspan="3" class="py-4">No recall data yet</td></tr>';
+    } else {
+      topKeysTbody.innerHTML = topKeys.map(k => `<tr class="border-t border-gray-700">
+        <td class="py-1 text-gray-300 font-mono text-xs">${k.key}</td>
+        <td class="py-1 text-right text-gray-300">${k.hits}</td>
+        <td class="py-1 text-right text-gray-400">${k.tier}</td>
+      </tr>`).join("");
+    }
+    // Misses
+    const misses = data.misses || [];
+    if (misses.length === 0) {
+      missesList.innerHTML = '<li class="text-gray-500">No recent misses</li>';
+    } else {
+      missesList.innerHTML = misses.map(m =>
+        `<li class="font-mono text-xs"><span class="text-red-400">MISS</span> ${m.key} <span class="text-gray-600">${m.timestamp || ""}</span></li>`
+      ).join("");
+    }
+  } catch (err) {
+    const msg = err.message === "STALE_SERVER"
+      ? "Brain API not available on this MCP server. Restart the server to pick up the latest routes (v2.59+)."
+      : `Error loading brain stats: ${err.message}`;
+    tierTbody.innerHTML = `<tr class="text-red-400"><td colspan="4" class="py-4">${escHtml(msg)}</td></tr>`;
+  }
+}
+
+async function renderNotificationsSubtab() {
+  const grid = document.getElementById("notify-adapter-grid");
+  const tbody = document.getElementById("notify-routes-tbody");
+  if (!grid) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/notifications/config`);
+    if (res.status === 404) throw new Error("STALE_SERVER");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const cfg = await res.json();
+    renderAdapterGrid(grid, cfg);
+    renderRoutesEditor(tbody, cfg);
+    const perMin = document.getElementById("notify-rate-per-minute");
+    const digestAfter = document.getElementById("notify-rate-digest-after");
+    if (perMin) perMin.value = cfg.rateLimit?.perMinute ?? 10;
+    if (digestAfter) digestAfter.value = cfg.rateLimit?.digestAfter ?? 5;
+  } catch (err) {
+    const msg = err.message === "STALE_SERVER"
+      ? "Notifications API not available on this MCP server. Restart the server to pick up the latest routes (v2.59+)."
+      : err.message;
+    grid.innerHTML = `<p class="text-red-400 col-span-2">${escHtml(msg)}</p>`;
+  }
+}
+
+function renderAdapterGrid(grid, cfg) {
+  const adapters = cfg.adapters || {};
+  let html = "";
+  for (const name of KNOWN_ADAPTERS) {
+    const ac = adapters[name] || {};
+    const enabled = ac.enabled === true;
+    const statusCls = enabled ? "text-green-400" : "text-gray-500";
+    const statusText = enabled ? "enabled" : "disabled";
+    html += `<div class="bg-gray-700/50 rounded-lg p-3 border border-gray-600" data-adapter="${escHtml(name)}">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-semibold text-sm text-gray-200">${escHtml(name)}</span>
+        <label class="flex items-center gap-1.5 text-xs">
+          <input type="checkbox" class="notify-adapter-toggle rounded border-gray-500 bg-gray-600 text-purple-500 focus:ring-0" data-adapter="${escHtml(name)}" ${enabled ? "checked" : ""}>
+          <span class="${statusCls}">${statusText}</span>
+        </label>
+      </div>
+      ${renderAdapterFields(name, ac)}
+      <button class="text-xs text-blue-400 hover:text-blue-300 mt-2" onclick="testNotifyAdapter('${escHtml(name)}')">Test adapter</button>
+    </div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function renderAdapterFields(name, config) {
+  if (name === "email") {
+    return `<div class="space-y-1.5 text-xs">
+      <div><label class="text-gray-500">SMTP Host</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="smtpHost" value="${escHtml(config.smtpHost || "")}"></div>
+      <div><label class="text-gray-500">SMTP Port</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="smtpPort" type="number" value="${config.smtpPort || 587}"></div>
+      <div><label class="text-gray-500">SMTP User</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="smtpUser" value="${escHtml(config.smtpUser || "")}"></div>
+      <div><label class="text-gray-500">SMTP Pass</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="smtpPass" value="${escHtml(config.smtpPass || "")}" placeholder="\${env:SMTP_PASSWORD}"></div>
+      <div><label class="text-gray-500">From</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="from" value="${escHtml(config.from || "")}"></div>
+      <div><label class="text-gray-500">To</label><input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="to" value="${escHtml(config.to || "")}"></div>
+    </div>`;
+  }
+  if (name === "pagerduty") {
+    return `<div class="text-xs">
+      <label class="text-gray-500">Integration Key</label>
+      <input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="integrationKey" value="${escHtml(config.integrationKey || "")}" placeholder="\${env:PAGERDUTY_INTEGRATION_KEY}">
+    </div>`;
+  }
+  // webhook, slack, teams — all use webhookUrl
+  const placeholder = name === "slack" ? "${env:SLACK_WEBHOOK_URL}"
+    : name === "teams" ? "${env:TEAMS_WEBHOOK_URL}"
+    : "${env:WEBHOOK_URL}";
+  return `<div class="text-xs">
+    <label class="text-gray-500">Webhook URL</label>
+    <input class="notify-field bg-gray-600 text-white rounded px-2 py-1 w-full" data-field="${name === "webhook" ? "url" : "webhookUrl"}" value="${escHtml(config.url || config.webhookUrl || "")}" placeholder="${escHtml(placeholder)}">
+  </div>`;
+}
+
+function renderRoutesEditor(tbody, cfg) {
+  if (!tbody) return;
+  const routes = cfg.routes || [];
+  tbody.innerHTML = routes.map((r, i) => {
+    const event = r.when?.event || "";
+    const severity = r.when?.severity || "";
+    const via = (r.via || []).join(", ");
+    return `<tr class="border-b border-gray-700/30" data-route-idx="${i}">
+      <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="event" value="${escHtml(event)}"></td>
+      <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="severity" value="${escHtml(severity)}" placeholder="any"></td>
+      <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="via" value="${escHtml(via)}"></td>
+      <td class="py-1"><button class="text-red-400 text-xs hover:text-red-300" onclick="removeNotifyRoute(${i})">✕</button></td>
+    </tr>`;
+  }).join("");
+}
+
+function addNotifyRoute() {
+  const tbody = document.getElementById("notify-routes-tbody");
+  if (!tbody) return;
+  const idx = tbody.children.length;
+  const row = document.createElement("tr");
+  row.className = "border-b border-gray-700/30";
+  row.dataset.routeIdx = idx;
+  row.innerHTML = `
+    <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="event" value="" placeholder="slice-failed"></td>
+    <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="severity" value="" placeholder=">=high"></td>
+    <td class="py-1 pr-2"><input class="notify-route-field bg-gray-600 text-white text-xs rounded px-2 py-1 w-full" data-rfield="via" value="" placeholder="webhook"></td>
+    <td class="py-1"><button class="text-red-400 text-xs hover:text-red-300" onclick="removeNotifyRoute(${idx})">✕</button></td>`;
+  tbody.appendChild(row);
+}
+
+function removeNotifyRoute(idx) {
+  const tbody = document.getElementById("notify-routes-tbody");
+  if (!tbody) return;
+  const row = tbody.querySelector(`tr[data-route-idx="${idx}"]`);
+  if (row) row.remove();
+}
+
+function collectNotificationsConfig() {
+  const adapters = {};
+  document.querySelectorAll("[data-adapter]").forEach(card => {
+    if (card.tagName === "INPUT") return; // skip toggle inputs
+    const name = card.dataset.adapter;
+    const toggle = card.querySelector(".notify-adapter-toggle");
+    const cfg = { enabled: toggle?.checked ?? false };
+    card.querySelectorAll(".notify-field").forEach(input => {
+      const field = input.dataset.field;
+      if (field) cfg[field] = input.type === "number" ? Number(input.value) : input.value;
+    });
+    adapters[name] = cfg;
+  });
+  const routes = [];
+  document.querySelectorAll("#notify-routes-tbody tr").forEach(row => {
+    const event = row.querySelector('[data-rfield="event"]')?.value || "";
+    const severity = row.querySelector('[data-rfield="severity"]')?.value || "";
+    const via = (row.querySelector('[data-rfield="via"]')?.value || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (event || via.length) {
+      routes.push({ when: { event, ...(severity ? { severity } : {}) }, via });
+    }
+  });
+  const perMinute = Number(document.getElementById("notify-rate-per-minute")?.value) || 10;
+  const digestAfter = Number(document.getElementById("notify-rate-digest-after")?.value) || 5;
+  return { enabled: Object.values(adapters).some(a => a.enabled), adapters, routes, rateLimit: { perMinute, digestAfter } };
+}
+
+async function saveNotificationsConfig() {
+  const statusEl = document.getElementById("notify-status");
+  try {
+    const cfg = collectNotificationsConfig();
+    const res = await fetch(`${API_BASE}/api/notifications/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (statusEl) statusEl.textContent = "✅ Saved";
+    setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 3000);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `❌ ${err.message}`;
+  }
+}
+
+async function testNotifyAdapter(adapterName) {
+  try {
+    const res = await fetch(`${API_BASE}/api/tool`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "forge_notify_test", args: { adapter: adapterName, dryRun: true } }),
+    });
+    const data = await res.json();
+    const msg = data?.content?.[0]?.text || JSON.stringify(data);
+    alert(`${adapterName} test:\n${msg}`);
+  } catch (err) {
+    alert(`Test failed: ${err.message}`);
+  }
+}
+
 // Tab load hooks
 const tabLoadHooks = {
+  home: loadHomeSnapshot,
+  review: loadReviewQueue,
   progress: loadPlans,
+  crucible: loadCrucible,
+  governance: loadGovernance,
+  runs: () => { loadRuns(); tabBadgeState.runsNew = 0; updateTabBadges(); },
   replay: loadReplayRuns,
   extensions: loadExtensions,
-  config: loadConfig,
   traces: loadTraces,
-  cost: () => { loadCost(); },
+  cost: () => { loadCost(); tabBadgeState.hasAnomaly = false; updateTabBadges(); },
   skills: loadSkillCatalog,
+  'lg-health': loadLGHealth,
+  'lg-incidents': () => { loadLGIncidents(); tabBadgeState.lgIncidentsNew = 0; updateTabBadges(); },
+  'lg-triage': loadLGTriage,
+  'lg-security': () => { loadLGSecurity(); tabBadgeState.lgSecurityAlert = false; updateTabBadges(); },
+  'lg-env': loadLGEnv,
+  watcher: () => { renderWatcherPanel(); tabBadgeState.watcherNew = 0; updateTabBadges(); },
+  tempering: () => { loadTemperingStatus(); },
+  bugregistry: () => { loadBugRegistry(); },
+  memory: loadMemoryReport,
+  timeline: loadTimelineTab,
+  innerloop: loadInnerLoop,
+  'forge-master': () => { window.forgeMasterOnTabActivate?.(); },
+  'github-metrics': loadGithubMetrics,
+  // Phase-30: Settings sub-tabs (content populated in Slices 2-5)
+  'settings-general': () => { loadConfig(); },
+  'settings-models': () => { loadConfig(); },
+  'settings-execution': () => { loadConfig(); },
+  'settings-api-keys': () => { loadConfig(); },
+  'settings-updates': () => { loadConfig(); },
+  'settings-memory': () => { loadOpenBrainStatus(); loadMemoryPresets(); },
+  'settings-bridge': () => { loadBridgeStatus(); renderNotificationsSubtab(); },
+  'settings-crucible': () => { loadCrucibleConfigUI(); },
+  'settings-brain': () => { loadBrainSubtab(); },
 };
+
+// ─── Theme Toggle ─────────────────────────────────────────────
+
+// ─── LiveGuard Tab Loaders ─────────────────────────────────────
+async function loadLGHealth() {
+  try {
+    const res = await fetch(`${API_BASE}/api/capabilities`).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (res?.liveguard) {
+      const el = document.getElementById('lg-drift-score');
+      const score = res.liveguard.driftScore ?? null;
+      if (el) el.textContent = score ?? '—';
+      const inc = document.getElementById('lg-open-incidents');
+      if (inc) inc.textContent = res.liveguard.openIncidents ?? '—';
+      const scan = document.getElementById('lg-last-scan');
+      if (scan) scan.textContent = res.liveguard.lastScan ? new Date(res.liveguard.lastScan).toLocaleString() : '—';
+      // Drift gauge
+      const gauge = document.getElementById('lg-drift-gauge');
+      if (gauge && score != null) {
+        gauge.value = score;
+        const color = score >= 80 ? 'text-green-400' : score >= 50 ? 'text-amber-400' : 'text-red-400';
+        if (el) el.className = `text-2xl font-bold ${color}`;
+      }
+    }
+    // Drift history chart
+    const driftData = await fetch(`${API_BASE}/api/liveguard/traces`).then(r => r.ok ? r.json() : []).catch(() => []);
+    const healthCanvas = document.getElementById('lg-health-chart');
+    if (healthCanvas && typeof Chart !== 'undefined') {
+      if (window._lgHealthChart) { window._lgHealthChart.destroy(); window._lgHealthChart = null; }
+      const driftEntries = driftData.filter(e => e.tool === 'forge_drift_report' && e.result?.score != null).slice(-20);
+      if (driftEntries.length > 0) {
+        window._lgHealthChart = new Chart(healthCanvas, {
+          type: 'line',
+          data: {
+            labels: driftEntries.map(e => new Date(e.timestamp || e.ts).toLocaleDateString()),
+            datasets: [{ label: 'Drift Score', data: driftEntries.map(e => e.result.score), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', fill: true, tension: 0.3 }]
+          },
+          options: { responsive: true, scales: { y: { min: 0, max: 100, ticks: { color: '#9ca3af' }, grid: { color: '#374151' } }, x: { ticks: { color: '#9ca3af' } } }, plugins: { legend: { display: false } } }
+        });
+      } else {
+        const ctx = healthCanvas.getContext('2d');
+        ctx.clearRect(0, 0, healthCanvas.width, healthCanvas.height);
+        document.getElementById('lg-health-trend').innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No drift history yet. Run <code>pforge drift</code> to populate.</p>';
+      }
+    }
+    // Hotspot chart
+    const hotspotCanvas = document.getElementById('lg-hotspot-chart');
+    if (hotspotCanvas && typeof Chart !== 'undefined') {
+      if (window._lgHotspotChart) { window._lgHotspotChart.destroy(); window._lgHotspotChart = null; }
+      const toolCounts = {};
+      for (const e of driftData) { const t = e.tool || 'unknown'; toolCounts[t] = (toolCounts[t] || 0) + 1; }
+      const sorted = Object.entries(toolCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+      if (sorted.length > 0) {
+        window._lgHotspotChart = new Chart(hotspotCanvas, {
+          type: 'bar',
+          data: {
+            labels: sorted.map(([k]) => k.replace('forge_', '')),
+            datasets: [{ label: 'Invocations', data: sorted.map(([, v]) => v), backgroundColor: '#f59e0b' }]
+          },
+          options: { responsive: true, indexAxis: 'y', scales: { x: { ticks: { color: '#9ca3af' }, grid: { color: '#374151' } }, y: { ticks: { color: '#9ca3af' } } }, plugins: { legend: { display: false } } }
+        });
+      } else {
+        document.getElementById('lg-hotspot-container').innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No data yet — run <code>pforge drift</code></p>';
+      }
+    }
+  } catch { /* tab remains in placeholder state */ }
+}
+window.loadLGHealth = loadLGHealth;
+
+async function loadLGIncidents() {
+  try {
+    const proposals = await fetch(`${API_BASE}/api/fix/proposals`).then(r => r.ok ? r.json() : []).catch(() => []);
+    renderFixProposals(proposals);
+  } catch { /* tab remains in placeholder state */ }
+}
+window.loadLGIncidents = loadLGIncidents;
+
+async function loadLGTriage() {
+  // Placeholder — loads triage data when triage REST endpoint ships
+  const el = document.getElementById('lg-triage-list');
+  if (el && el.children.length <= 1) {
+    el.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No triage data yet. Run <code class="bg-gray-700 px-1 rounded">pforge alert-triage</code> to populate.</p>';
+  }
+}
+window.loadLGTriage = loadLGTriage;
+
+async function loadLGSecurity() {
+  const el = document.getElementById('lg-security-results');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/secret-scan');
+    const data = await res.json();
+    if (!data || data.cache === null || !data.scannedAt) {
+      el.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No scan results. Run <code class="bg-gray-700 px-1 rounded">pforge secret-scan</code> to populate.</p>';
+      return;
+    }
+    let html = `<div class="text-xs text-gray-400 mb-2">Scanned: ${data.scannedAt} | Since: ${data.since} | Files: ${data.scannedFiles} | Threshold: ${data.threshold}</div>`;
+    if (data.clean) {
+      html += '<p class="text-green-400 text-sm py-2">\u2705 Clean — no secrets detected</p>';
+    } else {
+      html += `<p class="text-yellow-400 text-sm mb-2">\u26A0\uFE0F ${data.findings.length} finding(s)</p>`;
+      html += '<div class="space-y-1">';
+      for (const f of data.findings) {
+        const color = f.confidence === 'high' ? 'text-red-400' : f.confidence === 'medium' ? 'text-yellow-400' : 'text-gray-400';
+        html += `<div class="${color} text-xs font-mono">${f.file}:${f.line} [${f.confidence}] entropy=${f.entropyScore} type=${f.type}</div>`;
+      }
+      html += '</div>';
+    }
+    el.innerHTML = html;
+  } catch {
+    el.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No scan results. Run <code class="bg-gray-700 px-1 rounded">pforge secret-scan</code> to populate.</p>';
+  }
+}
+window.loadLGSecurity = loadLGSecurity;
+
+async function loadLGEnv() {
+  // Placeholder — loads env diff data when env REST endpoint ships
+  const el = document.getElementById('lg-env-diff');
+  if (el && el.children.length <= 1) {
+    el.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">No diff data yet. Run <code class="bg-gray-700 px-1 rounded">pforge env-diff</code> to populate.</p>';
+  }
+}
+window.loadLGEnv = loadLGEnv;
+
+function renderFixProposals(proposals) {
+  const el = document.getElementById('lg-fix-proposals-list');
+  if (!el) return;
+  if (!proposals || !proposals.length) {
+    el.innerHTML = '<p class="text-gray-500 text-sm text-center py-4">No fix proposals yet. Run <code class="bg-gray-700 px-1 rounded">pforge fix-proposal --source regression</code> after a LiveGuard alert.</p>';
+    return;
+  }
+  el.innerHTML = proposals.map(p => `
+    <div class="bg-gray-700/50 rounded-lg p-3 flex items-center justify-between mb-2">
+      <div>
+        <code class="text-amber-400 text-xs">${escHtml(p.incidentId || 'unknown')}</code>
+        <span class="ml-2 text-xs px-1.5 py-0.5 rounded ${p.status === 'applied' ? 'bg-green-900 text-green-300' : p.status === 'needs-human-intervention' ? 'bg-red-900 text-red-300' : 'bg-gray-600 text-gray-300'}">${escHtml(p.status || 'pending')}</span>
+        <p class="text-xs text-gray-500 mt-0.5">${escHtml(p.planFile || '')}</p>
+      </div>
+      <span class="text-xs text-gray-500">${p.generatedAt ? new Date(p.generatedAt).toLocaleDateString() : ''}</span>
+    </div>`).join('');
+}
+
+function escHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// LiveGuard hub event handlers
+function handleLGDrift(data) {
+  const el = document.getElementById('lg-drift-score');
+  if (el && data.score != null) el.textContent = data.score;
+  // Update drift gauge
+  const gauge = document.getElementById('lg-drift-gauge');
+  if (gauge && data.score != null) {
+    gauge.value = data.score;
+    const color = data.score >= 80 ? 'text-green-400' : data.score >= 50 ? 'text-amber-400' : 'text-red-400';
+    el.className = `text-2xl font-bold ${color}`;
+  }
+  if (data.score != null && data.score < 50) {
+    tabBadgeState.lgHealthAlert = true;
+    updateTabBadges();
+  }
+}
+
+function handleLGIncident(data) {
+  tabBadgeState.lgIncidentsNew++;
+  updateTabBadges();
+  loadLGIncidents();
+}
+
+function handleLGTriage(data) {
+  if (data.severity === 'critical') {
+    tabBadgeState.lgCritical = true;
+    updateTabBadges();
+  }
+  loadLGTriage();
+}
+
+function handleFixProposal(data) {
+  loadLGIncidents();
+  addNotification(`Fix proposal ready: ${data.incidentId || 'new'}`, 'amber');
+}
+
+function handleLGToolCompleted(data) {
+  const tool = data.tool || data.name || '';
+  if (tool.includes('secret') || tool.includes('scan')) {
+    tabBadgeState.lgSecurityAlert = true;
+    updateTabBadges();
+    addNotification(`LiveGuard: ${tool} completed`, 'amber');
+  } else if (tool.includes('drift')) {
+    tabBadgeState.lgHealthAlert = true;
+    updateTabBadges();
+  }
+  // Refresh the active LG tab if one is showing
+  const activeTab = document.querySelector(".tab-btn.tab-active")?.dataset?.tab;
+  if (activeTab && activeTab.startsWith('lg-') && tabLoadHooks[activeTab]) {
+    tabLoadHooks[activeTab]();
+  }
+}
+
+function handleLGSecretScan(data) {
+  tabBadgeState.lgSecurityAlert = true;
+  updateTabBadges();
+  addNotification('LiveGuard: secret scan results available', 'amber');
+  const activeTab = document.querySelector(".tab-btn.tab-active")?.dataset?.tab;
+  if (activeTab === 'lg-security') loadLGSecurity();
+}
+
+// ─── Home Tab (Phase FORGE-SHOP-01 Slice 01.2) ───────────────
+
+async function loadHomeSnapshot() {
+  try {
+    const res = await fetch(`${API_BASE}/api/tool/forge_home_snapshot`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const data = await res.json();
+    if (data.ok !== false) {
+      state.home.snapshot = data;
+      state.home.lastError = null;
+    } else {
+      state.home.lastError = data.error || "Unknown error";
+    }
+  } catch (err) {
+    state.home.lastError = err.message || "Failed to fetch home snapshot";
+  }
+  renderHomePanel(state.home.snapshot);
+  // Start 30s auto-refresh if on Home tab and no timer running
+  if (!state.home.refreshTimer) {
+    state.home.refreshTimer = setInterval(loadHomeSnapshot, 30_000);
+  }
+}
+
+function renderHomePanel(snapshot) {
+  const quadrantKeys = [
+    { key: "crucible", statsId: "home-q-crucible-stats", render: renderCrucibleQuadrant },
+    { key: "activeRuns", statsId: "home-q-runs-stats", render: renderActiveRunsQuadrant },
+    { key: "liveguard", statsId: "home-q-liveguard-stats", render: renderLiveguardQuadrant },
+    { key: "tempering", statsId: "home-q-tempering-stats", render: renderTemperingQuadrant },
+  ];
+
+  if (!snapshot || snapshot.ok === false) {
+    const errMsg = state.home.lastError || (snapshot && snapshot.error) || "Unable to load home snapshot";
+    for (const q of quadrantKeys) {
+      const el = document.getElementById(q.statsId);
+      if (el) el.innerHTML = `<p class="text-red-400">${escHtml(errMsg)}</p>`;
+    }
+    const feedEl = document.getElementById("home-activity-feed");
+    if (feedEl) feedEl.innerHTML = `<p class="text-red-400 text-center py-4">${escHtml(errMsg)}</p>`;
+    return;
+  }
+
+  const quadrants = snapshot.quadrants || {};
+  for (const q of quadrantKeys) {
+    const el = document.getElementById(q.statsId);
+    if (!el) continue;
+    const data = quadrants[q.key];
+    if (data == null) {
+      el.innerHTML = '<p class="text-gray-500">Subsystem not initialized</p>';
+    } else {
+      el.innerHTML = q.render(data);
+    }
+  }
+
+  renderActivityFeed(snapshot.activityFeed || [], { groupByCorrelation: state.home.groupByCorrelation });
+}
+
+function renderCrucibleQuadrant(data) {
+  return `<div class="flex items-center gap-3 flex-wrap">
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">Σ ${data.total ?? 0}</span>
+    <span class="px-1.5 py-0.5 rounded bg-green-900/40 text-green-300">✓ ${data.finalized ?? 0}</span>
+    <span class="px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300">⧗ ${data.inProgress ?? 0}</span>
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">✗ ${data.abandoned ?? 0}</span>
+  </div>`;
+}
+
+function renderActiveRunsQuadrant(data) {
+  const inFlight = data.inFlight ?? 0;
+  const completed = data.completed ?? 0;
+  const failed = data.failed ?? 0;
+  const openReviews = data.openReviews ?? 0;
+  let html = `<div class="flex items-center gap-3 flex-wrap">
+    <span class="px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300">🔄 ${inFlight} in-flight</span>
+    <span class="px-1.5 py-0.5 rounded bg-green-900/40 text-green-300">✓ ${completed} completed</span>
+    <span class="px-1.5 py-0.5 rounded bg-red-900/40 text-red-300">✗ ${failed} failed</span>
+  </div>`;
+  if (openReviews > 0) {
+    html += `<div class="mt-1"><a href="#" class="text-xs text-amber-400 hover:underline" data-testid="home-open-reviews" onclick="switchToReviewTab({status:['open']});return false;">${openReviews} pending review${openReviews === 1 ? '' : 's'}</a></div>`;
+  }
+  return html;
+}
+
+function renderLiveguardQuadrant(data) {
+  const incidents = data.openIncidents ?? 0;
+  const driftScore = data.driftScore ?? "—";
+  const color = incidents > 0 ? "text-amber-400" : "text-green-400";
+  return `<div class="flex items-center gap-3 flex-wrap">
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 ${color}">⚠ ${incidents} open</span>
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">Drift: ${driftScore}</span>
+  </div>`;
+}
+
+function renderTemperingQuadrant(data) {
+  const openBugs = data.openBugs ?? 0;
+  const status = data.latestStatus || "no-scan";
+  const statusMap = { green: "text-green-300", amber: "text-amber-300", "no-data": "text-gray-400", error: "text-red-300" };
+  const statusCls = statusMap[status] || "text-gray-400";
+  return `<div class="flex items-center gap-3 flex-wrap">
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 ${statusCls}">● ${escHtml(status)}</span>
+    <span class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">🐛 ${openBugs} open bugs</span>
+  </div>`;
+}
+
+function renderActivityFeed(events, { groupByCorrelation } = {}) {
+  const feedEl = document.getElementById("home-activity-feed");
+  if (!feedEl) return;
+
+  if (!events || events.length === 0) {
+    feedEl.innerHTML = '<p class="text-gray-500 text-center py-4">No recent activity</p>';
+    return;
+  }
+
+  const typeIcons = {
+    "run-started": "🚀", "run-completed": "✅", "run-aborted": "❌",
+    "slice-started": "▶", "slice-completed": "✓", "slice-failed": "✗",
+    "liveguard": "🛡️", "tempering": "🛠", "crucible": "🔥",
+    "notification-sent": "📤", "notification-send-failed": "📤✗",
+    "gate-blocked": "⛩", "gate-passed": "⛩",
+  };
+
+  function relativeTime(ts) {
+    try {
+      const ms = Date.now() - new Date(ts).getTime();
+      if (!Number.isFinite(ms) || ms < 0) return "";
+      if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
+      if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+      return `${Math.floor(ms / 3_600_000)}h ago`;
+    } catch { return ""; }
+  }
+
+  function renderEvent(e) {
+    const icon = typeIcons[e.type] || "•";
+    const time = relativeTime(e.ts);
+    // Phase FORGE-SHOP-03 Slice 03.2 — notification event coloring
+    const textCls = e.type === "notification-sent" ? "text-green-300"
+      : e.type === "notification-send-failed" ? "text-red-400"
+      : e.type === "gate-blocked" ? "text-amber-400"
+      : e.type === "gate-passed" ? "text-green-300"
+      : "text-gray-300";
+    return `<div class="flex items-center gap-2 py-1 border-b border-gray-700/30 last:border-0">
+      <span>${icon}</span>
+      <span class="flex-1 ${textCls}">${escHtml(e.summary || e.type || "")}</span>
+      <span class="text-gray-600 shrink-0">${escHtml(time)}</span>
+    </div>`;
+  }
+
+  if (!groupByCorrelation) {
+    feedEl.innerHTML = events.map(renderEvent).join("");
+    return;
+  }
+
+  // Group by correlationId
+  const groups = new Map();
+  const ungrouped = [];
+  for (const e of events) {
+    if (e.correlationId) {
+      if (!groups.has(e.correlationId)) groups.set(e.correlationId, []);
+      groups.get(e.correlationId).push(e);
+    } else {
+      ungrouped.push(e);
+    }
+  }
+
+  let html = "";
+  for (const [corrId, items] of groups) {
+    const newest = items[0];
+    const icon = typeIcons[newest.type] || "•";
+    html += `<details class="border-b border-gray-700/30 py-1">
+      <summary class="cursor-pointer text-gray-300">${icon} ${escHtml(newest.summary || newest.type || "")} <span class="text-gray-600">(${items.length} events)</span></summary>
+      <div class="pl-4">${items.map(renderEvent).join("")}</div>
+    </details>`;
+  }
+  html += ungrouped.map(renderEvent).join("");
+  feedEl.innerHTML = html;
+}
+
+function applyFilter(tab, filterKey, filterValue) {
+  const params = new URLSearchParams(window.location.search);
+  params.set(filterKey, filterValue);
+  history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+  const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  if (btn) btn.click();
+}
+
+// Wire the group-by toggle
+document.getElementById("home-group-toggle")?.addEventListener("change", (e) => {
+  state.home.groupByCorrelation = e.target.checked;
+  if (state.home.snapshot) {
+    renderActivityFeed(state.home.snapshot.activityFeed || [], { groupByCorrelation: state.home.groupByCorrelation });
+  }
+});
+
+window.loadHomeSnapshot = loadHomeSnapshot;
+window.renderHomePanel = renderHomePanel;
+window.renderActivityFeed = renderActivityFeed;
+window.applyFilter = applyFilter;
+
+// ─── Watcher (v2.35) hub event handlers ──────────────────────
+function handleWatchSnapshot(data) {
+  const snap = { ...data, ts: new Date().toISOString() };
+  state.watcher.snapshots.unshift(snap);
+  if (state.watcher.snapshots.length > 50) state.watcher.snapshots.length = 50;
+  tabBadgeState.watcherNew = (tabBadgeState.watcherNew || 0) + 1;
+  updateTabBadges();
+  if (document.querySelector(".tab-btn.tab-active")?.dataset?.tab === "watcher") renderWatcherPanel();
+}
+
+function handleWatchAnomaly(data) {
+  const a = { ...data, ts: new Date().toISOString() };
+  state.watcher.anomalies.unshift(a);
+  if (state.watcher.anomalies.length > 100) state.watcher.anomalies.length = 100;
+  const sev = a.severity || "warn";
+  const type = sev === "error" ? "error" : "amber";
+  addNotification(`Watcher: ${a.code || "anomaly"} — ${a.message || ""}`, type);
+  if (document.querySelector(".tab-btn.tab-active")?.dataset?.tab === "watcher") renderWatcherPanel();
+}
+
+function handleWatchAdvice(data) {
+  const adv = { ...data, ts: new Date().toISOString() };
+  state.watcher.advice.unshift(adv);
+  if (state.watcher.advice.length > 50) state.watcher.advice.length = 50;
+  addNotification(`Watcher advice: ${adv.model || "model"} (${adv.tokensOut || 0} tokens out)`, "info");
+  if (document.querySelector(".tab-btn.tab-active")?.dataset?.tab === "watcher") renderWatcherPanel();
+}
+
+function renderWatcherPanel() {
+  const snapEl = document.getElementById("watcher-snapshot");
+  const anoEl = document.getElementById("watcher-anomalies");
+  const advEl = document.getElementById("watcher-advice");
+  if (!snapEl || !anoEl || !advEl) return;
+
+  const latest = state.watcher.snapshots[0];
+  if (!latest) {
+    snapEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No watcher snapshots yet. Run <code class="bg-gray-700 px-1 rounded">pforge watch &lt;target&gt;</code> or <code class="bg-gray-700 px-1 rounded">pforge watch-live &lt;target&gt;</code>.</p>';
+  } else {
+    const stateColor = { "in-progress": "text-blue-400", "completed": "text-green-400", "failed": "text-red-400", "stalled": "text-yellow-400", "idle": "text-gray-400" }[latest.runState] || "text-gray-300";
+
+    // Phase FORGE-SHOP-01 Slice 01.2 — Home chip row (leftmost, before Crucible/Tempering).
+    // Sourced from the `home` field on the watcher WS snapshot (set by buildWatchSnapshot)
+    // or from state.home.snapshot. Hidden when all three values are null.
+    let homeChipRow = "";
+    const homeData = latest.home || (state.home.snapshot?.quadrants ? {
+      inFlightRuns: state.home.snapshot.quadrants.activeRuns?.inFlight ?? null,
+      openIncidents: state.home.snapshot.quadrants.liveguard?.openIncidents ?? null,
+      openBugs: state.home.snapshot.quadrants.tempering?.openBugs ?? null,
+      gateChecks: state.home.snapshot.quadrants.activeRuns?.gateChecks ?? null,
+    } : null);
+    if (homeData && (homeData.inFlightRuns !== null || homeData.openIncidents !== null || homeData.openBugs !== null)) {
+      homeChipRow = `
+      <div class="col-span-2 mt-3 pt-3 border-t border-gray-700/50">
+        <p class="text-gray-500 text-xs mb-1.5">Home</p>
+        <div class="flex items-center gap-3 text-xs flex-wrap" data-testid="watcher-home-chip">
+          <span class="px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300" title="In-flight runs">🔄 ${homeData.inFlightRuns ?? "—"} runs</span>
+          <span class="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300" title="Open incidents">⚠ ${homeData.openIncidents ?? "—"} incidents</span>
+          <span class="px-1.5 py-0.5 rounded bg-red-900/40 text-red-300" title="Open bugs">🐛 ${homeData.openBugs ?? "—"} bugs</span>
+          ${homeData.gateChecks ? `<span class="px-1.5 py-0.5 rounded bg-gray-800/40 text-gray-300" title="Gate checks: passed/blocked/fail-open">⛩ ${homeData.gateChecks.passed}/${homeData.gateChecks.blocked}/${homeData.gateChecks.failOpen}</span>` : ""}
+        </div>
+      </div>`;
+    }
+
+    // Phase CRUCIBLE-03 Slice 03.2 — dedicated Crucible funnel row.
+    // Renders counts + stall/orphan highlights when the watched project
+    // has a `.forge/crucible/` directory, otherwise stays hidden. This
+    // mirrors the Smith panel section and is driven by the `crucible`
+    // block on the `watch-snapshot-completed` hub event payload.
+    let crucibleRow = "";
+    if (latest.crucible) {
+      const c = latest.crucible;
+      const staleColor = c.staleInProgress > 0 ? "text-amber-400" : "text-gray-500";
+      const orphanColor = c.orphanHandoffs > 0 ? "text-red-400" : "text-gray-500";
+      const cutoff = c.stallCutoffDays || 7;
+      crucibleRow = `
+      <div class="col-span-2 mt-3 pt-3 border-t border-gray-700/50">
+        <p class="text-gray-500 text-xs mb-1.5">Crucible Funnel</p>
+        <div class="flex items-center gap-3 text-xs flex-wrap" data-testid="watcher-crucible-row">
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-gray-300" title="Total smelts">Σ ${c.total}</span>
+          <span class="px-1.5 py-0.5 rounded bg-green-900/40 text-green-300" title="Finalized smelts">✓ ${c.finalized}</span>
+          <span class="px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300" title="In-progress smelts">⧗ ${c.in_progress}</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400" title="Abandoned smelts">✗ ${c.abandoned}</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 ${staleColor}" title="Idle ≥ ${cutoff} days">⚠ ${c.staleInProgress} stalled</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 ${orphanColor}" title="Hardener handoffs with missing plan files">⛓ ${c.orphanHandoffs} orphan</span>
+        </div>
+      </div>`;
+    }
+
+    // Phase TEMPER-01 Slice 01.2 — Tempering row mirrors the Crucible row.
+    // Driven by the compact `tempering` block on watch-snapshot-completed
+    // payloads. Hidden when the subsystem hasn't been initialized.
+    let temperingRow = "";
+    if (latest.tempering) {
+      const t = latest.tempering;
+      const cutoff = t.staleCutoffDays || 7;
+      const ageDays = t.latestScanAgeMs ? Math.floor(t.latestScanAgeMs / (24 * 60 * 60 * 1000)) : null;
+      const staleColor = t.stale ? "text-amber-400" : "text-gray-500";
+      const belowColor = t.belowMinimum > 0 ? "text-amber-400" : "text-gray-500";
+      const statusMap = { green: "text-green-300 bg-green-900/40", amber: "text-amber-300 bg-amber-900/40", "no-data": "text-gray-400 bg-gray-800", error: "text-red-300 bg-red-900/40" };
+      const statusCls = statusMap[t.latestStatus] || "text-gray-400 bg-gray-800";
+      const statusLabel = t.latestStatus || "no-scan";
+      temperingRow = `
+      <div class="col-span-2 mt-3 pt-3 border-t border-gray-700/50">
+        <p class="text-gray-500 text-xs mb-1.5">Tempering</p>
+        <div class="flex items-center gap-3 text-xs flex-wrap" data-testid="watcher-tempering-row">
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-gray-300" title="Total scans">Σ ${t.totalScans}</span>
+          <span class="px-1.5 py-0.5 rounded ${statusCls}" title="Latest scan status">● ${escHtml(statusLabel)}</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 ${belowColor}" title="Coverage layers ≥ 5 points below minimum">⚠ ${t.belowMinimum} below min</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400" title="Total gap records in latest scan">⌂ ${t.gaps} gaps</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 ${staleColor}" title="Latest scan age (cutoff ${cutoff}d)">⏱ ${ageDays !== null ? ageDays + "d" : "never"}${t.stale ? " stale" : ""}</span>
+        </div>
+      </div>`;
+    }
+
+    snapEl.innerHTML = `
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div><p class="text-gray-500 text-xs">Target</p><p class="text-gray-200 font-mono text-xs truncate">${escHtml(latest.targetPath || "—")}</p></div>
+        <div><p class="text-gray-500 text-xs">Run State</p><p class="${stateColor} font-semibold">${escHtml(latest.runState || "—")}</p></div>
+        <div><p class="text-gray-500 text-xs">Run ID</p><p class="text-gray-300 font-mono text-xs">${escHtml(latest.runId || "—")}</p></div>
+        <div><p class="text-gray-500 text-xs">Anomalies</p><p class="${latest.anomalyCount > 0 ? "text-amber-400" : "text-green-400"} font-semibold">${latest.anomalyCount ?? 0}</p></div>
+        <div class="col-span-2"><p class="text-gray-500 text-xs">Cursor</p><p class="text-gray-400 font-mono text-xs">${escHtml(latest.cursor || "—")}</p></div>
+        ${homeChipRow}
+        ${crucibleRow}
+        ${temperingRow}
+      </div>
+      <p class="text-xs text-gray-600 mt-2">${state.watcher.snapshots.length} snapshot(s) received this session</p>`;
+  }
+
+  const anomalies = state.watcher.anomalies.slice(0, 20);
+  if (anomalies.length === 0) {
+    anoEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No anomalies detected.</p>';
+  } else {
+    anoEl.innerHTML = anomalies.map((a) => {
+      const sev = a.severity || "warn";
+      const color = sev === "error" ? "red" : sev === "warn" ? "amber" : "blue";
+      const time = new Date(a.ts).toLocaleTimeString();
+      return `<div class="flex items-start gap-2 py-1.5 border-b border-gray-700/50 last:border-0">
+        <span class="text-xs px-1.5 py-0.5 rounded bg-${color}-500/20 text-${color}-400 shrink-0 font-mono">${escHtml(a.code || "anomaly")}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-xs text-gray-300">${escHtml(a.message || "")}</p>
+          <p class="text-xs text-gray-600">${escHtml(a.runId || "")} · ${time}</p>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  const advice = state.watcher.advice.slice(0, 10);
+  if (advice.length === 0) {
+    advEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No advice generated yet. Use <code class="bg-gray-700 px-1 rounded">pforge watch &lt;target&gt; --analyze</code>.</p>';
+  } else {
+    advEl.innerHTML = advice.map((a) => {
+      const time = new Date(a.ts).toLocaleTimeString();
+      return `<div class="flex items-center gap-2 py-1.5 border-b border-gray-700/50 last:border-0">
+        <span class="text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 shrink-0">${escHtml(a.model || "model")}</span>
+        <span class="text-xs text-gray-400 flex-1 truncate">${escHtml(a.runId || "")}</span>
+        <span class="text-xs text-gray-500">${a.tokensOut || 0} tok</span>
+        <span class="text-xs text-gray-600">${time}</span>
+      </div>`;
+    }).join("");
+  }
+}
+window.renderWatcherPanel = renderWatcherPanel;
+
+// ─── Memory Tab Loader (GX.1 v2.36) ─────────────────────────────────────
+// Pulls /api/memory/report (backed by buildMemoryReport in memory.mjs / GX.3)
+// and renders KPI strip + L2 file table + by-tool/by-type breakdowns + drain
+// trend + orphan list. Defensive: every section degrades to a friendly placeholder
+// when its slice of the report is empty.
+async function loadMemoryReport() {
+  const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  const setHTML = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+  let report;
+  try {
+    const r = await fetch(`${API_BASE}/api/memory/report`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    report = await r.json();
+  } catch (err) {
+    setText("mem-captures-total", "—");
+    setHTML("mem-l2-files", `<p class="text-red-400 py-2 text-center">Failed to load: ${err.message}</p>`);
+    return;
+  }
+
+  // KPI strip
+  const t = report.telemetry || { total: 0, dedupedCount: 0, byTool: {}, byType: {} };
+  const q = report.queue || { pending: 0, delivered: 0, failed: 0, deferred: 0, dlq: 0 };
+  const c = report.cache || { totalEntries: 0, uniqueKeys: 0, freshEntries: 0 };
+  setText("mem-captures-total", t.total);
+  setText("mem-captures-deduped", `${t.dedupedCount} deduped`);
+  setText("mem-queue-pending", q.pending);
+  setText("mem-queue-deferred", `${q.deferred} deferred`);
+  setText("mem-queue-delivered", q.delivered);
+  setText("mem-queue-dlq", q.failed + q.dlq);
+  setText("mem-cache-fresh", c.freshEntries);
+  setText("mem-cache-total", `${c.totalEntries} total entries`);
+
+  // L2 files table
+  const files = Array.isArray(report.l2Files) ? report.l2Files : [];
+  if (files.length === 0) {
+    setHTML("mem-l2-files", `<p class="text-gray-500 py-2 text-center">No L2 files yet.</p>`);
+  } else {
+    const fmtBytes = (n) => {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    };
+    const rows = files.map((f) => {
+      const status = f.exists
+        ? `<span class="text-green-400">✓</span>`
+        : `<span class="text-gray-600">·</span>`;
+      const versions = f.versions ? Object.entries(f.versions).map(([v, n]) => `_v:${v}=${n}`).join(" · ") : "—";
+      return `<tr class="border-b border-gray-700/50">
+        <td class="py-1 pr-2">${status}</td>
+        <td class="py-1 pr-2 font-mono text-gray-300">${f.name}</td>
+        <td class="py-1 pr-2 text-right text-gray-400">${f.exists ? f.records : "—"}</td>
+        <td class="py-1 pr-2 text-right text-gray-500">${f.exists ? fmtBytes(f.size) : "—"}</td>
+        <td class="py-1 text-gray-500">${f.exists ? versions : "—"}</td>
+      </tr>`;
+    }).join("");
+    setHTML("mem-l2-files", `<table class="w-full text-xs">
+      <thead><tr class="text-gray-500 border-b border-gray-700">
+        <th class="text-left py-1 pr-2"></th>
+        <th class="text-left py-1 pr-2">File</th>
+        <th class="text-right py-1 pr-2">Records</th>
+        <th class="text-right py-1 pr-2">Size</th>
+        <th class="text-left py-1">Versions</th>
+      </tr></thead><tbody>${rows}</tbody></table>`);
+  }
+
+  // By-tool breakdown
+  const byTool = t.byTool || {};
+  const toolEntries = Object.entries(byTool).sort(([, a], [, b]) => b - a);
+  if (toolEntries.length === 0) {
+    setHTML("mem-by-tool", `<p class="text-gray-500 py-2 text-center">No captures yet.</p>`);
+  } else {
+    const max = toolEntries[0][1] || 1;
+    setHTML("mem-by-tool", toolEntries.map(([tool, n]) => {
+      const pct = Math.round((n / max) * 100);
+      return `<div class="mb-1">
+        <div class="flex justify-between text-gray-400">
+          <span class="font-mono">${tool}</span><span>${n}</span>
+        </div>
+        <div class="h-1 bg-gray-700 rounded"><div class="h-1 bg-blue-500 rounded" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join(""));
+  }
+
+  // By-type breakdown
+  const byType = t.byType || {};
+  const typeEntries = Object.entries(byType).sort(([, a], [, b]) => b - a);
+  if (typeEntries.length === 0) {
+    setHTML("mem-by-type", `<p class="text-gray-500 py-2 text-center">No captures yet.</p>`);
+  } else {
+    const max = typeEntries[0][1] || 1;
+    const colors = { gotcha: "bg-amber-500", lesson: "bg-green-500", decision: "bg-purple-500", pattern: "bg-blue-500", convention: "bg-cyan-500" };
+    setHTML("mem-by-type", typeEntries.map(([type, n]) => {
+      const pct = Math.round((n / max) * 100);
+      const color = colors[type] || "bg-gray-500";
+      return `<div class="mb-1">
+        <div class="flex justify-between text-gray-400">
+          <span class="font-mono">${type}</span><span>${n}</span>
+        </div>
+        <div class="h-1 bg-gray-700 rounded"><div class="h-1 ${color} rounded" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join(""));
+  }
+
+  // Drain trend
+  const drain = report.drainTrend || { passes: 0 };
+  if (drain.passes === 0) {
+    setHTML("mem-drain-trend", `<p class="text-gray-500 py-2 text-center">No drain passes recorded yet.</p>`);
+  } else {
+    setHTML("mem-drain-trend", `<table class="w-full text-xs">
+      <tbody>
+        <tr><td class="text-gray-500 py-0.5">Passes</td><td class="text-right text-gray-300">${drain.passes}</td></tr>
+        <tr><td class="text-gray-500 py-0.5">Last attempted</td><td class="text-right text-gray-300">${drain.lastAttempted}</td></tr>
+        <tr><td class="text-gray-500 py-0.5">Last delivered</td><td class="text-right text-green-400">${drain.lastDelivered}</td></tr>
+        <tr><td class="text-gray-500 py-0.5">Total delivered</td><td class="text-right text-gray-300">${drain.totalDelivered}</td></tr>
+        <tr><td class="text-gray-500 py-0.5">Total deferred</td><td class="text-right text-gray-300">${drain.totalDeferred}</td></tr>
+      </tbody></table>`);
+  }
+
+  // Orphans
+  const orphans = Array.isArray(report.orphans) ? report.orphans : [];
+  if (orphans.length === 0) {
+    setHTML("mem-orphans", `<p class="text-green-400 py-2 text-center">✓ No orphan files.</p>`);
+  } else {
+    setHTML("mem-orphans", `<ul class="list-disc list-inside text-amber-400 font-mono">${
+      orphans.map((o) => `<li>${o}</li>`).join("")
+    }</ul>`);
+  }
+}
+window.loadMemoryReport = loadMemoryReport;
+
+// ─── v2.37 Crucible Tab (Slice 01.5) ─────────────────────────
+// Client for the /api/crucible/* endpoints. Keeps a tiny module-scope
+// state object so the 3 panels (list, interview, preview) can update
+// each other without DOM scraping.
+
+const crucibleState = {
+  activeId: null,
+  currentQuestion: null,
+  done: false,
+  lastListAt: 0,
+};
+
+async function loadCrucible() {
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/list`);
+    if (!res.ok) {
+      setHTML("crucible-smelt-list", `<p class="text-red-400 py-2">Failed to load smelts (${res.status})</p>`);
+      return;
+    }
+    const { smelts = [] } = await res.json();
+    crucibleState.lastListAt = Date.now();
+    renderCrucibleList(smelts);
+    // Re-sync active smelt preview if one is selected
+    if (crucibleState.activeId && smelts.some((s) => s.id === crucibleState.activeId)) {
+      refreshCrucibleInterview();
+    }
+  } catch (err) {
+    setHTML("crucible-smelt-list", `<p class="text-red-400 py-2">Error: ${err.message}</p>`);
+  }
+}
+window.loadCrucible = loadCrucible;
+
+function renderCrucibleList(smelts) {
+  const listEl = document.getElementById("crucible-smelt-list");
+  if (!listEl) return;
+  if (!smelts.length) {
+    listEl.innerHTML = `<p class="text-gray-500 py-2">No smelts yet. Click <span class="text-orange-400">+ New Smelt</span>.</p>`;
+    return;
+  }
+  const statusColor = {
+    "in-progress": "text-orange-400",
+    "finalized": "text-green-400",
+    "abandoned": "text-gray-500",
+  };
+  listEl.innerHTML = smelts
+    .slice()
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+    .map((s) => {
+      const active = s.id === crucibleState.activeId ? "bg-gray-700" : "hover:bg-gray-700/50";
+      const label = s.phaseName || (s.rawIdea ? s.rawIdea.slice(0, 40) : s.id.slice(0, 8));
+      const color = statusColor[s.status] || "text-gray-400";
+      return `<button class="w-full text-left ${active} rounded px-2 py-1.5 block" onclick="selectSmelt('${s.id}')">
+        <div class="truncate">${escapeHtml(label)}</div>
+        <div class="text-[10px] ${color}">${s.status} · ${s.lane}</div>
+      </button>`;
+    })
+    .join("");
+}
+
+async function startNewSmelt() {
+  // Open the modal form (multi-line textarea + lane select) instead of window.prompt
+  const modal = document.getElementById("new-smelt-modal");
+  const textarea = document.getElementById("new-smelt-idea");
+  const laneSelect = document.getElementById("new-smelt-lane");
+  const errBox = document.getElementById("new-smelt-error");
+  const charCount = document.getElementById("new-smelt-char-count");
+  if (!modal || !textarea) {
+    // Fallback if modal markup is missing
+    const rawIdea = window.prompt("Describe the idea to smelt:");
+    if (rawIdea && rawIdea.trim()) return _submitSmelt(rawIdea, null);
+    return;
+  }
+  textarea.value = "";
+  if (laneSelect) laneSelect.value = "";
+  if (errBox) { errBox.classList.add("hidden"); errBox.textContent = ""; }
+  if (charCount) charCount.textContent = "0 chars";
+  modal.classList.remove("hidden");
+  setTimeout(() => textarea.focus(), 50);
+}
+window.startNewSmelt = startNewSmelt;
+
+function closeNewSmeltModal() {
+  const modal = document.getElementById("new-smelt-modal");
+  if (modal) modal.classList.add("hidden");
+}
+window.closeNewSmeltModal = closeNewSmeltModal;
+
+async function submitNewSmelt() {
+  const textarea = document.getElementById("new-smelt-idea");
+  const laneSelect = document.getElementById("new-smelt-lane");
+  const errBox = document.getElementById("new-smelt-error");
+  const submitBtn = document.getElementById("new-smelt-submit-btn");
+  const rawIdea = (textarea?.value || "").trim();
+  const lane = (laneSelect?.value || "").trim() || null;
+  if (!rawIdea) {
+    if (errBox) { errBox.textContent = "Please describe the idea before submitting."; errBox.classList.remove("hidden"); }
+    textarea?.focus();
+    return;
+  }
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Submitting…"; }
+  try {
+    await _submitSmelt(rawIdea, lane);
+    closeNewSmeltModal();
+  } catch (err) {
+    if (errBox) { errBox.textContent = `Submit error: ${err.message}`; errBox.classList.remove("hidden"); }
+  } finally {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Start smelting →"; }
+  }
+}
+window.submitNewSmelt = submitNewSmelt;
+
+async function _submitSmelt(rawIdea, lane) {
+  const res = await fetch(`${API_BASE}/api/crucible/submit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rawIdea, lane }),
+  });
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({}));
+    throw new Error(error || `HTTP ${res.status}`);
+  }
+  const { id, firstQuestion } = await res.json();
+  crucibleState.activeId = id;
+  crucibleState.currentQuestion = firstQuestion;
+  crucibleState.done = firstQuestion === null;
+  await loadCrucible();
+  renderCrucibleInterview();
+  await refreshCrucibleInterview();
+}
+
+// Keyboard handling inside the New Smelt modal — Ctrl/Cmd+Enter submit, Esc cancel, live char count.
+document.addEventListener("DOMContentLoaded", () => {
+  const textarea = document.getElementById("new-smelt-idea");
+  const charCount = document.getElementById("new-smelt-char-count");
+  if (textarea) {
+    textarea.addEventListener("input", () => {
+      if (charCount) charCount.textContent = `${textarea.value.length} chars`;
+    });
+    textarea.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submitNewSmelt(); }
+      else if (e.key === "Escape") { e.preventDefault(); closeNewSmeltModal(); }
+    });
+  }
+});
+
+async function selectSmelt(id) {
+  crucibleState.activeId = id;
+  crucibleState.currentQuestion = null;
+  crucibleState.done = false;
+  renderCrucibleInterview();
+  await refreshCrucibleInterview();
+  await loadCrucible();
+}
+window.selectSmelt = selectSmelt;
+
+async function refreshCrucibleInterview() {
+  if (!crucibleState.activeId) return;
+  try {
+    // Use ask with no answer to fetch the next question + fresh preview
+    const askRes = await fetch(`${API_BASE}/api/crucible/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: crucibleState.activeId }),
+    });
+    if (askRes.ok) {
+      const data = await askRes.json();
+      crucibleState.currentQuestion = data.nextQuestion || null;
+      crucibleState.done = Boolean(data.done);
+      updateInterviewPanel(data);
+    } else {
+      // Smelt is likely not in-progress (finalized/abandoned) — fall back to preview only
+      crucibleState.currentQuestion = null;
+      crucibleState.done = true;
+    }
+    // Preview is always available
+    const prevRes = await fetch(`${API_BASE}/api/crucible/preview?id=${encodeURIComponent(crucibleState.activeId)}`);
+    if (prevRes.ok) {
+      const preview = await prevRes.json();
+      updatePreviewPanel(preview);
+    }
+  } catch (err) {
+    console.error("[crucible] refresh failed", err);
+  }
+}
+
+function renderCrucibleInterview() {
+  const empty = document.getElementById("crucible-interview-empty");
+  const panel = document.getElementById("crucible-interview");
+  if (crucibleState.activeId) {
+    if (empty) empty.classList.add("hidden");
+    if (panel) panel.classList.remove("hidden");
+    const idEl = document.getElementById("crucible-active-id");
+    if (idEl) idEl.textContent = crucibleState.activeId.slice(0, 12) + "…";
+  } else {
+    if (empty) empty.classList.remove("hidden");
+    if (panel) panel.classList.add("hidden");
+  }
+}
+
+function updateInterviewPanel(data) {
+  const q = data.nextQuestion;
+  const qText = document.getElementById("crucible-question-text");
+  const answer = document.getElementById("crucible-answer");
+  const idx = document.getElementById("crucible-q-index");
+  const total = document.getElementById("crucible-q-total");
+  const recLabel = document.getElementById("crucible-recommendation-label");
+  const recVal = document.getElementById("crucible-recommendation-value");
+  const nextBtn = document.getElementById("crucible-next-btn");
+  const finalBtn = document.getElementById("crucible-finalize-btn");
+  const lane = document.getElementById("crucible-active-lane");
+
+  if (q) {
+    if (qText) qText.textContent = q.prompt || q.text || q.id || "(no prompt)";
+    if (answer) answer.value = q.recommendedDefault || "";
+    if (idx) idx.textContent = (q.index ?? "?");
+    if (total) total.textContent = (q.total ?? "?");
+    if (lane && q.lane) lane.textContent = q.lane;
+    if (q.recommendedDefault && recLabel && recVal) {
+      recVal.textContent = q.recommendedDefault;
+      recLabel.classList.remove("hidden");
+    } else if (recLabel) {
+      recLabel.classList.add("hidden");
+    }
+    if (nextBtn) nextBtn.classList.remove("hidden");
+    if (finalBtn) finalBtn.classList.add("hidden");
+  } else {
+    // Interview complete
+    if (qText) qText.textContent = "Interview complete — review the draft and finalize.";
+    if (answer) answer.value = "";
+    if (nextBtn) nextBtn.classList.add("hidden");
+    if (finalBtn) finalBtn.classList.remove("hidden");
+  }
+}
+
+function updatePreviewPanel(preview) {
+  const pre = document.getElementById("crucible-preview");
+  if (pre) pre.textContent = preview.markdown || "(empty)";
+  const unresolved = Array.isArray(preview.unresolvedFields) ? preview.unresolvedFields : [];
+  const badge = document.getElementById("crucible-unresolved-count");
+  if (badge) badge.textContent = unresolved.length > 0 ? `${unresolved.length} unresolved` : "✓ complete";
+}
+
+async function submitAnswer() {
+  if (!crucibleState.activeId) return;
+  const answerEl = document.getElementById("crucible-answer");
+  const answer = answerEl ? answerEl.value : "";
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: crucibleState.activeId, answer }),
+    });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({}));
+      alert(`Ask failed: ${error || res.status}`);
+      return;
+    }
+    const data = await res.json();
+    crucibleState.currentQuestion = data.nextQuestion;
+    crucibleState.done = Boolean(data.done);
+    updateInterviewPanel(data);
+    if (data.draftPreview !== undefined) {
+      updatePreviewPanel({ markdown: data.draftPreview, unresolvedFields: extractUnresolvedFromMarkdown(data.draftPreview) });
+    }
+  } catch (err) { alert(`Ask error: ${err.message}`); }
+}
+window.submitAnswer = submitAnswer;
+
+function extractUnresolvedFromMarkdown(md) {
+  if (typeof md !== "string") return [];
+  const re = /\{\{TBD:[^}]+\}\}/g;
+  return md.match(re) || [];
+}
+
+async function finalizeSmelt() {
+  if (!crucibleState.activeId) return;
+  if (!confirm("Finalize this smelt? A Phase-NN.md will be written to docs/plans/.")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/finalize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: crucibleState.activeId }),
+    });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({}));
+      alert(`Finalize failed: ${error || res.status}`);
+      return;
+    }
+    const { phaseName, planPath } = await res.json();
+    alert(`✓ Finalized as ${phaseName}\n  ${planPath}\n\nNext: run the Plan Hardener on this plan.`);
+    await loadCrucible();
+  } catch (err) { alert(`Finalize error: ${err.message}`); }
+}
+window.finalizeSmelt = finalizeSmelt;
+
+async function abandonSmelt() {
+  if (!crucibleState.activeId) return;
+  if (!confirm("Abandon this smelt? This cannot be undone.")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/abandon`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: crucibleState.activeId }),
+    });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({}));
+      alert(`Abandon failed: ${error || res.status}`);
+      return;
+    }
+    crucibleState.activeId = null;
+    renderCrucibleInterview();
+    await loadCrucible();
+  } catch (err) { alert(`Abandon error: ${err.message}`); }
+}
+window.abandonSmelt = abandonSmelt;
+
+function escapeHtml(s) {
+  if (typeof s !== "string") return "";
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Live-update hook — called from the existing hub subscriber when a
+// crucible-* event arrives.
+function onCrucibleHubEvent(event) {
+  const type = event && event.type;
+  if (typeof type !== "string" || !type.startsWith("crucible-")) return;
+  // Refresh list on every crucible event; if it's our active smelt, refresh the interview too
+  loadCrucible();
+  if (event.data && event.data.id === crucibleState.activeId) {
+    refreshCrucibleInterview();
+  }
+  // Show a Hardener-ready toast when the handoff event fires
+  if (type === "crucible-handoff-to-hardener" && event.data) {
+    const { phaseName, planPath } = event.data;
+    // Use alert as a deliberate user-visible nudge — the reviewer must
+    // take an action before the plan runs through the gate.
+    try {
+      console.log(`[crucible] Hardener ready for ${phaseName} (${planPath})`);
+      if (typeof window !== "undefined" && window.alert) {
+        // Non-blocking: only alert if the Crucible tab is active
+        const activeTab = document.querySelector(".tab-btn.tab-active");
+        if (activeTab && activeTab.dataset.tab === "crucible") {
+          window.alert(`✓ ${phaseName} finalized. Next step: run /step2-harden-plan against ${planPath}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+}
+window.onCrucibleHubEvent = onCrucibleHubEvent;
+
+// ─── v2.37 Crucible Config (Slice 01.6) ─────────────────────
+async function loadCrucibleConfigUI() {
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/config`);
+    if (!res.ok) {
+      const el = document.getElementById("crucible-cfg-status");
+      if (el) el.textContent = `Failed to load config (${res.status})`;
+      return;
+    }
+    const cfg = await res.json();
+    const lane = document.getElementById("crucible-cfg-lane");
+    if (lane) lane.value = cfg.defaultLane;
+    const depth = document.getElementById("crucible-cfg-depth");
+    if (depth) depth.value = String(cfg.recursionDepth);
+    const auto = document.getElementById("crucible-cfg-auto-approve");
+    if (auto) auto.checked = Boolean(cfg.autoApproveAgent);
+    const wm = document.getElementById("crucible-cfg-w-memory");
+    const wp = document.getElementById("crucible-cfg-w-principles");
+    const wpl = document.getElementById("crucible-cfg-w-plans");
+    if (wm) wm.value = String(cfg.sourceWeights?.memory ?? 34);
+    if (wp) wp.value = String(cfg.sourceWeights?.principles ?? 33);
+    if (wpl) wpl.value = String(cfg.sourceWeights?.plans ?? 33);
+    const stale = document.getElementById("crucible-cfg-stale");
+    if (stale) stale.value = String(cfg.staleDefaultsHours ?? 24);
+    const status = document.getElementById("crucible-cfg-status");
+    if (status) status.textContent = "Loaded.";
+  } catch (err) {
+    const status = document.getElementById("crucible-cfg-status");
+    if (status) status.textContent = `Error: ${err.message}`;
+  }
+}
+window.loadCrucibleConfigUI = loadCrucibleConfigUI;
+
+async function saveCrucibleConfig() {
+  const body = {
+    defaultLane: document.getElementById("crucible-cfg-lane")?.value || "feature",
+    recursionDepth: Number(document.getElementById("crucible-cfg-depth")?.value ?? 1),
+    autoApproveAgent: Boolean(document.getElementById("crucible-cfg-auto-approve")?.checked),
+    sourceWeights: {
+      memory: Number(document.getElementById("crucible-cfg-w-memory")?.value ?? 34),
+      principles: Number(document.getElementById("crucible-cfg-w-principles")?.value ?? 33),
+      plans: Number(document.getElementById("crucible-cfg-w-plans")?.value ?? 33),
+    },
+    staleDefaultsHours: Number(document.getElementById("crucible-cfg-stale")?.value ?? 24),
+  };
+  const status = document.getElementById("crucible-cfg-status");
+  try {
+    const res = await fetch(`${API_BASE}/api/crucible/config`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      if (status) status.textContent = `Save failed (${res.status})`;
+      return;
+    }
+    const saved = await res.json();
+    if (status) status.textContent = `✓ Saved. Weights normalized to ${saved.sourceWeights.memory}/${saved.sourceWeights.principles}/${saved.sourceWeights.plans}.`;
+    await loadCrucibleConfigUI();
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err.message}`;
+  }
+}
+window.saveCrucibleConfig = saveCrucibleConfig;
+
+// ─── v2.37 Governance Tab (Slice 01.6, read-only) ───────────
+async function loadGovernance() {
+  try {
+    const [govRes, auditRes] = await Promise.all([
+      fetch(`${API_BASE}/api/crucible/governance`),
+      fetch(`${API_BASE}/api/crucible/manual-imports`),
+    ]);
+    const filesEl = document.getElementById("governance-files");
+    if (govRes.ok) {
+      const { files = [] } = await govRes.json();
+      if (!files.length) {
+        if (filesEl) filesEl.innerHTML = `<p class="text-gray-500 py-2">No principles or profile files found. Create <code>docs/plans/PROJECT-PRINCIPLES.md</code> to start.</p>`;
+      } else {
+        if (filesEl) filesEl.innerHTML = files.map((f) => `
+          <details class="bg-gray-900 rounded">
+            <summary class="cursor-pointer px-3 py-2 text-sm flex items-center justify-between">
+              <span><span class="text-gray-400">${f.role}</span> — <code class="text-orange-300">${escapeHtml(f.path)}</code></span>
+              <span class="text-xs text-gray-500">${new Date(f.mtime).toLocaleString()}</span>
+            </summary>
+            <div class="px-3 pb-3">
+              <div class="flex justify-end mb-2">
+                <a href="vscode://file/${encodeURI(f.absolutePath.replace(/\\/g, "/"))}" class="text-xs text-blue-400 hover:text-blue-300">Open in VS Code →</a>
+              </div>
+              <pre class="text-xs text-gray-300 whitespace-pre-wrap font-mono max-h-72 overflow-y-auto bg-black/40 rounded p-2">${escapeHtml(f.content)}</pre>
+            </div>
+          </details>
+        `).join("");
+      }
+    } else if (filesEl) {
+      filesEl.innerHTML = `<p class="text-red-400">Failed to load governance (${govRes.status})</p>`;
+    }
+
+    const auditEl = document.getElementById("governance-audit");
+    const countEl = document.getElementById("governance-audit-count");
+    if (auditRes.ok) {
+      const { total, showing, entries } = await auditRes.json();
+      if (countEl) countEl.textContent = `${showing}/${total}`;
+      if (!entries.length) {
+        if (auditEl) auditEl.innerHTML = `<p class="text-gray-500 py-2">No manual imports recorded.</p>`;
+      } else {
+        const sourceColor = { human: "text-blue-300", speckit: "text-green-300", grandfather: "text-gray-400" };
+        if (auditEl) auditEl.innerHTML = entries.map((e) => `
+          <div class="bg-gray-900 rounded px-2 py-1.5">
+            <div class="flex items-center justify-between">
+              <span class="${sourceColor[e.source] || "text-gray-300"} font-semibold">${escapeHtml(e.source || "?")}</span>
+              <span class="text-gray-500">${new Date(e.timestamp).toLocaleString()}</span>
+            </div>
+            <div class="text-gray-400 truncate" title="${escapeHtml(e.planPath || "")}">${escapeHtml(e.planPath || "(no path)")}</div>
+            ${e.crucibleId ? `<div class="text-orange-300 text-[10px]">${escapeHtml(e.crucibleId)}</div>` : ""}
+            ${e.reason ? `<div class="text-gray-500 text-[10px] italic">${escapeHtml(e.reason)}</div>` : ""}
+          </div>
+        `).join("");
+      }
+    } else if (auditEl) {
+      auditEl.innerHTML = `<p class="text-red-400">Failed to load audit log (${auditRes.status})</p>`;
+    }
+  } catch (err) {
+    console.error("[governance] load failed", err);
+  }
+}
+window.loadGovernance = loadGovernance;
+
+
+async function copyWatchCommand(live) {
+  const cmd = live ? "pforge watch-live <target-path>" : "pforge watch <target-path>";
+  try {
+    await navigator.clipboard.writeText(cmd);
+    addNotification(`Copied: ${cmd}`, "success");
+  } catch {
+    addNotification(`Command: ${cmd}`, "info");
+  }
+}
+window.copyWatchCommand = copyWatchCommand;
+
+// Dashboard quorum shortcut — copies quorum prompt to clipboard
+async function runQuorumFromDashboard(source) {
+  try {
+    const res = await fetch(`${API_BASE}/api/quorum/prompt?source=${encodeURIComponent(source)}&goal=risk-assess`);
+    if (!res.ok) { addNotification('Quorum prompt generation failed', 'red'); return; }
+    const json = await res.json();
+    if (json.prompt) {
+      await navigator.clipboard.writeText(json.prompt);
+      addNotification('Quorum prompt copied to clipboard', 'green');
+    }
+  } catch {
+    addNotification('Quorum prompt generation failed', 'red');
+  }
+}
+window.runQuorumFromDashboard = runQuorumFromDashboard;
 
 // ─── Theme Toggle ─────────────────────────────────────────────
 function toggleTheme() {
@@ -2546,7 +5599,7 @@ function showSpanDetail(idx) {
   if (!traceData) return;
   const span = traceData.spans[idx];
 
-  // Events — render full detail 
+  // Events — render full detail
   const eventsEl = document.getElementById("trace-events");
   if (span.events?.length > 0) {
     eventsEl.innerHTML = span.events.map((e) => {
@@ -2565,7 +5618,7 @@ function showSpanDetail(idx) {
     eventsEl.innerHTML = '<p class="text-gray-500">No events</p>';
   }
 
-  // Attributes — formatted table 
+  // Attributes — formatted table
   const attrsEl = document.getElementById("trace-attributes");
   const labels = { model: "Model", tokens_in: "Input Tokens", tokens_out: "Output Tokens", worker: "Worker", cost_usd: "Cost ($)", exit_code: "Exit Code", duration_ms: "Duration (ms)", slice_id: "Slice ID" };
   const allAttrs = { ...span.attributes, status: span.status, kind: span.kind, spanId: span.spanId };
@@ -2575,7 +5628,7 @@ function showSpanDetail(idx) {
   }).join("");
   attrsEl.innerHTML = `<table class="w-full">${rows}</table>`;
 
-  // Log summary 
+  // Log summary
   if (span.logSummary?.length > 0) {
     attrsEl.innerHTML += `<details class="mt-2"><summary class="text-xs text-gray-500 cursor-pointer">Log Summary (${span.logSummary.length} entries)</summary>
       <pre class="text-xs text-gray-400 mt-1 whitespace-pre-wrap max-h-32 overflow-y-auto">${span.logSummary.map((l) => escHtml(l)).join("\n")}</pre>
@@ -2648,10 +5701,21 @@ function appendEventLog(event) {
   const typeColors = {
     "run-started": "text-blue-400", "run-completed": "text-green-400", "run-aborted": "text-yellow-400",
     "slice-started": "text-cyan-400", "slice-completed": "text-green-300", "slice-failed": "text-red-400",
+    "slice-model-routed": "text-indigo-400",
+    "quorum-dispatch-started": "text-purple-400", "quorum-leg-completed": "text-purple-300", "quorum-review-completed": "text-purple-200",
     "skill-started": "text-purple-400", "skill-completed": "text-purple-300",
   };
   const color = typeColors[event.type] || "text-gray-400";
-  const summary = event.data?.sliceId ? ` slice ${event.data.sliceId}` : event.data?.plan ? ` ${shortName(event.data.plan)}` : event.data?.skillName ? ` /${event.data.skillName}` : "";
+  let summary = event.data?.sliceId ? ` slice ${event.data.sliceId}` : event.data?.plan ? ` ${shortName(event.data.plan)}` : event.data?.skillName ? ` /${event.data.skillName}` : "";
+  if (event.type === "slice-model-routed" && event.data?.model) {
+    summary += ` \u2192 ${event.data.model}`;
+  } else if (event.type === "quorum-dispatch-started" && event.data?.models) {
+    summary += ` [${event.data.models.join(", ")}]`;
+  } else if (event.type === "quorum-leg-completed" && event.data?.model) {
+    summary += ` ${event.data.model} ${event.data.success ? "\u2713" : "\u2717"}`;
+  } else if (event.type === "quorum-review-completed" && (event.data?.winner || event.data?.selectedModel)) {
+    summary += ` winner: ${event.data.winner || event.data.selectedModel}`;
+  }
 
   eventLogEntries.push({ time, type: event.type, summary, color });
   if (eventLogEntries.length > 200) eventLogEntries.shift();
@@ -2667,5 +5731,1322 @@ function appendEventLog(event) {
   entry.textContent = `[${time}] ${event.type}${summary}`;
   logEl.appendChild(entry);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ─── Tempering Panel (Phase TEMPER-01 Slice 01.2) ────────────────────
+// Read-only view over .forge/tempering/scan-*.json records surfaced by
+// forge_tempering_status. Never triggers a scan on its own — the "Run
+// scan" button calls forge_tempering_scan explicitly, per the one-slice
+// scope contract in Phase-TEMPER-01.md.
+
+async function loadTemperingStatus() {
+  if (state.tempering.fetching) return;
+  state.tempering.fetching = true;
+  state.tempering.lastError = null;
+  try {
+    const res = await fetch(`${API_BASE}/api/tool/forge_tempering_status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 20 }),
+    });
+    const data = await res.json().catch(() => null);
+    if (data && data.ok) {
+      state.tempering.initialized = !!data.initialized;
+      state.tempering.state = data.state || null;
+      state.tempering.scans = Array.isArray(data.scans) ? data.scans : [];
+    } else {
+      state.tempering.lastError = data?.error || "Tempering status request failed";
+    }
+  } catch (err) {
+    state.tempering.lastError = err.message || String(err);
+  } finally {
+    state.tempering.fetching = false;
+    renderTemperingPanel();
+  }
+}
+
+async function runTemperingScan() {
+  const btn = document.getElementById("tempering-scan-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Scanning..."; }
+  try {
+    const res = await fetch(`${API_BASE}/api/tool/forge_tempering_scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || !data.ok) {
+      state.tempering.lastError = data?.error || data?.reason || "Scan request failed";
+    } else {
+      state.tempering.lastError = null;
+    }
+  } catch (err) {
+    state.tempering.lastError = err.message || String(err);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Run scan"; }
+    await loadTemperingStatus();
+  }
+}
+
+function renderTemperingPanel() {
+  const summaryEl = document.getElementById("tempering-summary-body");
+  const coverageEl = document.getElementById("tempering-coverage-body");
+  const gapsEl = document.getElementById("tempering-gaps-body");
+  const historyEl = document.getElementById("tempering-history-body");
+  if (!summaryEl || !coverageEl || !gapsEl || !historyEl) return;
+
+  const { initialized, state: tState, scans, lastError } = state.tempering;
+
+  if (lastError) {
+    summaryEl.innerHTML = `<p class="text-red-400 text-xs py-2">${escHtml(lastError)}</p>`;
+  } else if (!initialized) {
+    summaryEl.innerHTML = `
+      <p class="text-gray-400 text-xs">Tempering has not been initialized in this project.</p>
+      <p class="text-gray-500 text-xs mt-2">Click <span class="text-emerald-400">Run scan</span> above (or call <code class="bg-gray-700 px-1 rounded">forge_tempering_scan</code>) to seed <code class="bg-gray-700 px-1 rounded">.forge/tempering/</code> and record a baseline.</p>`;
+  } else if (!tState || tState.totalScans === 0) {
+    summaryEl.innerHTML = `
+      <p class="text-gray-400 text-xs">Subsystem ready. No scans recorded yet.</p>
+      <p class="text-gray-500 text-xs mt-2">Run a scan to evaluate coverage against the configured minima.</p>`;
+  } else {
+    const statusMap = { green: "text-green-400", amber: "text-amber-400", "no-data": "text-gray-400", error: "text-red-400" };
+    const statusCls = statusMap[tState.latestStatus] || "text-gray-300";
+    const ageDays = tState.latestScanAgeMs ? Math.floor(tState.latestScanAgeMs / (24 * 60 * 60 * 1000)) : null;
+    const staleBadge = tState.stale
+      ? `<span class="ml-2 px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 text-xs">stale</span>`
+      : "";
+    summaryEl.innerHTML = `
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div><p class="text-gray-500">Status</p><p class="${statusCls} font-semibold">${escHtml(tState.latestStatus || "—")}${staleBadge}</p></div>
+        <div><p class="text-gray-500">Total scans</p><p class="text-gray-200">${tState.totalScans}</p></div>
+        <div><p class="text-gray-500">Latest</p><p class="text-gray-300 font-mono">${tState.latestScanTs ? new Date(tState.latestScanTs).toLocaleString() : "—"}</p></div>
+        <div><p class="text-gray-500">Age</p><p class="text-gray-300">${ageDays !== null ? ageDays + " day(s)" : "—"}</p></div>
+        <div><p class="text-gray-500">Gaps</p><p class="text-gray-200">${tState.gaps}</p></div>
+        <div><p class="text-gray-500">Below min</p><p class="${tState.belowMinimum > 0 ? "text-amber-400" : "text-gray-200"} font-semibold">${tState.belowMinimum}</p></div>
+      </div>`;
+  }
+
+  // Coverage vs. minima — rendered from the newest scan's per-layer data.
+  const latest = scans[0] || null;
+  if (!latest || !latest.coverage) {
+    coverageEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No coverage data.</p>';
+  } else {
+    const minima = latest.coverageMinima || { domain: 90, integration: 80, controller: 60, overall: 80 };
+    const rows = ["domain", "integration", "controller", "overall"].map((layer) => {
+      const actual = latest.coverage[layer];
+      const min = minima[layer] ?? 0;
+      if (actual === undefined || actual === null) return "";
+      const gap = min - actual;
+      const color = gap <= 0 ? "bg-green-500" : gap < 5 ? "bg-amber-500" : "bg-red-500";
+      const pct = Math.max(0, Math.min(100, actual));
+      return `
+        <div class="mb-2 last:mb-0" data-testid="tempering-coverage-row-${layer}">
+          <div class="flex justify-between text-xs mb-0.5">
+            <span class="text-gray-300 font-semibold">${escHtml(layer)}</span>
+            <span class="text-gray-400">${actual.toFixed(1)}% <span class="text-gray-600">/ min ${min}%</span></span>
+          </div>
+          <div class="h-2 bg-gray-900 rounded overflow-hidden relative">
+            <div class="h-full ${color}" style="width:${pct}%"></div>
+            <div class="absolute top-0 h-full border-r border-gray-400/70" style="left:${min}%"></div>
+          </div>
+        </div>`;
+    }).filter(Boolean).join("");
+    coverageEl.innerHTML = rows || '<p class="text-gray-500 text-sm py-4 text-center">No coverage rows.</p>';
+  }
+
+  // Gap list — worst-first files per layer.
+  if (!latest || !Array.isArray(latest.coverageVsMinima) || latest.coverageVsMinima.length === 0) {
+    gapsEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No gaps.</p>';
+  } else {
+    gapsEl.innerHTML = latest.coverageVsMinima.map((g) => {
+      const files = Array.isArray(g.files) ? g.files.slice(0, 10) : [];
+      const fileRows = files.map((f) => {
+        const pct = f.linesTotal > 0 ? Math.round((f.linesHit / f.linesTotal) * 100) : 0;
+        return `<li class="text-xs text-gray-400 font-mono truncate"><span class="text-red-400">${pct}%</span> ${escHtml(f.file)} <span class="text-gray-600">(${f.linesHit}/${f.linesTotal})</span></li>`;
+      }).join("");
+      return `
+        <div class="mb-4 last:mb-0 pb-3 border-b border-gray-700/50 last:border-0">
+          <div class="flex items-center gap-3 text-xs mb-2">
+            <span class="px-2 py-0.5 rounded bg-red-900/40 text-red-300 font-semibold">${escHtml(g.layer)}</span>
+            <span class="text-gray-400">${g.actual}% / min ${g.minimum}%</span>
+            <span class="text-amber-400 font-semibold">− ${g.gap} pts</span>
+          </div>
+          <ul class="space-y-0.5">${fileRows || '<li class="text-xs text-gray-600">No file breakdown.</li>'}</ul>
+        </div>`;
+    }).join("");
+  }
+
+  // History — recent scans, newest first.
+  if (!scans.length) {
+    historyEl.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No scan history.</p>';
+  } else {
+    const statusColors = { green: "text-green-400", amber: "text-amber-400", "no-data": "text-gray-500", error: "text-red-400" };
+    historyEl.innerHTML = scans.map((s) => {
+      const cls = statusColors[s.status] || "text-gray-300";
+      const ts = s.completedAt ? new Date(s.completedAt).toLocaleString() : "—";
+      return `<div class="flex items-center gap-3 py-1 text-xs border-b border-gray-700/50 last:border-0">
+        <span class="${cls} font-semibold w-16">${escHtml(s.status || "—")}</span>
+        <span class="text-gray-300 font-mono w-44">${escHtml(s.scanId || "—")}</span>
+        <span class="text-gray-500 flex-1">${escHtml(ts)}</span>
+        <span class="text-gray-400">${s.gaps ?? 0} gaps</span>
+        <span class="text-amber-400">${s.belowMinimum ?? 0} below-min</span>
+      </div>`;
+    }).join("");
+  }
+}
+
+window.renderTemperingPanel = renderTemperingPanel;
+window.loadTemperingStatus = loadTemperingStatus;
+window.runTemperingScan = runTemperingScan;
+
+// ─── Visual Regression Viewer (TEMPER-04 Slice 04.2) ─────────────────
+// Cards upserted by urlHash from hub events. Images served via
+// /api/tempering/artifact?path=… (path-traversal enforced server-side).
+
+function upsertVisualRegressionCard(data) {
+  if (!data || !data.urlHash) return;
+  if (state.tempering.visualIgnoredOnce.has(data.urlHash)) return;
+
+  const idx = state.tempering.visualRegressions.findIndex(r => r.urlHash === data.urlHash);
+  if (idx >= 0) {
+    state.tempering.visualRegressions[idx] = data;
+  } else {
+    state.tempering.visualRegressions.push(data);
+  }
+  renderVisualDiffViewer();
+}
+
+function renderVisualDiffViewer() {
+  const viewer = document.getElementById("visual-diff-viewer");
+  const list = document.getElementById("visual-diff-list");
+  if (!viewer || !list) return;
+
+  const cards = state.tempering.visualRegressions;
+  if (cards.length === 0) {
+    viewer.classList.add("hidden");
+    return;
+  }
+  viewer.classList.remove("hidden");
+
+  list.innerHTML = cards.map(card => {
+    const pct = card.diffPercent != null ? `${(card.diffPercent * 100).toFixed(2)}%` : "—";
+    const verdict = card.verdict || card.llmVerdict || card.band || "unknown";
+
+    // Verdict banner color
+    let bannerCls, bannerLabel;
+    if (verdict === "regression") {
+      bannerCls = "bg-red-900/60 text-red-300";
+      bannerLabel = "Regression";
+    } else if (verdict === "acceptable") {
+      bannerCls = "bg-green-900/60 text-green-300";
+      bannerLabel = "Acceptable";
+    } else if (verdict === "inconclusive") {
+      bannerCls = "bg-amber-900/60 text-amber-300";
+      bannerLabel = "Human Review Needed";
+    } else {
+      bannerCls = "bg-gray-700 text-gray-300";
+      bannerLabel = escHtml(verdict);
+    }
+
+    // Quorum vote badges
+    let voteBadges = "";
+    if (card.quorum && Array.isArray(card.quorum.votes)) {
+      voteBadges = card.quorum.votes.map(v => {
+        if (!v.ok && v.error === "analyzer-timeout") return `<span class="px-1.5 py-0.5 rounded text-xs bg-amber-800 text-amber-200" title="Timeout">⏱ ${escHtml(v.model)}</span>`;
+        if (!v.ok) return `<span class="px-1.5 py-0.5 rounded text-xs bg-gray-700 text-gray-400" title="${escHtml(v.error || "failed")}">? ${escHtml(v.model)}</span>`;
+        if (v.regression) return `<span class="px-1.5 py-0.5 rounded text-xs bg-red-900/60 text-red-300" title="${escHtml(v.explanation || "")}">✗ ${escHtml(v.model)}</span>`;
+        return `<span class="px-1.5 py-0.5 rounded text-xs bg-green-900/60 text-green-300" title="${escHtml(v.explanation || "")}">✓ ${escHtml(v.model)}</span>`;
+      }).join(" ");
+    }
+
+    // Image trio
+    let imageTrio = "";
+    if (card.artifacts) {
+      const artifactBase = `${API_BASE}/api/tempering/artifact?path=`;
+      const baselineImg = card.artifacts.baseline ? `<img src="${artifactBase}${encodeURIComponent(card.artifacts.baseline)}" alt="Baseline" class="max-w-full rounded border border-gray-700" onerror="this.style.display='none'">` : "";
+      const currentImg = card.artifacts.current ? `<img src="${artifactBase}${encodeURIComponent(card.artifacts.current)}" alt="Current" class="max-w-full rounded border border-gray-700" onerror="this.style.display='none'">` : "";
+      const diffImg = card.artifacts.diff ? `<img src="${artifactBase}${encodeURIComponent(card.artifacts.diff)}" alt="Diff" class="max-w-full rounded border border-gray-700" onerror="this.style.display='none'">` : "";
+      imageTrio = `
+        <div class="grid grid-cols-3 gap-2 mt-2">
+          <div><p class="text-xs text-gray-500 mb-1">Baseline</p>${baselineImg}</div>
+          <div><p class="text-xs text-gray-500 mb-1">Current</p>${currentImg}</div>
+          <div><p class="text-xs text-gray-500 mb-1">Diff</p>${diffImg}</div>
+        </div>`;
+    }
+
+    return `
+      <div class="bg-gray-800 rounded-lg p-4" data-testid="visual-diff-card" data-urlhash="${escHtml(card.urlHash)}">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <span class="text-sm font-semibold text-white">${escHtml(card.url || card.urlHash)}</span>
+            <span class="text-xs text-gray-500 ml-2">${pct} diff</span>
+          </div>
+          <span class="px-2 py-0.5 rounded text-xs font-semibold ${bannerCls}">${bannerLabel}</span>
+        </div>
+        ${voteBadges ? `<div class="flex gap-1 flex-wrap mb-2" data-testid="quorum-votes">${voteBadges}</div>` : ""}
+        ${imageTrio}
+        <div class="flex gap-2 mt-3">
+          <button class="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-white" onclick="approveBaseline('${escHtml(card.urlHash)}', '${escHtml(card.url || "")}')" data-testid="approve-baseline-btn">Approve as Baseline</button>
+          <button class="text-xs px-3 py-1.5 bg-red-800 hover:bg-red-700 rounded text-white" onclick="openBugStub('${escHtml(card.urlHash)}', '${escHtml(card.url || "")}', '${escHtml(verdict)}', '${escHtml(card.explanation || "")}')" data-testid="open-bug-btn">Open Bug</button>
+          <button class="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-gray-300" onclick="ignoreOnce('${escHtml(card.urlHash)}')" data-testid="ignore-once-btn">Ignore Once</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function approveBaseline(urlHash, url) {
+  try {
+    await fetch(`${API_BASE}/api/tool/forge_tempering_approve_baseline`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urlHash, url }),
+    });
+    state.tempering.visualRegressions = state.tempering.visualRegressions.filter(r => r.urlHash !== urlHash);
+    renderVisualDiffViewer();
+    addNotification(`Baseline approved: ${url || urlHash}`, "success");
+  } catch (err) {
+    addNotification(`Approve failed: ${err.message}`, "error");
+  }
+}
+
+async function openBugStub(urlHash, url, verdict, explanation) {
+  try {
+    await fetch(`${API_BASE}/api/tempering/bug-stub`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urlHash, url, verdict, explanation }),
+    });
+    addNotification(`Bug stub created: ${url || urlHash}`, "success");
+  } catch (err) {
+    addNotification(`Bug stub failed: ${err.message}`, "error");
+  }
+}
+
+function ignoreOnce(urlHash) {
+  state.tempering.visualIgnoredOnce.add(urlHash);
+  state.tempering.visualRegressions = state.tempering.visualRegressions.filter(r => r.urlHash !== urlHash);
+  renderVisualDiffViewer();
+}
+
+window.approveBaseline = approveBaseline;
+window.openBugStub = openBugStub;
+window.ignoreOnce = ignoreOnce;
+window.upsertVisualRegressionCard = upsertVisualRegressionCard;
+window.renderVisualDiffViewer = renderVisualDiffViewer;
+
+// ─── TEMPER-05 Slice 05.1: Flakiness / Perf-Budget / Load panels ────
+
+function handleFlakinessDetected(data) {
+  if (!data) return;
+  state.tempering.flakyTests.push(data);
+  renderFlakinessPanel();
+}
+
+function handlePerfRegression(data) {
+  if (!data) return;
+  state.tempering.perfRegressions.push(data);
+  addNotification(`Perf regression: ${data.endpoint || "unknown"} (+${((data.deltaPercent || 0) * 100).toFixed(1)}%)`, "error");
+  renderPerfBudgetPanel();
+}
+
+function handleLoadCompleted(data) {
+  if (!data) return;
+  state.tempering.loadResults.push(data);
+  renderLoadStressPanel();
+}
+
+function renderFlakinessPanel() {
+  const body = document.getElementById("tempering-flakiness-body");
+  if (!body) return;
+  const items = state.tempering.flakyTests;
+  if (items.length === 0) {
+    body.innerHTML = '<p class="text-gray-400 text-xs">No flaky tests detected.</p>';
+    return;
+  }
+  const sorted = [...items].sort((a, b) => (b.failureRate || 0) - (a.failureRate || 0));
+  body.innerHTML = `<table class="w-full text-xs"><thead><tr class="text-gray-400"><th class="text-left pb-1">Test</th><th class="text-right pb-1">Failure Rate</th><th class="text-right pb-1">Window</th></tr></thead><tbody>${sorted.map(f => `<tr class="border-t border-gray-700"><td class="py-1 text-white">${escHtml(f.testId || "—")}</td><td class="py-1 text-right text-red-400">${((f.failureRate || 0) * 100).toFixed(1)}%</td><td class="py-1 text-right text-gray-400">${f.window || "—"}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function renderPerfBudgetPanel() {
+  const body = document.getElementById("tempering-perf-budget-body");
+  if (!body) return;
+  const items = state.tempering.perfRegressions;
+  if (items.length === 0) {
+    body.innerHTML = '<p class="text-gray-400 text-xs">No performance regressions.</p>';
+    return;
+  }
+  body.innerHTML = `<table class="w-full text-xs"><thead><tr class="text-gray-400"><th class="text-left pb-1">Endpoint</th><th class="text-right pb-1">Baseline p95</th><th class="text-right pb-1">Current p95</th><th class="text-right pb-1">Delta</th></tr></thead><tbody>${items.map(r => `<tr class="border-t border-gray-700"><td class="py-1 text-white">${escHtml(r.endpoint || "—")}</td><td class="py-1 text-right text-gray-400">${r.baselineP95 != null ? r.baselineP95 + "ms" : "—"}</td><td class="py-1 text-right text-red-400">${r.currentP95 != null ? r.currentP95 + "ms" : "—"}</td><td class="py-1 text-right text-red-400">+${((r.deltaPercent || 0) * 100).toFixed(1)}%</td></tr>`).join("")}</tbody></table>`;
+}
+
+function renderLoadStressPanel() {
+  const body = document.getElementById("tempering-load-stress-body");
+  if (!body) return;
+  const items = state.tempering.loadResults;
+  if (items.length === 0) {
+    body.innerHTML = '<p class="text-gray-400 text-xs">No load test results.</p>';
+    return;
+  }
+  const latest = items[items.length - 1];
+  body.innerHTML = `<div class="text-xs"><p class="text-gray-300">Endpoints tested: <span class="text-white">${latest.endpointCount || 0}</span></p><p class="text-gray-300">Passed: <span class="text-emerald-400">${latest.passCount || 0}</span> · Failed: <span class="text-red-400">${latest.failCount || 0}</span></p><p class="text-gray-300">Verdict: <span class="${latest.verdict === "pass" ? "text-emerald-400" : "text-red-400"}">${escHtml(latest.verdict || "—")}</span></p></div>`;
+}
+
+window.handleFlakinessDetected = handleFlakinessDetected;
+window.handlePerfRegression = handlePerfRegression;
+window.handleLoadCompleted = handleLoadCompleted;
+window.renderFlakinessPanel = renderFlakinessPanel;
+window.renderPerfBudgetPanel = renderPerfBudgetPanel;
+window.renderLoadStressPanel = renderLoadStressPanel;
+
+// ─── TEMPER-05 Slice 05.2: Mutation scanner panel ────────────────────
+
+function handleMutationBelowMinimum(data) {
+  if (!data) return;
+  state.tempering.mutationResults.push(data);
+  addNotification(`Mutation score below minimum: ${(data.overallScore || 0).toFixed(1)}% (min ${data.overallMinimum || 60}%)`, "error");
+  renderMutationPanel();
+}
+
+function renderMutationPanel() {
+  const body = document.getElementById("tempering-mutation-body");
+  if (!body) return;
+  const items = state.tempering.mutationResults;
+  if (items.length === 0) {
+    body.innerHTML = '<p class="text-gray-400 text-xs">No mutation results.</p>';
+    return;
+  }
+  const latest = items[items.length - 1];
+  const layers = Array.isArray(latest.layersBelowMinimum) ? latest.layersBelowMinimum : [];
+  let layerRows = "";
+  if (layers.length > 0) {
+    layerRows = `<table class="w-full text-xs mt-2"><thead><tr class="text-gray-400"><th class="text-left pb-1">Layer</th><th class="text-right pb-1">Score</th><th class="text-right pb-1">Minimum</th><th class="text-right pb-1">Verdict</th></tr></thead><tbody>${layers.map(l => `<tr class="border-t border-gray-700"><td class="py-1 text-white">${escHtml(l.layer || "—")}</td><td class="py-1 text-right ${l.pass ? "text-emerald-400" : "text-red-400"}">${(l.score || 0).toFixed(1)}%</td><td class="py-1 text-right text-gray-400">${l.minimum || 0}%</td><td class="py-1 text-right ${l.pass ? "text-emerald-400" : "text-red-400"}">${l.pass ? "✓" : "✗"}</td></tr>`).join("")}</tbody></table>`;
+  }
+  body.innerHTML = `<div class="text-xs"><p class="text-gray-300">Overall Score: <span class="${(latest.overallScore || 0) >= (latest.overallMinimum || 60) ? "text-emerald-400" : "text-red-400"}">${(latest.overallScore || 0).toFixed(1)}%</span> (min ${latest.overallMinimum || 60}%)</p>${layerRows}</div>`;
+}
+
+window.handleMutationBelowMinimum = handleMutationBelowMinimum;
+window.renderMutationPanel = renderMutationPanel;
+
+// ─── Bug Registry Panel (Phase TEMPER-06 Slice 06.1) ─────────────────
+
+async function loadBugRegistry() {
+  if (state.tempering.bugsFetching) return;
+  state.tempering.bugsFetching = true;
+  state.tempering.bugsLastError = null;
+  try {
+    const statusEl = document.getElementById("bugregistry-filter-status");
+    const sevEl = document.getElementById("bugregistry-filter-severity");
+    const scanEl = document.getElementById("bugregistry-filter-scanner");
+    const params = new URLSearchParams();
+    if (statusEl?.value) params.set("status", statusEl.value);
+    if (sevEl?.value) params.set("severity", sevEl.value);
+    if (scanEl?.value) params.set("scanner", scanEl.value);
+    const url = `${API_BASE}/api/bugs/list${params.toString() ? "?" + params.toString() : ""}`;
+    const res = await fetch(url);
+    const data = await res.json().catch(() => null);
+    if (Array.isArray(data)) {
+      state.tempering.bugs = data;
+    } else {
+      state.tempering.bugsLastError = data?.error || "Failed to load bugs";
+    }
+  } catch (err) {
+    state.tempering.bugsLastError = err.message || String(err);
+  } finally {
+    state.tempering.bugsFetching = false;
+    renderBugRegistry();
+  }
+}
+
+function renderBugRegistry() {
+  const container = document.getElementById("bugregistry-table-container");
+  if (!container) return;
+
+  const bugs = state.tempering.bugs;
+  if (state.tempering.bugsLastError) {
+    container.innerHTML = `<p class="text-red-400 text-sm py-2">${escapeHtml(state.tempering.bugsLastError)}</p>`;
+    return;
+  }
+
+  if (!bugs || bugs.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-sm py-4 text-center">No bugs found. Bugs are registered automatically when tempering scanners detect failures.</p>';
+    return;
+  }
+
+  const sevColor = { critical: "text-red-500", high: "text-orange-400", medium: "text-yellow-400", low: "text-gray-400" };
+  const statusBadge = { open: "bg-red-800 text-red-200", "in-fix": "bg-amber-800 text-amber-200", fixed: "bg-green-800 text-green-200", "wont-fix": "bg-gray-700 text-gray-300", duplicate: "bg-gray-700 text-gray-400" };
+
+  let rows = "";
+  for (const bug of bugs) {
+    const sev = escapeHtml(bug.severity || "—");
+    const scanner = escapeHtml(bug.scanner || "—");
+    const status = escapeHtml(bug.status || "—");
+    const discovered = bug.discoveredAt ? new Date(bug.discoveredAt).toLocaleString() : "—";
+    const testName = escapeHtml((bug.evidence?.testName || bug.bugId || "—").slice(0, 60));
+    rows += `<tr class="border-t border-gray-700 hover:bg-gray-800">
+      <td class="py-1.5 px-2 text-xs font-mono text-blue-300">${escapeHtml(bug.bugId || "—")}</td>
+      <td class="py-1.5 px-2 text-xs">${scanner}</td>
+      <td class="py-1.5 px-2 text-xs ${sevColor[bug.severity] || ""}">${sev}</td>
+      <td class="py-1.5 px-2 text-xs"><span class="px-1.5 py-0.5 rounded text-xs ${statusBadge[bug.status] || "bg-gray-700"}">${status}</span></td>
+      <td class="py-1.5 px-2 text-xs text-gray-400">${testName}</td>
+      <td class="py-1.5 px-2 text-xs text-gray-500">${discovered}</td>
+    </tr>`;
+  }
+
+  container.innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-gray-400 text-xs border-b border-gray-600">
+      <th class="py-1 px-2">Bug ID</th>
+      <th class="py-1 px-2">Scanner</th>
+      <th class="py-1 px-2">Severity</th>
+      <th class="py-1 px-2">Status</th>
+      <th class="py-1 px-2">Test</th>
+      <th class="py-1 px-2">Discovered</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+window.loadBugRegistry = loadBugRegistry;
+window.renderBugRegistry = renderBugRegistry;
+
+// ─── Phase FORGE-SHOP-02 Slice 02.2 — Review Queue UI ────────────────
+
+async function loadReviewQueue() {
+  if (document.hidden) return;
+  try {
+    const body = {};
+    const f = state.review.filters;
+    if (f.source.length) body.source = f.source;
+    if (f.severity.length) body.severity = f.severity;
+    if (f.status.length) body.status = f.status;
+
+    const res = await fetch(`${API_BASE}/api/tool/forge_review_list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : (data.items || []);
+      state.review.items = items;
+      state.review.lastError = null;
+    } else {
+      state.review.lastError = `HTTP ${res.status}`;
+    }
+  } catch (err) {
+    state.review.lastError = err.message;
+  }
+  renderReviewPanel();
+  if (!state.review.refreshTimer) {
+    state.review.refreshTimer = setInterval(loadReviewQueue, 15_000);
+  }
+}
+
+function renderReviewPanel() {
+  const items = state.review.items || [];
+  renderReviewList(items);
+  const selected = items.find(i => i.itemId === state.review.selectedItemId);
+  renderReviewDetail(selected || null);
+}
+
+function renderReviewList(items) {
+  const pane = document.getElementById("review-list-pane");
+  if (!pane) return;
+
+  if (items.length === 0) {
+    pane.innerHTML = '<div data-testid="review-empty-state" class="text-gray-500 text-center py-8">🧹 Shop floor clear — no pending reviews</div>';
+    return;
+  }
+
+  const severityColors = {
+    blocker: "bg-red-900/40 text-red-300",
+    high: "bg-orange-900/40 text-orange-300",
+    medium: "bg-yellow-900/40 text-yellow-300",
+    low: "bg-gray-700 text-gray-300",
+  };
+
+  const html = items.map(item => {
+    const age = item.createdAt
+      ? (() => {
+          const ms = Date.now() - new Date(item.createdAt).getTime();
+          if (ms > 86400000) return `${Math.round(ms / 86400000)}d`;
+          if (ms > 3600000) return `${Math.round(ms / 3600000)}h`;
+          return `${Math.round(ms / 60000)}m`;
+        })()
+      : "—";
+    const sevCls = severityColors[item.severity] || severityColors.low;
+    const selected = item.itemId === state.review.selectedItemId ? "border-blue-500" : "border-gray-700";
+    return `<div class="review-item p-2 mb-2 rounded border ${selected} cursor-pointer hover:border-blue-400" data-testid="review-item-${item.itemId}" onclick="selectReviewItem('${escHtml(item.itemId)}')">
+      <div class="flex items-center gap-2 text-xs mb-1">
+        <span class="px-1.5 py-0.5 rounded ${sevCls}">${escHtml(item.severity)}</span>
+        <span class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">${escHtml(item.source)}</span>
+        <span class="ml-auto text-gray-500">${age}</span>
+      </div>
+      <div class="text-sm text-gray-200 truncate">${escHtml(item.title)}</div>
+    </div>`;
+  }).join("");
+  pane.innerHTML = html;
+}
+
+function renderReviewDetail(item) {
+  const pane = document.getElementById("review-detail-pane");
+  if (!pane) return;
+
+  if (!item) {
+    pane.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">Select a review item to see details</p>';
+    return;
+  }
+
+  const contextJson = item.context ? JSON.stringify(item.context, null, 2) : "null";
+  const isOpen = item.status === "open";
+
+  // Preserve note text if refreshing the same item
+  const existingNote = pane.querySelector('[data-testid="review-note"]');
+  const preservedNote = existingNote && state.review.selectedItemId === item.itemId ? existingNote.value : "";
+
+  pane.innerHTML = `
+    <h3 class="text-sm font-semibold text-gray-200 mb-2">${escHtml(item.title)}</h3>
+    <div class="text-xs text-gray-500 mb-3">
+      <span>${escHtml(item.source)}</span> · <span>${escHtml(item.severity)}</span> · <span>${escHtml(item.status)}</span>
+      ${item.correlationId ? ` · <span class="text-gray-600">${escHtml(item.correlationId)}</span>` : ""}
+    </div>
+    <div class="mb-3">
+      <p class="text-xs text-gray-500 mb-1">Context:</p>
+      <pre class="text-xs bg-gray-900 p-2 rounded overflow-auto max-h-40 text-gray-300">${escHtml(contextJson)}</pre>
+    </div>
+    ${isOpen ? `
+      <div class="mb-3">
+        <textarea data-testid="review-note" class="w-full text-xs bg-gray-900 border border-gray-700 rounded p-2 text-gray-300" rows="2" placeholder="Optional note…">${escHtml(preservedNote)}</textarea>
+      </div>
+      <div class="flex gap-2">
+        <button data-testid="review-action-approve" class="text-xs px-3 py-1 rounded bg-green-700 text-white hover:bg-green-600" onclick="handleReviewAction('${escHtml(item.itemId)}', 'approve')">✓ Approve</button>
+        <button data-testid="review-action-reject" class="text-xs px-3 py-1 rounded bg-red-700 text-white hover:bg-red-600" onclick="handleReviewAction('${escHtml(item.itemId)}', 'reject')">✗ Reject</button>
+        <button data-testid="review-action-defer" class="text-xs px-3 py-1 rounded bg-gray-600 text-white hover:bg-gray-500" onclick="handleReviewAction('${escHtml(item.itemId)}', 'defer')">⏸ Defer</button>
+      </div>
+    ` : `<p class="text-xs text-gray-500">Resolved: ${escHtml(item.resolution || "—")} by ${escHtml(item.resolvedBy || "—")}</p>`}
+  `;
+}
+
+function selectReviewItem(itemId) {
+  state.review.selectedItemId = itemId;
+  renderReviewPanel();
+}
+
+async function handleReviewAction(itemId, resolution) {
+  const noteEl = document.querySelector('[data-testid="review-note"]');
+  const note = noteEl?.value || null;
+  try {
+    const res = await fetch(`${API_BASE}/api/tool/forge_review_resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itemId, resolution, resolvedBy: "dashboard", note }),
+    });
+    if (res.ok) {
+      state.review.items = state.review.items.filter(i => i.itemId !== itemId);
+      state.review.selectedItemId = null;
+      renderReviewPanel();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      if (data.code === "ERR_ALREADY_RESOLVED") {
+        showToast?.("Item already resolved");
+      }
+    }
+  } catch (err) {
+    showToast?.(`Review action failed: ${err.message}`);
+  }
+}
+
+function switchToReviewTab(preset) {
+  if (preset?.status) {
+    state.review.filters.status = Array.isArray(preset.status) ? preset.status : [preset.status];
+  }
+  const reviewBtn = document.querySelector('[data-tab="review"]');
+  if (reviewBtn) reviewBtn.click();
+}
+
+// Wire filter chip clicks
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-filter-type][data-filter-value]");
+  if (!chip || !chip.closest("#tab-review")) return;
+
+  const type = chip.dataset.filterType;
+  const value = chip.dataset.filterValue;
+  if (!type || !value) return;
+
+  const arr = state.review.filters[type];
+  if (!arr) return;
+
+  const idx = arr.indexOf(value);
+  if (idx >= 0) {
+    arr.splice(idx, 1);
+    chip.classList.remove("tab-active", "border-blue-500", "text-blue-400");
+    chip.classList.add("border-gray-600", "text-gray-400");
+  } else {
+    arr.push(value);
+    chip.classList.add("tab-active", "border-blue-500", "text-blue-400");
+    chip.classList.remove("border-gray-600", "text-gray-400");
+  }
+  loadReviewQueue();
+});
+
+window.selectReviewItem = selectReviewItem;
+window.handleReviewAction = handleReviewAction;
+window.switchToReviewTab = switchToReviewTab;
+
+// ─── Timeline Tab (Phase FORGE-SHOP-05 Slice 05.2) ───────────────
+
+const TIMELINE_WINDOW_MS = {
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "6h": 6 * 3_600_000,
+  "24h": 24 * 3_600_000,
+  "7d": 7 * 86_400_000,
+  "30d": 30 * 86_400_000,
+};
+
+const TIMELINE_SOURCE_ICONS = {
+  "hub-event": "📡", run: "🏃", memory: "🧠", openbrain: "🧪",
+  watch: "👁", tempering: "🛠", bug: "🐛", incident: "🚨", "forge-master": "🤖",
+};
+
+function timelineParseHash() {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#timeline")) return {};
+  const qs = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+  const params = new URLSearchParams(qs);
+  return {
+    correlationId: params.get("correlationId") || null,
+    window: params.get("window") || null,
+    groupBy: params.get("groupBy") || null,
+    sources: params.get("sources") ? params.get("sources").split(",") : null,
+  };
+}
+
+function timelineUpdateHash() {
+  const parts = [];
+  if (state.timeline.correlationId) parts.push(`correlationId=${encodeURIComponent(state.timeline.correlationId)}`);
+  if (state.timeline.window) parts.push(`window=${state.timeline.window}`);
+  if (state.timeline.groupBy !== "time") parts.push(`groupBy=${state.timeline.groupBy}`);
+  const activeSources = state.timeline.sources || [];
+  const allSources = ["hub-event", "run", "memory", "openbrain", "watch", "tempering", "bug", "incident", "forge-master"];
+  if (activeSources.length > 0 && activeSources.length < allSources.length) {
+    parts.push(`sources=${activeSources.join(",")}`);
+  }
+  const qs = parts.length ? `?${parts.join("&")}` : "";
+  history.replaceState(null, "", `#timeline${qs}`);
+}
+
+function loadTimelineTab() {
+  const hashParams = timelineParseHash();
+  if (hashParams.correlationId) state.timeline.correlationId = hashParams.correlationId;
+  if (hashParams.window && TIMELINE_WINDOW_MS[hashParams.window]) state.timeline.window = hashParams.window;
+  if (hashParams.groupBy === "correlation") state.timeline.groupBy = "correlation";
+  if (hashParams.sources) state.timeline.sources = hashParams.sources;
+
+  // Sync UI chips with state
+  syncTimelineWindowChips();
+  syncTimelineSourceChips();
+  syncTimelineViewBtns();
+  const corrInput = document.getElementById("timeline-correlation-input");
+  if (corrInput) corrInput.value = state.timeline.correlationId || "";
+
+  loadTimelineData();
+}
+
+function syncTimelineWindowChips() {
+  document.querySelectorAll(".timeline-window-chip").forEach((chip) => {
+    if (chip.dataset.window === state.timeline.window) {
+      chip.classList.add("tab-active", "border-cyan-500", "text-cyan-400");
+      chip.classList.remove("border-gray-600", "text-gray-400");
+    } else {
+      chip.classList.remove("tab-active", "border-cyan-500", "text-cyan-400");
+      chip.classList.add("border-gray-600", "text-gray-400");
+    }
+  });
+}
+
+function syncTimelineSourceChips() {
+  document.querySelectorAll(".timeline-source-chip").forEach((chip) => {
+    const src = chip.dataset.source;
+    if (state.timeline.sources.includes(src)) {
+      chip.classList.add("tab-active", "border-cyan-500", "text-cyan-400");
+      chip.classList.remove("border-gray-600", "text-gray-400");
+    } else {
+      chip.classList.remove("tab-active", "border-cyan-500", "text-cyan-400");
+      chip.classList.add("border-gray-600", "text-gray-400");
+    }
+  });
+}
+
+function syncTimelineViewBtns() {
+  const flatBtn = document.getElementById("timeline-view-flat");
+  const threadBtn = document.getElementById("timeline-view-threaded");
+  if (state.timeline.groupBy === "time") {
+    flatBtn?.classList.add("tab-active", "border-cyan-500", "text-cyan-400");
+    flatBtn?.classList.remove("border-gray-600", "text-gray-400");
+    threadBtn?.classList.remove("tab-active", "border-cyan-500", "text-cyan-400");
+    threadBtn?.classList.add("border-gray-600", "text-gray-400");
+  } else {
+    threadBtn?.classList.add("tab-active", "border-cyan-500", "text-cyan-400");
+    threadBtn?.classList.remove("border-gray-600", "text-gray-400");
+    flatBtn?.classList.remove("tab-active", "border-cyan-500", "text-cyan-400");
+    flatBtn?.classList.add("border-gray-600", "text-gray-400");
+  }
+}
+
+async function loadTimelineData() {
+  const now = new Date();
+  const windowMs = TIMELINE_WINDOW_MS[state.timeline.window] || TIMELINE_WINDOW_MS["24h"];
+  const from = new Date(now.getTime() - windowMs).toISOString();
+  const to = now.toISOString();
+
+  const params = new URLSearchParams();
+  params.set("from", from);
+  params.set("to", to);
+  params.set("groupBy", state.timeline.groupBy);
+  params.set("limit", "500");
+  if (state.timeline.correlationId) params.set("correlationId", state.timeline.correlationId);
+  if (state.timeline.sources.length > 0 && state.timeline.sources.length < 9) {
+    params.set("sources", state.timeline.sources.join(","));
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/timeline?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    state.timeline.events = data.events || [];
+    state.timeline.threads = data.threads || [];
+    state.timeline.lastError = null;
+
+    // Update stats
+    const totalEl = document.getElementById("timeline-total");
+    if (totalEl) totalEl.textContent = data.total ?? 0;
+    const windowEl = document.getElementById("timeline-window-label");
+    if (windowEl) windowEl.textContent = `${data.windowFrom ? new Date(data.windowFrom).toLocaleString() : "?"} → ${data.windowTo ? new Date(data.windowTo).toLocaleString() : "?"}`;
+    const durEl = document.getElementById("timeline-duration");
+    if (durEl) durEl.textContent = `${data.durationMs ?? 0}ms`;
+
+    const truncBanner = document.getElementById("timeline-truncated-banner");
+    if (truncBanner) truncBanner.classList.toggle("hidden", !data.truncated);
+
+    const errorEl = document.getElementById("timeline-error");
+    if (errorEl) { errorEl.classList.add("hidden"); errorEl.textContent = ""; }
+
+    if (state.timeline.groupBy === "correlation") {
+      renderTimelineThreaded(data.threads || []);
+    } else {
+      renderTimelineFlat(data.events || []);
+    }
+  } catch (err) {
+    state.timeline.lastError = err.message;
+    const errorEl = document.getElementById("timeline-error");
+    if (errorEl) {
+      errorEl.textContent = `Failed to load timeline: ${err.message}`;
+      errorEl.classList.remove("hidden");
+    }
+  }
+
+  // Auto-refresh
+  const autoEl = document.getElementById("timeline-auto-refresh");
+  if (autoEl && autoEl.checked && !state.timeline.refreshTimer) {
+    state.timeline.refreshTimer = setInterval(loadTimelineData, 10_000);
+  }
+
+  timelineUpdateHash();
+}
+
+function timelineRelativeTime(isoStr) {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${(diff / 3_600_000).toFixed(1)}h ago`;
+  return `${(diff / 86_400_000).toFixed(1)}d ago`;
+}
+
+function renderTimelineFlat(events) {
+  const container = document.getElementById("timeline-stream");
+  if (!container) return;
+
+  if (!events || events.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-center py-8" data-testid="timeline-empty-state">No events found. Try widening the time window or removing filters.</p>';
+    return;
+  }
+
+  let html = '<table class="w-full text-xs"><thead><tr class="text-gray-500 border-b border-gray-700">'
+    + '<th class="py-1 text-left">Time</th>'
+    + '<th class="py-1 text-left">Source</th>'
+    + '<th class="py-1 text-left">Event</th>'
+    + '<th class="py-1 text-left">Correlation</th>'
+    + '<th class="py-1 text-left">Payload</th>'
+    + '</tr></thead><tbody>';
+
+  for (const evt of events) {
+    const src = evt.source || "unknown";
+    const icon = TIMELINE_SOURCE_ICONS[src] || "·";
+    const cid = evt.correlationId || "";
+    const cidShort = cid.length > 12 ? cid.slice(0, 12) + "…" : cid;
+    const payloadStr = evt.payload ? JSON.stringify(evt.payload) : "";
+    const payloadTrunc = payloadStr.length > 80 ? payloadStr.slice(0, 80) + "…" : payloadStr;
+    html += `<tr class="border-b border-gray-700/30 hover:bg-gray-700/30 timeline-event-row" data-correlation="${searchEscapeHtml(cid)}">
+      <td class="py-1 pr-2 text-gray-400 whitespace-nowrap" title="${searchEscapeHtml(evt.ts || "")}">${timelineRelativeTime(evt.ts)}</td>
+      <td class="py-1 pr-2"><span class="search-source-badge" data-source="${searchEscapeHtml(src)}">${icon} ${searchEscapeHtml(src)}</span></td>
+      <td class="py-1 pr-2 text-gray-200">${searchEscapeHtml(evt.event || "")}</td>
+      <td class="py-1 pr-2"><span class="timeline-cid-chip text-cyan-400 cursor-pointer hover:underline" title="Filter by this correlationId" onclick="filterTimelineByCorrelation('${searchEscapeHtml(cid)}')">${searchEscapeHtml(cidShort)}</span></td>
+      <td class="py-1 text-gray-500 truncate max-w-xs" title="${searchEscapeHtml(payloadStr)}">${searchEscapeHtml(payloadTrunc)}</td>
+    </tr>`;
+  }
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function renderTimelineThreaded(threads) {
+  const container = document.getElementById("timeline-stream");
+  if (!container) return;
+
+  if (!threads || threads.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-center py-8" data-testid="timeline-empty-state">No threads found. Try widening the time window or removing filters.</p>';
+    return;
+  }
+
+  let html = '';
+  for (const thread of threads) {
+    const cid = thread.correlationId || "__ungrouped__";
+    const cidLabel = cid === "__ungrouped__" ? "(ungrouped)" : (cid.length > 16 ? cid.slice(0, 16) + "…" : cid);
+    const eventCount = thread.events ? thread.events.length : 0;
+    const sourceChips = (thread.sources || []).map(s => {
+      const icon = TIMELINE_SOURCE_ICONS[s] || "·";
+      return `<span class="search-source-badge" data-source="${searchEscapeHtml(s)}">${icon} ${searchEscapeHtml(s)}</span>`;
+    }).join(" ");
+    const span = thread.firstTs && thread.lastTs
+      ? `${timelineRelativeTime(thread.firstTs)} → ${timelineRelativeTime(thread.lastTs)}`
+      : "—";
+
+    html += `<details class="mb-2 bg-gray-700/30 rounded" data-testid="timeline-thread" data-correlation="${searchEscapeHtml(cid)}">
+      <summary class="px-3 py-2 cursor-pointer hover:bg-gray-700/50 flex items-center gap-3 text-xs select-none">
+        <span class="timeline-cid-chip text-cyan-400 font-mono cursor-pointer hover:underline" onclick="event.stopPropagation(); filterTimelineByCorrelation('${searchEscapeHtml(cid)}')" title="Filter by this correlationId">${searchEscapeHtml(cidLabel)}</span>
+        <span class="text-gray-500">${span}</span>
+        ${sourceChips}
+        <span class="text-gray-500 ml-auto">${eventCount} event${eventCount !== 1 ? "s" : ""}</span>
+      </summary>
+      <div class="px-3 pb-2">`;
+
+    if (thread.events && thread.events.length > 0) {
+      html += '<table class="w-full text-xs"><tbody>';
+      for (const evt of thread.events) {
+        const src = evt.source || "unknown";
+        const evtIcon = TIMELINE_SOURCE_ICONS[src] || "·";
+        const payloadStr = evt.payload ? JSON.stringify(evt.payload) : "";
+        const payloadTrunc = payloadStr.length > 60 ? payloadStr.slice(0, 60) + "…" : payloadStr;
+        html += `<tr class="border-b border-gray-700/20">
+          <td class="py-0.5 pr-2 text-gray-400 whitespace-nowrap" title="${searchEscapeHtml(evt.ts || "")}">${timelineRelativeTime(evt.ts)}</td>
+          <td class="py-0.5 pr-2"><span class="search-source-badge" data-source="${searchEscapeHtml(src)}">${evtIcon}</span></td>
+          <td class="py-0.5 pr-2 text-gray-200">${searchEscapeHtml(evt.event || "")}</td>
+          <td class="py-0.5 text-gray-500 truncate max-w-xs">${searchEscapeHtml(payloadTrunc)}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+    }
+
+    html += '</div></details>';
+  }
+
+  container.innerHTML = html;
+}
+
+function filterTimelineByCorrelation(cid) {
+  state.timeline.correlationId = cid || null;
+  const corrInput = document.getElementById("timeline-correlation-input");
+  if (corrInput) corrInput.value = cid || "";
+  loadTimelineData();
+}
+
+function clearTimelineCorrelation() {
+  state.timeline.correlationId = null;
+  const corrInput = document.getElementById("timeline-correlation-input");
+  if (corrInput) corrInput.value = "";
+  loadTimelineData();
+}
+
+// Timeline chip event listeners
+document.querySelectorAll(".timeline-window-chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    state.timeline.window = chip.dataset.window;
+    syncTimelineWindowChips();
+    loadTimelineData();
+  });
+});
+
+document.querySelectorAll(".timeline-source-chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const src = chip.dataset.source;
+    const idx = state.timeline.sources.indexOf(src);
+    if (idx >= 0) {
+      state.timeline.sources.splice(idx, 1);
+    } else {
+      state.timeline.sources.push(src);
+    }
+    syncTimelineSourceChips();
+    loadTimelineData();
+  });
+});
+
+document.querySelectorAll(".timeline-view-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.timeline.groupBy = btn.id === "timeline-view-threaded" ? "correlation" : "time";
+    syncTimelineViewBtns();
+    loadTimelineData();
+  });
+});
+
+// Correlation input: filter on Enter
+const _tlCorrInput = document.getElementById("timeline-correlation-input");
+if (_tlCorrInput) {
+  _tlCorrInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      state.timeline.correlationId = _tlCorrInput.value.trim() || null;
+      loadTimelineData();
+    }
+  });
+}
+
+// Auto-refresh toggle
+const _tlAutoRefresh = document.getElementById("timeline-auto-refresh");
+if (_tlAutoRefresh) {
+  _tlAutoRefresh.addEventListener("change", () => {
+    state.timeline.autoRefresh = _tlAutoRefresh.checked;
+    if (_tlAutoRefresh.checked) {
+      if (!state.timeline.refreshTimer) {
+        state.timeline.refreshTimer = setInterval(loadTimelineData, 10_000);
+      }
+    } else {
+      if (state.timeline.refreshTimer) {
+        clearInterval(state.timeline.refreshTimer);
+        state.timeline.refreshTimer = null;
+      }
+    }
+  });
+}
+
+// Deep-link support: if hash starts with #timeline, navigate there on load
+if (window.location.hash.startsWith("#timeline")) {
+  const tlBtn = document.querySelector('[data-tab="timeline"]');
+  if (tlBtn) setTimeout(() => tlBtn.click(), 100);
+}
+
+window.loadTimelineData = loadTimelineData;
+window.filterTimelineByCorrelation = filterTimelineByCorrelation;
+window.clearTimelineCorrelation = clearTimelineCorrelation;
+
+// ─── Inner Loop Tab (Phase-26 Slice 13) ────────────────────────
+//
+// Read-only projection over /api/innerloop/* endpoints. All six panels are
+// populated in parallel; each renders its own empty state so a missing
+// subsystem doesn't break the others. Uses the existing top-level
+// `escapeHtml(str)` helper already defined earlier in this file.
+
+async function loadInnerLoop() {
+  const err = document.getElementById("innerloop-error");
+  if (err) { err.classList.add("hidden"); err.textContent = ""; }
+
+  // Fetch all six endpoints concurrently.
+  const endpoints = [
+    ["status", "/api/innerloop/status"],
+    ["reviewer", "/api/innerloop/reviewer-calibration"],
+    ["gates", "/api/innerloop/gate-suggestions"],
+    ["anomalies", "/api/innerloop/cost-anomalies"],
+    ["fixes", "/api/innerloop/proposed-fixes"],
+    ["federation", "/api/innerloop/federation"],
+  ];
+  const results = await Promise.allSettled(endpoints.map(([, url]) =>
+    fetch(`${API_BASE}${url}`).then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+  ));
+
+  const data = {};
+  results.forEach((r, i) => {
+    const [key] = endpoints[i];
+    data[key] = r.status === "fulfilled" ? r.value : { __error: r.reason?.message || String(r.reason) };
+  });
+
+  renderInnerLoopSummary(data.status);
+  renderInnerLoopReviewer(data.reviewer);
+  renderInnerLoopGates(data.gates);
+  renderInnerLoopAnomalies(data.anomalies);
+  renderInnerLoopFixes(data.fixes);
+  renderInnerLoopFederation(data.federation);
+}
+
+function renderInnerLoopSummary(s) {
+  if (!s || s.__error) {
+    const msg = s?.__error || "unavailable";
+    ["reviewer", "skills", "federation", "autofix"].forEach((k) => {
+      const el = document.getElementById(`il-summary-${k}`);
+      if (el) el.textContent = "—";
+    });
+    const err = document.getElementById("innerloop-error");
+    if (err) { err.classList.remove("hidden"); err.textContent = `Summary: ${msg}`; }
+    return;
+  }
+  const r = document.getElementById("il-summary-reviewer");
+  if (r) r.textContent = `${s.reviewer.count}/${s.reviewer.threshold}${s.reviewer.eligible ? " ✓" : ""}`;
+  const sk = document.getElementById("il-summary-skills");
+  if (sk) sk.textContent = `${s.skills.pendingCount} pending`;
+  const f = document.getElementById("il-summary-federation");
+  if (f) f.textContent = s.federation.enabled ? `${s.federation.repoCount} repos` : "disabled";
+  const a = document.getElementById("il-summary-autofix");
+  if (a) a.textContent = `${s.autoFix.openProposals} open`;
+}
+
+function renderInnerLoopReviewer(r) {
+  const el = document.getElementById("il-reviewer-body");
+  if (!el) return;
+  if (!r || r.__error) { el.innerHTML = `<p class="text-amber-400">Unavailable: ${escapeHtml(r?.__error || "error")}</p>`; return; }
+  const pct = r.threshold > 0 ? Math.min(100, Math.round((r.count / r.threshold) * 100)) : 0;
+  el.innerHTML = `
+    <div class="flex items-center gap-3 mb-2">
+      <div class="text-lg font-semibold ${r.eligible ? "text-emerald-400" : "text-gray-300"}">${r.count} / ${r.threshold}</div>
+      <div class="text-xs">${r.eligible ? "<span class='text-emerald-400'>✓ eligible</span>" : "<span class='text-gray-500'>not yet eligible</span>"}</div>
+    </div>
+    <div class="w-full bg-gray-700 rounded h-2">
+      <div class="${r.eligible ? "bg-emerald-500" : "bg-gray-500"} h-2 rounded" style="width:${pct}%"></div>
+    </div>
+    <p class="mt-2 text-xs text-gray-500">Reviewer calibration becomes eligible once local review history reaches the threshold. Source: <code>.forge/reviews/*.json</code>.</p>
+  `;
+}
+
+function renderInnerLoopGates(g) {
+  const el = document.getElementById("il-gate-suggestions-body");
+  if (!el) return;
+  if (!g || g.__error) { el.innerHTML = `<p class="text-amber-400">Unavailable: ${escapeHtml(g?.__error || "error")}</p>`; return; }
+  const records = g.records || [];
+  const counters = g.counters || {};
+  if (records.length === 0) {
+    el.innerHTML = `<p class="text-gray-500">No gate-suggestion accepts recorded yet. Gate suggestions appear after you accept an auto-generated validation command.</p>`;
+    return;
+  }
+  const topKeys = Object.entries(counters).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const rowsHtml = records.slice(0, 10).map((r) => `
+    <tr class="border-t border-gray-700/50">
+      <td class="py-1 pr-3 text-gray-400">${escapeHtml(r.at || "")}</td>
+      <td class="py-1 pr-3">${escapeHtml(r.domain || "—")}</td>
+      <td class="py-1 pr-3 font-mono text-[11px] text-gray-300">${escapeHtml(r.suggestedCommand || "")}</td>
+      <td class="py-1 pr-3 text-gray-500">${escapeHtml((r.suggestionKey || "").slice(0, 8))}</td>
+    </tr>`).join("");
+  el.innerHTML = `
+    <div class="mb-3 flex flex-wrap gap-2">
+      ${topKeys.map(([k, n]) => `<span class="px-2 py-0.5 rounded bg-gray-700 text-[11px] text-gray-300"><code>${escapeHtml(k.slice(0, 8))}</code> · <strong>${n}</strong> accept${n === 1 ? "" : "s"}</span>`).join("")}
+    </div>
+    <table class="w-full text-left"><thead><tr class="text-[11px] uppercase text-gray-500"><th class="pr-3">When</th><th class="pr-3">Domain</th><th class="pr-3">Command</th><th>Key</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+    <p class="mt-2 text-xs text-gray-500">Showing ${Math.min(10, records.length)} of ${records.length}. A suggestion becomes promotable once its accept count exceeds the configured threshold.</p>
+  `;
+}
+
+function renderInnerLoopAnomalies(a) {
+  const el = document.getElementById("il-cost-anomalies-body");
+  if (!el) return;
+  if (!a || a.__error) { el.innerHTML = `<p class="text-amber-400">Unavailable: ${escapeHtml(a?.__error || "error")}</p>`; return; }
+  const rows = a.anomalies || [];
+  if (rows.length === 0) { el.innerHTML = `<p class="text-gray-500">No cost anomalies detected.</p>`; return; }
+  const rowsHtml = rows.slice(0, 20).map((r) => `
+    <tr class="border-t border-gray-700/50">
+      <td class="py-1 pr-3 text-gray-400">${escapeHtml(r.at || "")}</td>
+      <td class="py-1 pr-3">#${escapeHtml(String(r.sliceNumber ?? "—"))}</td>
+      <td class="py-1 pr-3 text-amber-400">${escapeHtml(String(r.ratio ?? "—"))}×</td>
+      <td class="py-1 pr-3 text-gray-500">${escapeHtml(r.model || "—")}</td>
+    </tr>`).join("");
+  el.innerHTML = `
+    <table class="w-full text-left"><thead><tr class="text-[11px] uppercase text-gray-500"><th class="pr-3">When</th><th class="pr-3">Slice</th><th class="pr-3">Ratio vs. median</th><th>Model</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+    <p class="mt-2 text-xs text-gray-500">Showing ${Math.min(20, rows.length)} of ${a.count}. Detection ratio and median window are configurable under <code>costAnomaly</code>.</p>
+  `;
+}
+
+function renderInnerLoopFixes(f) {
+  const el = document.getElementById("il-proposed-fixes-body");
+  if (!el) return;
+  if (!f || f.__error) { el.innerHTML = `<p class="text-amber-400">Unavailable: ${escapeHtml(f?.__error || "error")}</p>`; return; }
+  const fixes = f.fixes || [];
+  if (fixes.length === 0) { el.innerHTML = `<p class="text-gray-500">No fix proposals on disk. Proposals appear in <code>.forge/proposed-fixes/*.patch</code> when the auto-fix subsystem drafts a patch.</p>`; return; }
+  const rowsHtml = fixes.slice(0, 20).map((x) => `
+    <tr class="border-t border-gray-700/50">
+      <td class="py-1 pr-3 font-mono text-[11px] text-gray-300">${escapeHtml(x.fixId)}</td>
+      <td class="py-1 pr-3 text-gray-500">${escapeHtml(String(x.sizeBytes))} B</td>
+      <td class="py-1 pr-3 text-gray-500">${escapeHtml(new Date(x.mtimeMs).toISOString())}</td>
+    </tr>`).join("");
+  el.innerHTML = `
+    <table class="w-full text-left"><thead><tr class="text-[11px] uppercase text-gray-500"><th class="pr-3">Fix ID</th><th class="pr-3">Size</th><th>Modified</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+    <p class="mt-2 text-xs text-gray-500">Showing ${Math.min(20, fixes.length)} proposals. Apply or rollback via the Skills / Config tabs.</p>
+  `;
+}
+
+function renderInnerLoopFederation(f) {
+  const el = document.getElementById("il-federation-body");
+  if (!el) return;
+  if (!f || f.__error) { el.innerHTML = `<p class="text-amber-400">Unavailable: ${escapeHtml(f?.__error || "error")}</p>`; return; }
+  const enabled = !!f.enabled;
+  const repoCount = f.repos?.length || 0;
+  // Toggle switch — always visible so users can flip federation on/off from the GUI.
+  const toggleHtml = `
+    <div class="flex items-center gap-3 mb-3">
+      <label class="inline-flex items-center cursor-pointer">
+        <input type="checkbox" id="il-federation-toggle" class="sr-only peer" ${enabled ? "checked" : ""}>
+        <span class="relative w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></span>
+        <span class="ml-2 text-xs text-gray-300">${enabled ? "Enabled" : "Disabled"}</span>
+      </label>
+      <span class="text-[11px] text-gray-500">${escapeHtml(String(repoCount))} repo(s) configured · cap ${escapeHtml(String(f.limit))}</span>
+      <span id="il-federation-toggle-msg" class="text-[11px] text-gray-500"></span>
+    </div>`;
+  if (!enabled) {
+    el.innerHTML = `${toggleHtml}
+      <p class="text-gray-500 text-xs">Federation is off. Toggle it on to read trajectories from sibling repos listed under <code>brain.federation.repos</code> in <code>.forge.json</code>.</p>`;
+    wireFederationToggle();
+    return;
+  }
+  const errorsHtml = (f.configErrors || []).length > 0
+    ? `<div class="mb-3 p-2 border border-amber-600/50 rounded bg-amber-900/20 text-amber-300">
+         <div class="font-semibold text-xs mb-1">Configuration issues</div>
+         <ul class="list-disc pl-5 text-[11px] space-y-0.5">${f.configErrors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>
+       </div>` : "";
+  const trajs = f.trajectories || [];
+  const trajHtml = trajs.length === 0
+    ? `<p class="text-gray-500">No trajectories discovered yet (depth-2 scan across sibling repos).</p>`
+    : `<table class="w-full text-left"><thead><tr class="text-[11px] uppercase text-gray-500"><th class="pr-3">Repo</th><th class="pr-3">Plan</th><th class="pr-3">Slice</th><th>Modified</th></tr></thead><tbody>
+        ${trajs.slice(0, 20).map((t) => `
+          <tr class="border-t border-gray-700/50">
+            <td class="py-1 pr-3 text-gray-300 font-mono text-[11px]">${escapeHtml(t.repo || "")}</td>
+            <td class="py-1 pr-3">${escapeHtml(t.planBasename || "")}</td>
+            <td class="py-1 pr-3">${escapeHtml(t.sliceId || "")}</td>
+            <td class="py-1 pr-3 text-gray-500">${escapeHtml(new Date(t.mtimeMs).toISOString())}</td>
+          </tr>`).join("")}
+      </tbody></table>`;
+  el.innerHTML = `${toggleHtml}${errorsHtml}${trajHtml}`;
+  wireFederationToggle();
+}
+
+function wireFederationToggle() {
+  const toggle = document.getElementById("il-federation-toggle");
+  const msg = document.getElementById("il-federation-toggle-msg");
+  if (!toggle) return;
+  toggle.addEventListener("change", async (ev) => {
+    const target = !!ev.target.checked;
+    toggle.disabled = true;
+    if (msg) { msg.textContent = "Saving…"; msg.className = "text-[11px] text-gray-400"; }
+    try {
+      const res = await fetch(`${API_BASE}/api/innerloop/federation/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: target }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (msg) { msg.textContent = "Saved"; msg.className = "text-[11px] text-green-400"; }
+      // Re-render panel with fresh server state (picks up repos/errors/trajectories).
+      await loadInnerLoop();
+    } catch (err) {
+      toggle.checked = !target; // revert
+      toggle.disabled = false;
+      if (msg) { msg.textContent = `Failed: ${err.message}`; msg.className = "text-[11px] text-red-400"; }
+    }
+  }, { once: true });
+}
+
+window.loadInnerLoop = loadInnerLoop;
+
+// ─── Phase-26 Slice 14 — Welcome card (inner-loop features) ──────
+//
+// The card surfaces once per machine, on the first dashboard visit after
+// upgrade to v2.58+. Dismissal state is persisted via /api/dashboard-state,
+// so the card never reappears after any of its buttons are used.
+const WELCOME_INNERLOOP_KEY = "seenInnerLoop258";
+
+async function welcomeLoadState() {
+  try {
+    const res = await fetch(`${API_BASE}/api/dashboard-state`);
+    if (!res.ok) return {};
+    return await res.json();
+  } catch { return {}; }
+}
+
+async function welcomeMarkSeen() {
+  try {
+    await fetch(`${API_BASE}/api/dashboard-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [WELCOME_INNERLOOP_KEY]: true, seenAt: new Date().toISOString() }),
+    });
+  } catch { /* silently degrade — dismissal just won't persist this session */ }
+  const card = document.getElementById("welcome-innerloop");
+  if (card) card.classList.add("hidden");
+}
+
+async function welcomeMaybeShowInnerLoop() {
+  const state = await welcomeLoadState();
+  if (state && state[WELCOME_INNERLOOP_KEY]) return;  // already dismissed
+  const card = document.getElementById("welcome-innerloop");
+  if (card) card.classList.remove("hidden");
+}
+
+function welcomeDismissInnerLoop() { welcomeMarkSeen(); }
+function welcomeGotoInnerLoop() {
+  const btn = document.querySelector('[data-tab="innerloop"]');
+  if (btn) btn.click();
+  welcomeMarkSeen();
+}
+function welcomeGotoConfig() {
+  switchGroup('settings');
+  const btn = document.querySelector('[data-tab="settings-general"]');
+  if (btn) btn.click();
+  welcomeMarkSeen();
+}
+
+window.welcomeDismissInnerLoop = welcomeDismissInnerLoop;
+window.welcomeGotoInnerLoop = welcomeGotoInnerLoop;
+window.welcomeGotoConfig = welcomeGotoConfig;
+
+document.addEventListener("DOMContentLoaded", () => {
+  // Run after the main shell has settled; 250ms is enough for API_BASE to be live.
+  setTimeout(() => { welcomeMaybeShowInnerLoop(); }, 250);
+});
+
+// ─── GitHub Metrics Tab ────────────────────────────────────────────────
+async function loadGithubMetrics() {
+  const orgInput = document.getElementById("gm-org-input");
+  const org = orgInput?.value?.trim() || state.githubMetrics.org || "";
+  if (org) state.githubMetrics.org = org;
+
+  const errEl = document.getElementById("gm-error");
+  if (errEl) errEl.classList.add("hidden");
+
+  try {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : "";
+    const [metricsBody, readinessChecks] = await Promise.all([
+      fetch(`${API_BASE}/api/github-metrics${qs}`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/github-readiness`).then((r) => r.json()).catch(() => []),
+    ]);
+    const { metrics = [], costReport = null } = metricsBody;
+
+    const readinessEl = document.getElementById("gm-readiness");
+    if (readinessEl) {
+      readinessEl.innerHTML = window.githubReadinessRenderWidget?.(Array.isArray(readinessChecks) ? readinessChecks : []) ?? "";
+    }
+
+    const adoptionEl = document.getElementById("gm-adoption-panel");
+    if (adoptionEl) {
+      adoptionEl.innerHTML = window.githubMetricsRenderAdoptionPanel?.(metrics) ?? "";
+    }
+
+    const orchEl = document.getElementById("gm-orchestration-panel");
+    if (orchEl) {
+      orchEl.innerHTML = window.githubMetricsRenderOrchestrationPanel?.(costReport) ?? "";
+    }
+
+    const teamEl = document.getElementById("gm-per-team-panel");
+    if (teamEl) {
+      teamEl.innerHTML = window.githubMetricsRenderPerTeamTable?.([]) ?? "";
+    }
+
+    state.githubMetrics.lastFetch = Date.now();
+  } catch (e) {
+    if (errEl) {
+      errEl.textContent = `Failed to load GitHub metrics: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
 }
 

@@ -255,24 +255,431 @@
         "pforge ext list"
       ]
     },
+    "config": {
+      "description": "Read or write settable keys in .forge.json (v2.56.0+). Writes are atomic (tmp + rename). Use this instead of editing .forge.json by hand for schema-validated keys.",
+      "subcommands": {
+        "get": {
+          "description": "Read a value",
+          "args": [
+            {
+              "name": "key",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "set": {
+          "description": "Write a value",
+          "args": [
+            {
+              "name": "key",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "value",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "list": {
+          "description": "Show all settable keys and their current values",
+          "args": []
+        }
+      },
+      "settableKeys": {
+        "update-source": {
+          "jsonKey": "updateSource",
+          "allowed": [
+            "auto",
+            "github-tags",
+            "local-sibling"
+          ],
+          "default": "auto",
+          "description": "Where `pforge update` pulls template bytes from. `auto` picks the newer of sibling clone and GitHub tag; `github-tags` ignores siblings; `local-sibling` always uses ../plan-forge (contributor workflow)."
+        }
+      },
+      "examples": [
+        "pforge config get update-source",
+        "pforge config set update-source github-tags",
+        "pforge config list"
+      ]
+    },
     "update": {
-      "description": "Update framework files from Plan Forge source",
+      "description": "Update framework files from Plan Forge source. v2.56.0+ auto-selects source: picks newer of local sibling clone and latest GitHub tag (configurable via `updateSource` in .forge.json: auto|github-tags|local-sibling). Use `pforge self-update` to force-pull the latest GitHub release. Never clone the Plan Forge repo just to run an update — that's the first-time install path.",
       "args": [
         {
           "name": "source",
           "type": "path",
           "required": false,
-          "description": "Plan Forge source path"
+          "description": "Optional explicit Plan Forge source path. Leave empty to use auto-mode."
         }
       ],
       "flags": {
         "--dry-run": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Preview changes without writing"
+        },
+        "--from-github": {
+          "type": "boolean",
+          "description": "Force GitHub tagged release source (ignore sibling clone)"
+        },
+        "--tag": {
+          "type": "string",
+          "description": "Specific tag to pull (e.g. v2.56.0); implies --from-github"
+        },
+        "--allow-dev": {
+          "type": "boolean",
+          "description": "Bypass the -dev-over-clean-release refusal guard"
         }
       },
       "examples": [
-        "pforge update ../plan-forge",
-        "pforge update --dry-run"
+        "pforge update                  # auto: newer of sibling or latest tag (v2.56.0+)",
+        "pforge update --dry-run        # preview only, no writes",
+        "pforge update --from-github    # force GitHub release source",
+        "pforge self-update             # alias for latest GitHub release, overwrites existing install"
+      ]
+    },
+    "incident": {
+      "description": "Capture an incident — record description, severity, affected files, and optional resolution time for MTTR tracking",
+      "args": [
+        {
+          "name": "description",
+          "type": "string",
+          "required": true,
+          "description": "Short description of the incident"
+        }
+      ],
+      "flags": {
+        "--severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Incident severity (default: medium)"
+        },
+        "--files": {
+          "type": "string",
+          "description": "Comma-separated list of affected file paths"
+        },
+        "--resolved-at": {
+          "type": "string",
+          "description": "ISO 8601 resolution timestamp for MTTR calculation (e.g., 2024-01-01T02:30:00Z)"
+        }
+      },
+      "examples": [
+        "pforge incident \"API latency spike on /checkout\"",
+        "pforge incident \"Database connection pool exhausted\" --severity high",
+        "pforge incident \"Deploy failed\" --severity critical --files src/deploy.ts,infra/k8s.yaml",
+        "pforge incident \"Resolved: API latency\" --resolved-at 2024-01-01T02:30:00Z"
+      ]
+    },
+    "triage": {
+      "description": "Triage open alerts — rank incidents and drift violations by priority (severity × recency). Read-only.",
+      "args": [],
+      "flags": {
+        "--min-severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Minimum severity to include (default: low)"
+        },
+        "--max": {
+          "type": "number",
+          "description": "Maximum number of alerts to return (default: 20)"
+        }
+      },
+      "examples": [
+        "pforge triage",
+        "pforge triage --min-severity high",
+        "pforge triage --min-severity medium --max 10"
+      ]
+    },
+    "runbook": {
+      "description": "Generate a human-readable operational runbook from a hardened plan file — includes slices, scope, gates, and recent incidents",
+      "args": [
+        {
+          "name": "plan",
+          "type": "path",
+          "required": true,
+          "description": "Path to the plan file (e.g., docs/plans/Phase-1-AUTH-PLAN.md)"
+        }
+      ],
+      "flags": {
+        "--no-incidents": {
+          "type": "boolean",
+          "description": "Exclude recent incidents from the runbook"
+        }
+      },
+      "examples": [
+        "pforge runbook docs/plans/Phase-1-AUTH-PLAN.md",
+        "pforge runbook docs/plans/Phase-1-AUTH-PLAN.md --no-incidents"
+      ]
+    },
+    "drift": {
+      "description": "Score codebase against architecture guardrails — track drift over time",
+      "args": [],
+      "flags": {
+        "--threshold": {
+          "type": "number",
+          "description": "Minimum acceptable score (default 70)"
+        }
+      },
+      "examples": [
+        "pforge drift",
+        "pforge drift --threshold 80"
+      ]
+    },
+    "deploy-log": {
+      "description": "Record a deployment — version, deployer, optional notes, slice ref",
+      "args": [
+        {
+          "name": "version",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "flags": {
+        "--notes": {
+          "type": "string",
+          "description": "Deployment notes"
+        },
+        "--slice": {
+          "type": "string",
+          "description": "Related slice reference"
+        }
+      },
+      "examples": [
+        "pforge deploy-log 2.52.1",
+        "pforge deploy-log 2.52.1 --notes \"packaging hotfix\""
+      ]
+    },
+    "secret-scan": {
+      "description": "Scan recent commits for leaked secrets using Shannon entropy analysis",
+      "args": [],
+      "flags": {
+        "--depth": {
+          "type": "number",
+          "description": "Number of commits to scan (default 20)"
+        }
+      },
+      "examples": [
+        "pforge secret-scan",
+        "pforge secret-scan --depth 50"
+      ]
+    },
+    "env-diff": {
+      "description": "Compare environment variable keys across .env files — detect missing keys",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge env-diff"
+      ]
+    },
+    "regression-guard": {
+      "description": "Run validation gates from plan files — guard against regressions when files change",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge regression-guard"
+      ]
+    },
+    "hotspot": {
+      "description": "Identify git churn hotspots — most frequently changed files",
+      "args": [],
+      "flags": {
+        "--top": {
+          "type": "number",
+          "description": "Top N files (default 20)"
+        }
+      },
+      "examples": [
+        "pforge hotspot",
+        "pforge hotspot --top 10"
+      ]
+    },
+    "dep-watch": {
+      "description": "Dependency vulnerability + freshness watcher",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge dep-watch"
+      ]
+    },
+    "fix-proposal": {
+      "description": "Generate a fix-proposal plan for a drift or incident finding",
+      "args": [
+        {
+          "name": "finding-id",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "flags": {},
+      "examples": [
+        "pforge fix-proposal drift-2026-04-19-001"
+      ]
+    },
+    "quorum-analyze": {
+      "description": "Assemble a quorum analysis prompt from LiveGuard data for multi-model dispatch",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge quorum-analyze"
+      ]
+    },
+    "health-trend": {
+      "description": "Health trend analysis — drift, cost, incidents, model performance over time",
+      "args": [],
+      "flags": {
+        "--window": {
+          "type": "string",
+          "description": "Time window (7d, 30d, 90d; default 30d)"
+        }
+      },
+      "examples": [
+        "pforge health-trend",
+        "pforge health-trend --window 7d"
+      ]
+    },
+    "org-rules": {
+      "description": "Export org custom instructions from .github/instructions/ for GitHub org settings",
+      "args": [
+        {
+          "name": "subcommand",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "export"
+          ]
+        }
+      ],
+      "flags": {
+        "--format": {
+          "type": "string",
+          "enum": [
+            "github"
+          ],
+          "description": "Output format"
+        },
+        "--output": {
+          "type": "path",
+          "description": "Write to file instead of stdout"
+        }
+      },
+      "examples": [
+        "pforge org-rules export",
+        "pforge org-rules export --output org-rules.md"
+      ]
+    },
+    "self-update": {
+      "description": "Check for and install the latest Plan Forge release from GitHub",
+      "args": [],
+      "flags": {
+        "--force": {
+          "type": "boolean",
+          "description": "Skip prompts"
+        },
+        "--dry-run": {
+          "type": "boolean",
+          "description": "Show what would happen"
+        }
+      },
+      "examples": [
+        "pforge self-update",
+        "pforge self-update --dry-run"
+      ]
+    },
+    "version-bump": {
+      "description": "Update VERSION, package.json, docs/README/ROADMAP version badges",
+      "args": [
+        {
+          "name": "version",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "flags": {},
+      "examples": [
+        "pforge version-bump 2.53.0"
+      ]
+    },
+    "migrate-memory": {
+      "description": "Merge legacy *-history.json ledgers into canonical .jsonl siblings (idempotent)",
+      "args": [],
+      "flags": {
+        "--dry-run": {
+          "type": "boolean",
+          "description": "Preview without modifying files"
+        }
+      },
+      "examples": [
+        "pforge migrate-memory",
+        "pforge migrate-memory --dry-run"
+      ]
+    },
+    "drain-memory": {
+      "description": "Drain pending OpenBrain queue records via the local MCP server REST endpoint",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge drain-memory"
+      ]
+    },
+    "testbed-happypath": {
+      "description": "Run all happy-path testbed scenarios sequentially with aggregated pass/fail summary",
+      "args": [],
+      "flags": {
+        "--dry-run": {
+          "type": "boolean",
+          "description": "List scenarios without executing"
+        },
+        "--testbed-path": {
+          "type": "path",
+          "description": "Path to the testbed repository"
+        }
+      },
+      "examples": [
+        "pforge testbed-happypath",
+        "pforge testbed-happypath --dry-run"
+      ]
+    },
+    "mcp-call": {
+      "description": "Invoke any MCP tool by name via the local MCP server on :3100 — covers tools without dedicated CLI wrappers",
+      "args": [
+        {
+          "name": "tool",
+          "type": "string",
+          "required": true,
+          "description": "Tool name (e.g., forge_crucible_list or crucible-list)"
+        }
+      ],
+      "flags": {
+        "--json": {
+          "type": "string",
+          "description": "JSON payload to send as params"
+        }
+      },
+      "examples": [
+        "pforge mcp-call forge_crucible_list",
+        "pforge mcp-call forge_bug_register --json '{\"severity\":\"high\",\"title\":\"x\"}'",
+        "pforge mcp-call crucible-submit --title=\"Pagination\" --description=\"...\""
+      ]
+    },
+    "tour": {
+      "description": "Guided walkthrough of your installed Plan Forge files",
+      "args": [],
+      "flags": {},
+      "examples": [
+        "pforge tour"
       ]
     },
     "help": {
