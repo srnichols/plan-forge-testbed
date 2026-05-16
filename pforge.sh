@@ -53,10 +53,64 @@ COMMANDS:
   ext install <p>   Install extension from path
   ext list          List installed extensions
   ext remove <name> Remove an installed extension
+  ext publish <p>   Validate and generate catalog entry for publishing
   update [source]   Update framework files from Plan Forge source (preserves customizations)
+  self-update       Check for and install the latest Plan Forge release from GitHub
   analyze <plan>    Cross-artifact analysis — requirement traceability, test coverage, scope compliance
   run-plan <plan>   Execute a hardened plan — spawn CLI workers, validate at every boundary, track tokens
+  org-rules export  Export org custom instructions from .github/instructions/ for GitHub org settings
+  drift             Score codebase against architecture guardrail rules — track drift over time
+  incident <desc>   Capture an incident — record description, severity, affected files, and optional resolvedAt for MTTR
+  deploy-log <ver>  Record a deployment — log version, deployer, optional notes, and optional slice reference
+  triage            Triage open alerts — rank incidents and drift violations by priority
+  regression-guard  Run validation gates from plan files — guard against regressions when files change
+  runbook <plan>    Generate an operational runbook from a hardened plan file
+  hotspot           Identify git churn hotspots — most frequently changed files
+  secret-scan       Scan recent commits for leaked secrets using Shannon entropy analysis
+  env-diff          Compare environment variable keys across .env files — detect missing keys
+  health-trend      Health trend analysis — drift, cost, incidents, model performance over time
+  quorum-analyze    Assemble a quorum analysis prompt from LiveGuard data for multi-model dispatch
+  testbed-happypath Run all happy-path testbed scenarios sequentially with aggregated pass/fail summary
   smith             Inspect your forge — environment, VS Code config, setup health, and common problems
+  hammer-fm         Run Forge-Master hammer harness against a live dashboard (see: pforge hammer-fm --help)
+  fm-session list              List active Forge-Master conversation sessions
+  fm-session purge <id>        Purge a specific session (active + archive)
+  fm-session purge --all       Purge all sessions
+  fm-recall query <text>       Query the cross-session recall index (top-3 results)
+  fm-recall rebuild            Rebuild the recall index from all fm-sessions
+  timeline                     Unified chronological event timeline (hub-events, runs, bugs, forge-master, …)
+    --window <15m|1h|6h|24h|7d|30d>  Time window (default: 24h)
+    --source <name,...>               Comma-separated source filter
+    --correlation <id>               Filter to a single correlationId thread
+    --group-by <time|correlation>    Group mode (default: time)
+    --limit <n>                      Max events (default: 100)
+    --json                           Output raw JSON
+  graph rebuild                Rebuild the knowledge graph snapshot
+  graph stats                  Print node count by type from graph snapshot
+  graph query [type]           Query the knowledge graph (phase, file, recent-changes, neighbors)
+  patterns list [--since <iso>] List recurring patterns detected across plan runs
+  lattice index [--since <sha>] Build or update the Lattice code-graph index
+  lattice stat               Show Lattice index statistics
+  lattice query [--query <q>] [--language <l>] [--kind <k>] [--limit <n>] Search the Lattice chunk index
+  lattice callers <name> [--limit <n>] Find all callers of a symbol
+  lattice blast <name|--id <id>> [--direction <callees|callers|both>] [--depth <n>] BFS call-graph traversal
+  audit export      Export audit events from .forge/runs/ as JSONL or CSV
+    --since <ISO>   Only events on or after this timestamp
+    --until <ISO>   Only events on or before this timestamp
+    --type <name>   Filter by event type (repeatable)
+    --run <id>      Scope to a single run directory ID
+    --format <fmt>  Output format: json (default, JSONL) or csv
+  audit-loop        Run audit drain loop — discover bugs from the running system
+    --auto          Respect config mode (off/auto/always); without this, always runs one drain
+    --max=N         Override maximum rounds (default: 5)
+    --dry-run       Show what would happen without triage side effects
+    --env=ENV       Set environment (dev, staging; production is forbidden)
+  github <sub>      Inspect the GitHub-native AI surface (status | doctor | metrics)
+  version-bump <v>  Update VERSION, package.json, docs/README/ROADMAP version badges to v<version>
+  migrate-memory    Merge legacy *-history.json ledgers into canonical .jsonl siblings (idempotent)
+  drain-memory      Drain pending OpenBrain queue records to the configured OpenBrain server
+  mcp-call <tool>   Invoke any MCP tool by name (e.g. forge_crucible_list) via the local MCP server
+  tour              Guided walkthrough of your installed Plan Forge files
   help              Show this help message
 
 OPTIONS:
@@ -75,8 +129,11 @@ EXAMPLES:
   ./pforge.sh run-plan docs/plans/Phase-1-AUTH-PLAN.md --estimate
   ./pforge.sh run-plan docs/plans/Phase-1-AUTH-PLAN.md --assisted
   ./pforge.sh ext list
+  ./pforge.sh org-rules export
+  ./pforge.sh org-rules export --format markdown --output org-rules.md
   ./pforge.sh update ../plan-forge
   ./pforge.sh update --dry-run
+  ./pforge.sh update --check
 
 EOF
 }
@@ -115,12 +172,24 @@ cmd_status() {
 
     local roadmap="$REPO_ROOT/docs/plans/DEPLOYMENT-ROADMAP.md"
     if [ ! -f "$roadmap" ]; then
-        echo "ERROR: DEPLOYMENT-ROADMAP.md not found at $roadmap" >&2
-        exit 1
+        # Fall back to root ROADMAP.md; if neither exists, degrade to a
+        # friendly notice and exit 0 (missing roadmap is a valid state,
+        # not an error). Keeps forge_status a soft tool for agent flows.
+        local alt_roadmap="$REPO_ROOT/ROADMAP.md"
+        if [ -f "$alt_roadmap" ]; then
+            roadmap="$alt_roadmap"
+        else
+            echo ""
+            echo "No roadmap file found."
+            echo "  Looked for: docs/plans/DEPLOYMENT-ROADMAP.md, ROADMAP.md"
+            echo "  Create one with 'pforge init' or 'pforge new-phase <name>'."
+            echo ""
+            return 0
+        fi
     fi
 
     echo ""
-    echo "Phase Status (from DEPLOYMENT-ROADMAP.md):"
+    echo "Phase Status (from $(basename "$roadmap")):"
     echo "─────────────────────────────────────────────"
 
     local current_phase="" current_goal=""
@@ -408,16 +477,35 @@ cmd_sweep() {
     echo "─────────────────────────────────────────────────────────"
 
     local total=0
+    local framework_total=0
+    local fw_todo=0 fw_fixme=0 fw_hack=0 fw_placeholder=0 fw_stub=0 fw_other=0
     local pattern='TODO|FIXME|HACK|will be replaced|placeholder|stub|mock data|Simulate|Seed with sample'
+    local framework_pattern='^(pforge-mcp/|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
 
     while IFS= read -r -d '' file; do
         local results
         results="$(grep -niE "$pattern" "$file" 2>/dev/null || true)"
         if [ -n "$results" ]; then
             local rel_path="${file#"$REPO_ROOT/"}"
+            local is_framework=false
+            if echo "$rel_path" | grep -qE "$framework_pattern"; then
+                is_framework=true
+            fi
             while IFS= read -r line; do
-                echo "  $rel_path:$line"
-                total=$((total + 1))
+                if [ "$is_framework" = true ]; then
+                    framework_total=$((framework_total + 1))
+                    case "$line" in
+                        *TODO*)        fw_todo=$((fw_todo + 1)) ;;
+                        *FIXME*)       fw_fixme=$((fw_fixme + 1)) ;;
+                        *HACK*)        fw_hack=$((fw_hack + 1)) ;;
+                        *placeholder*) fw_placeholder=$((fw_placeholder + 1)) ;;
+                        *stub*)        fw_stub=$((fw_stub + 1)) ;;
+                        *)             fw_other=$((fw_other + 1)) ;;
+                    esac
+                else
+                    echo "  $rel_path:$line"
+                    total=$((total + 1))
+                fi
             done <<< "$results"
         fi
     done < <(find "$REPO_ROOT" -type f \( -name "*.cs" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.kt" -o -name "*.rs" -o -name "*.sql" -o -name "*.sh" -o -name "*.ps1" \) \
@@ -426,9 +514,20 @@ cmd_sweep() {
 
     echo ""
     if [ "$total" -eq 0 ]; then
-        echo "SWEEP CLEAN — zero deferred-work markers found."
+        echo "SWEEP CLEAN — zero deferred-work markers found in app code."
     else
-        echo "FOUND $total deferred-work marker(s). Resolve before Step 5 (Review Gate)."
+        echo "FOUND $total deferred-work marker(s) in app code. Resolve before Step 5 (Review Gate)."
+    fi
+    if [ "$framework_total" -gt 0 ]; then
+        local breakdown=""
+        [ "$fw_todo" -gt 0 ] && breakdown="${breakdown}TODO: $fw_todo, "
+        [ "$fw_fixme" -gt 0 ] && breakdown="${breakdown}FIXME: $fw_fixme, "
+        [ "$fw_hack" -gt 0 ] && breakdown="${breakdown}HACK: $fw_hack, "
+        [ "$fw_placeholder" -gt 0 ] && breakdown="${breakdown}placeholder: $fw_placeholder, "
+        [ "$fw_stub" -gt 0 ] && breakdown="${breakdown}stub: $fw_stub, "
+        [ "$fw_other" -gt 0 ] && breakdown="${breakdown}other: $fw_other, "
+        breakdown="${breakdown%, }"
+        echo "  ($framework_total marker(s) in framework code — $breakdown)"
     fi
 }
 
@@ -526,6 +625,7 @@ cmd_diff() {
     echo ""
     if [ "$violations" -gt 0 ]; then
         echo "DRIFT DETECTED — $violations forbidden file(s) touched."
+        exit 1
     elif [ "$out_of_scope" -gt 0 ]; then
         echo "POTENTIAL DRIFT — $out_of_scope file(s) not in Scope Contract. May need amendment."
     else
@@ -537,12 +637,13 @@ cmd_diff() {
 cmd_ext() {
     if [ $# -eq 0 ]; then
         echo "Extension commands:"
-        echo "  ext search [query]  Search the community catalog"
-        echo "  ext add <name>      Download and install from catalog"
-        echo "  ext info <name>     Show extension details"
-        echo "  ext install <path>  Install extension from local path"
-        echo "  ext list            List installed extensions"
-        echo "  ext remove <name>   Remove an installed extension"
+        echo "  ext search [query]   Search the community catalog"
+        echo "  ext add <name>       Download and install from catalog"
+        echo "  ext info <name>      Show extension details"
+        echo "  ext install <path>   Install extension from local path"
+        echo "  ext list             List installed extensions"
+        echo "  ext remove <name>    Remove an installed extension"
+        echo "  ext publish <path>   Validate and generate catalog entry for publishing"
         return 0
     fi
 
@@ -554,9 +655,10 @@ cmd_ext() {
         install) cmd_ext_install "$@" ;;
         list)    cmd_ext_list ;;
         remove)  cmd_ext_remove "$@" ;;
+        publish) cmd_ext_publish "$@" ;;
         *)
             echo "ERROR: Unknown ext command: $subcmd" >&2
-            echo "  Available: search, add, info, install, list, remove" >&2
+            echo "  Available: search, add, info, install, list, remove, publish" >&2
             exit 1
             ;;
     esac
@@ -871,8 +973,184 @@ cmd_ext_remove() {
     echo "Extension '$ext_name' removed."
 }
 
+cmd_ext_publish() {
+    if [ $# -eq 0 ]; then
+        echo "ERROR: Extension path required." >&2
+        echo "  Usage: pforge ext publish <path>" >&2
+        echo "  Validates extension.json and prints the catalog entry to submit." >&2
+        exit 1
+    fi
+
+    local ext_path="$1"
+    [ ! -d "$ext_path" ] && ext_path="$REPO_ROOT/$ext_path"
+
+    if [ ! -f "$ext_path/extension.json" ]; then
+        echo "ERROR: extension.json not found in $ext_path" >&2
+        exit 1
+    fi
+
+    # Extract all required fields
+    local ext_json_file="$ext_path/extension.json"
+    local id name description author version download_url repository license category effect
+
+    _ext_field() { grep -oP "\"$1\"\s*:\s*\"\K[^\"]+" "$ext_json_file" | head -1; }
+
+    id="$(_ext_field id)"
+    name="$(_ext_field name)"
+    description="$(_ext_field description)"
+    author="$(_ext_field author)"
+    version="$(_ext_field version)"
+    download_url="$(_ext_field download_url)"
+    repository="$(_ext_field repository)"
+    license="$(_ext_field license)"
+    category="$(_ext_field category)"
+    effect="$(_ext_field effect)"
+
+    local errors=0
+
+    # Validate required fields
+    for field_name in id name description author version download_url repository license category effect; do
+        eval "field_val=\$$field_name"
+        if [ -z "$field_val" ]; then
+            echo "  MISSING  $field_name (required in extension.json)"
+            errors=$((errors + 1))
+        fi
+    done
+
+    # Validate category
+    case "$category" in
+        code|docs|process|integration|visibility) ;;
+        "")  ;;  # already reported above
+        *)
+            echo "  INVALID  category '$category' — must be one of: code, docs, process, integration, visibility"
+            errors=$((errors + 1))
+            ;;
+    esac
+
+    # Validate effect
+    case "$effect" in
+        "Read-only"|"Read+Write") ;;
+        "") ;;  # already reported above
+        *)
+            echo "  INVALID  effect '$effect' — must be 'Read-only' or 'Read+Write'"
+            errors=$((errors + 1))
+            ;;
+    esac
+
+    # Validate README
+    if [ ! -f "$ext_path/README.md" ]; then
+        echo "  MISSING  README.md (recommended for catalog)"
+        errors=$((errors + 1))
+    fi
+
+    if [ "$errors" -gt 0 ]; then
+        echo ""
+        echo "ERROR: $errors validation error(s) — fix extension.json before publishing." >&2
+        exit 1
+    fi
+
+    # Extract optional provides counts
+    local inst_count agents_count prompts_count skills_count
+    if command -v python3 >/dev/null 2>&1; then
+        inst_count="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(d.get('provides',{}).get('instructions',0))" 2>/dev/null || echo "0")"
+        agents_count="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(d.get('provides',{}).get('agents',0))" 2>/dev/null || echo "0")"
+        prompts_count="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(d.get('provides',{}).get('prompts',0))" 2>/dev/null || echo "0")"
+        skills_count="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(d.get('provides',{}).get('skills',0))" 2>/dev/null || echo "0")"
+    else
+        inst_count=0; agents_count=0; prompts_count=0; skills_count=0
+    fi
+
+    local speckit_compat
+    speckit_compat="$(grep -oP '"speckit_compatible"\s*:\s*\K(true|false)' "$ext_json_file" | head -1)"
+    [ -z "$speckit_compat" ] && speckit_compat="false"
+
+    local planforge_ver
+    planforge_ver="$(grep -oP '"planforge_version"\s*:\s*"\K[^\"]+"' "$ext_json_file" | head -1 | tr -d '"')"
+    [ -z "$planforge_ver" ] && planforge_ver=">=1.2.0"
+
+    local tags_json
+    if command -v python3 >/dev/null 2>&1; then
+        tags_json="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(json.dumps(d.get('tags', [])))" 2>/dev/null || echo "[]")"
+    else
+        tags_json="[]"
+    fi
+
+    local now
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+
+    # Build Spec Kit files arrays (instructions→rules, agents→agents)
+    local speckit_rules speckit_agents
+    if command -v python3 >/dev/null 2>&1; then
+        speckit_rules="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(json.dumps(d.get('files',{}).get('instructions',[])+d.get('files',{}).get('rules',[])))" 2>/dev/null || echo "[]")"
+        speckit_agents="$(python3 -c "import json; d=json.load(open('$ext_json_file')); print(json.dumps(d.get('files',{}).get('agents',[])))" 2>/dev/null || echo "[]")"
+    else
+        speckit_rules="[]"
+        speckit_agents="[]"
+    fi
+
+    echo ""
+    echo "✓ Validation passed — extension is ready to publish."
+    echo ""
+    echo "Plan Forge Catalog Entry:"
+    echo "────────────────────────────────────────────────────────────────"
+    echo "Add to extensions/catalog.json in a fork of srnichols/plan-forge:"
+    cat <<EOF
+    "$id": {
+      "name": "$name",
+      "id": "$id",
+      "description": "$description",
+      "author": "$author",
+      "version": "$version",
+      "download_url": "$download_url",
+      "repository": "$repository",
+      "license": "$license",
+      "category": "$category",
+      "effect": "$effect",
+      "requires": {
+        "planforge_version": "$planforge_ver"
+      },
+      "provides": {
+        "instructions": $inst_count,
+        "agents": $agents_count,
+        "prompts": $prompts_count,
+        "skills": $skills_count
+      },
+      "tags": $tags_json,
+      "speckit_compatible": $speckit_compat,
+      "verified": false,
+      "created_at": "$now",
+      "updated_at": "$now"
+    }
+EOF
+    echo "────────────────────────────────────────────────────────────────"
+    echo ""
+    echo "Spec Kit Catalog Entry:"
+    echo "────────────────────────────────────────────────────────────────"
+    echo "Add to your Spec Kit extensions.json:"
+    cat <<EOF
+{
+  "name": "$id",
+  "version": "$version",
+  "description": "$description",
+  "files": {
+    "rules": $speckit_rules,
+    "agents": $speckit_agents
+  }
+}
+EOF
+    echo "────────────────────────────────────────────────────────────────"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Fork https://github.com/srnichols/plan-forge"
+    echo "  2. Edit extensions/catalog.json — add the Plan Forge entry above"
+    echo "  3. Open a PR with title: feat(catalog): add $id"
+    echo "     Link your extension repository in the PR description."
+    echo "  4. If Spec Kit compatible, add the Spec Kit entry to your Spec Kit extensions.json"
+    echo ""
+    echo "  Full guide: extensions/PUBLISHING.md"
+}
+
 # ─── Command: update ───────────────────────────────────────────────────
-# SHA256 helper — portable Linux + macOS
 _pf_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d' ' -f1
@@ -882,12 +1160,16 @@ _pf_sha256() {
 }
 
 cmd_update() {
-    local dry_run=false force=false source_path=""
+    local dry_run=false force=false source_path="" from_github=false keep_cache=false gh_tag="" allow_dev=false
 
     for arg in "$@"; do
         case "$arg" in
-            --dry-run) dry_run=true ;;
+            --dry-run|--check) dry_run=true ;;
             --force)   force=true ;;
+            --from-github) from_github=true ;;
+            --keep-cache) keep_cache=true ;;
+            --allow-dev) allow_dev=true ;;
+            --tag) ;; # value consumed below
             --*) ;;
             *)
                 if [ -z "$source_path" ] && [ -d "$arg" ]; then
@@ -897,25 +1179,194 @@ cmd_update() {
         esac
     done
 
-    # Auto-detect source: sibling directories ../plan-forge or ../Plan-Forge
-    if [ -z "$source_path" ]; then
-        local parent
-        parent="$(dirname "$REPO_ROOT")"
-        for candidate in "$parent/plan-forge" "$parent/Plan-Forge"; do
-            if [ -f "$candidate/VERSION" ]; then
-                source_path="$(cd "$candidate" && pwd)"
-                break
-            fi
-        done
-    fi
+    # Parse --tag <value>
+    local prev=""
+    for arg in "$@"; do
+        if [ "$prev" = "--tag" ]; then
+            gh_tag="$arg"
+        fi
+        prev="$arg"
+    done
 
-    if [ -z "$source_path" ]; then
-        echo "ERROR: Plan Forge source not found." >&2
-        echo "  Provide the path to your Plan Forge clone:" >&2
-        echo "    ./pforge.sh update /path/to/plan-forge" >&2
-        echo "  Or clone it next to your project:" >&2
-        echo "    git clone https://github.com/srnichols/plan-forge.git ../plan-forge" >&2
-        exit 1
+    local gh_extract_dir="" gh_tarball="" gh_sha256="" gh_size_bytes="" resolved_tag=""
+
+    if $from_github; then
+        local node_helper="$REPO_ROOT/pforge-mcp/update-from-github.mjs"
+        if [ ! -f "$node_helper" ]; then
+            echo "ERROR: Node helper not found at $node_helper" >&2
+            echo "  Ensure pforge-mcp/update-from-github.mjs exists." >&2
+            exit 1
+        fi
+
+        # Resolve tag
+        echo "Resolving release tag from GitHub..."
+        local tag_args=("resolve-tag")
+        if [ -n "$gh_tag" ]; then tag_args+=("--tag" "$gh_tag"); fi
+        local tag_result
+        tag_result="$(node "$node_helper" "${tag_args[@]}" 2>&1 | tail -1)"
+        local tag_ok
+        tag_ok="$(echo "$tag_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null || echo "")"
+        if [ "$tag_ok" != "True" ] && [ "$tag_ok" != "true" ]; then
+            local err_code err_msg
+            err_code="$(echo "$tag_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('code',''))" 2>/dev/null || echo "ERR_UNKNOWN")"
+            err_msg="$(echo "$tag_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "$tag_result")"
+            echo "ERROR: $err_code — $err_msg" >&2
+            exit 1
+        fi
+        resolved_tag="$(echo "$tag_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tag',''))" 2>/dev/null)"
+        echo "  Tag: $resolved_tag"
+
+        # Drift warning — source repo has a newer tag than the latest Release
+        local drift_msg
+        drift_msg="$(echo "$tag_result" | python3 -c "import json,sys; d=json.load(sys.stdin); w=d.get('warning') or {}; print(w.get('message',''))" 2>/dev/null || echo "")"
+        if [ -n "$drift_msg" ]; then
+            echo "" >&2
+            echo "WARNING: Release/tag drift detected" >&2
+            echo "  $drift_msg" >&2
+            echo "" >&2
+        fi
+
+        # Download tarball
+        echo "Downloading release tarball..."
+        local dl_result
+        dl_result="$(node "$node_helper" download --tag "$resolved_tag" --project-dir "$REPO_ROOT" 2>&1 | tail -1)"
+        local dl_ok
+        dl_ok="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null || echo "")"
+        if [ "$dl_ok" != "True" ] && [ "$dl_ok" != "true" ]; then
+            local err_code err_msg
+            err_code="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('code',''))" 2>/dev/null || echo "ERR_UNKNOWN")"
+            err_msg="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "$dl_result")"
+            echo "ERROR: $err_code — $err_msg" >&2
+            exit 1
+        fi
+        gh_tarball="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('path',''))" 2>/dev/null)"
+        gh_sha256="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sha256',''))" 2>/dev/null)"
+        gh_size_bytes="$(echo "$dl_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sizeBytes',''))" 2>/dev/null)"
+        echo "  Downloaded: $gh_tarball ($gh_size_bytes bytes)"
+        echo "  SHA-256: $gh_sha256"
+
+        # Extract tarball
+        command -v tar >/dev/null 2>&1 || { echo "ERROR: ERR_NO_TAR — tar not found. Install tar for your platform." >&2; exit 1; }
+        local safe_name
+        safe_name="$(echo "$resolved_tag" | sed 's/[^a-zA-Z0-9._-]/_/g')"
+        gh_extract_dir="$(dirname "$gh_tarball")/update-$safe_name"
+        rm -rf "$gh_extract_dir"
+        mkdir -p "$gh_extract_dir"
+
+        echo "Extracting tarball..."
+        if ! tar xzf "$gh_tarball" -C "$gh_extract_dir" 2>&1; then
+            echo "ERROR: ERR_EXTRACT_FAILED — tar extraction failed." >&2
+            exit 1
+        fi
+
+        # Find top-level directory
+        local top_dirs
+        top_dirs="$(find "$gh_extract_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)"
+        local dir_count
+        dir_count="$(echo "$top_dirs" | grep -c . 2>/dev/null || echo 0)"
+        if [ "$dir_count" -eq 1 ]; then
+            source_path="$(echo "$top_dirs" | head -1)"
+        else
+            source_path="$gh_extract_dir"
+        fi
+        echo "  Extracted to: $source_path"
+        echo ""
+
+    else
+        # ─── Existing local source detection ──────────────────────
+        for arg in "$@"; do
+            case "$arg" in
+                --*) ;;
+                *)
+                    if [ -z "$source_path" ] && [ -d "$arg" ]; then
+                        source_path="$(cd "$arg" && pwd)"
+                    fi
+                    ;;
+            esac
+        done
+
+        # v2.56.0 — read updateSource preference from .forge.json
+        local update_source_pref="auto"
+        local pref_config_path="$REPO_ROOT/.forge.json"
+        if [ -f "$pref_config_path" ]; then
+            local pref_raw
+            pref_raw="$(python3 -c "import json; v=json.load(open('$pref_config_path')).get('updateSource',''); print(v if v in ('auto','github-tags','local-sibling') else '')" 2>/dev/null || echo "")"
+            if [ -n "$pref_raw" ]; then update_source_pref="$pref_raw"; fi
+        fi
+
+        # Find sibling clone (if any)
+        local sibling_path=""
+        if [ -z "$source_path" ]; then
+            local parent
+            parent="$(dirname "$REPO_ROOT")"
+            for candidate in "$parent/plan-forge" "$parent/Plan-Forge"; do
+                if [ -f "$candidate/VERSION" ]; then
+                    sibling_path="$(cd "$candidate" && pwd)"
+                    break
+                fi
+            done
+        fi
+
+        if [ -z "$source_path" ]; then
+            case "$update_source_pref" in
+                github-tags)
+                    if [ -n "$sibling_path" ]; then
+                        echo "  Note: updateSource='github-tags' — ignoring sibling clone at $sibling_path"
+                    fi
+                    echo "  Using GitHub tagged release (updateSource='github-tags')"
+                    from_github=true
+                    ;;
+                local-sibling)
+                    if [ -n "$sibling_path" ]; then
+                        source_path="$sibling_path"
+                    else
+                        echo "ERROR: updateSource='local-sibling' but no sibling clone found." >&2
+                        echo "  Change '.forge.json' updateSource to 'auto' or 'github-tags', or clone:" >&2
+                        echo "    git clone https://github.com/srnichols/plan-forge.git ../plan-forge" >&2
+                        exit 1
+                    fi
+                    ;;
+                *)
+                    # auto — prefer GitHub tags if sibling is on -dev
+                    if [ -n "$sibling_path" ]; then
+                        local sibling_ver=""
+                        sibling_ver="$(tr -d '[:space:]' < "$sibling_path/VERSION" 2>/dev/null || echo "")"
+                        if echo "$sibling_ver" | grep -qE -- '-dev\b'; then
+                            echo "  Note: sibling clone is on -dev ($sibling_ver); using GitHub tagged release instead"
+                            echo "  (set updateSource='local-sibling' in .forge.json to always use sibling)"
+                            from_github=true
+                        else
+                            source_path="$sibling_path"
+                        fi
+                    else
+                        echo "  No sibling clone found — using GitHub tagged release"
+                        from_github=true
+                    fi
+                    ;;
+            esac
+
+            # If auto/github-tags flipped us, recurse back into the --from-github branch logic.
+            if [ -z "$source_path" ] && $from_github; then
+                # Remove any existing --from-github to avoid duplicates, then append once.
+                local filtered_args=()
+                for arg in "$@"; do
+                    [ "$arg" = "--from-github" ] || filtered_args+=("$arg")
+                done
+                cmd_update "${filtered_args[@]}" "--from-github"
+                return $?
+            fi
+        fi
+
+        if [ -z "$source_path" ]; then
+            echo "ERROR: Plan Forge source not found." >&2
+            echo "  Provide the path to your Plan Forge clone:" >&2
+            echo "    ./pforge.sh update /path/to/plan-forge" >&2
+            echo "  Or use --from-github to download from GitHub:" >&2
+            echo "    ./pforge.sh update --from-github" >&2
+            echo "  Or clone it next to your project:" >&2
+            echo "    git clone https://github.com/srnichols/plan-forge.git ../plan-forge" >&2
+            exit 1
+        fi
     fi
 
     print_manual_steps "update" \
@@ -950,6 +1401,25 @@ print(v if isinstance(v, str) else ','.join(v))
     echo "  Latest:   v$source_version"
     echo "  Preset:   $current_preset_raw"
     echo ""
+
+    # v2.53.1 — refuse to install a '-dev' source over a clean install.
+    # Catches the "local sibling clone on master" case where `pforge update`
+    # would otherwise drag a consumer onto unreleased dev bytes.
+    local source_is_dev=false current_is_dev=false
+    if echo "$source_version" | grep -qE -- '-dev\b'; then source_is_dev=true; fi
+    if [ "$current_version" = "unknown" ] || echo "$current_version" | grep -qE -- '-dev\b'; then current_is_dev=true; fi
+    if $source_is_dev && ! $current_is_dev && ! $allow_dev; then
+        echo "REFUSED: source VERSION '$source_version' is a '-dev' build."
+        echo "  Your current install (v$current_version) is a clean release —"
+        echo "  installing this source would downgrade you into unreleased code."
+        echo ""
+        echo "  Most likely cause: your source path points to a local clone"
+        echo "    on master. Use 'pforge self-update' instead — it always"
+        echo "    pulls the latest tagged release from GitHub."
+        echo ""
+        echo "  Override (not recommended): re-run with --allow-dev"
+        return 1
+    fi
 
     if [ "$current_version" = "$source_version" ] && ! $force; then
         echo "Already up to date (v$current_version). Use --force to re-apply."
@@ -993,8 +1463,10 @@ print(v if isinstance(v, str) else ','.join(v))
         while IFS= read -r -d '' f; do
             local fname_p
             fname_p="$(basename "$f")"
+            # project-principles.prompt.md is user-customized (sourced from templates/) — never auto-update
+            if [ "$fname_p" = "project-principles.prompt.md" ]; then continue; fi
             _pf_check "$f" "$REPO_ROOT/.github/prompts/$fname_p" ".github/prompts/$fname_p"
-        done < <(find "$src_prompts" -maxdepth 1 -name "step*.prompt.md" -type f -print0 2>/dev/null)
+        done < <(find "$src_prompts" -maxdepth 1 -name "*.prompt.md" -type f -print0 2>/dev/null)
     fi
 
     # ─── Pipeline agents ──────────────────────────────────────────
@@ -1010,7 +1482,7 @@ print(v if isinstance(v, str) else ','.join(v))
     local src_instr="$source_path/.github/instructions"
     if [ -d "$src_instr" ]; then
         local instr_name
-        for instr_name in "architecture-principles.instructions.md" "git-workflow.instructions.md" "ai-plan-hardening-runbook.instructions.md"; do
+        for instr_name in "architecture-principles.instructions.md" "git-workflow.instructions.md" "ai-plan-hardening-runbook.instructions.md" "self-repair-reporting.instructions.md" "status-reporting.instructions.md" "context-fuel.instructions.md"; do
             _pf_check "$src_instr/$instr_name" "$REPO_ROOT/.github/instructions/$instr_name" ".github/instructions/$instr_name"
         done
     fi
@@ -1087,26 +1559,44 @@ print(v if isinstance(v, str) else ','.join(v))
 
     unset -f _pf_check
 
-    # ─── MCP server files ────────────────────────────────────────
-    local src_mcp="$SOURCE_PATH/pforge-mcp"
+    # ─── Core root files (CLI scripts + VERSION) ─────────────────
+    local core_file
+    for core_file in "pforge.ps1" "pforge.sh" "VERSION"; do
+        local src_core="$source_path/$core_file"
+        local dst_core="$REPO_ROOT/$core_file"
+        if [ -f "$src_core" ]; then
+            if [ -f "$dst_core" ]; then
+                if [ "$(_pf_sha256 "$src_core")" != "$(_pf_sha256 "$dst_core")" ]; then
+                    _updates+=("$src_core|$dst_core|$core_file")
+                fi
+            else
+                _new_files+=("$src_core|$dst_core|$core_file")
+            fi
+        fi
+    done
+
+    # ─── MCP server files (auto-discover all files) ──────────────
+    local src_mcp="$source_path/pforge-mcp"
     local dst_mcp="$REPO_ROOT/pforge-mcp"
     if [ -d "$src_mcp" ]; then
-        for mcp_file in server.mjs package.json; do
-            local src_f="$src_mcp/$mcp_file"
-            local dst_f="$dst_mcp/$mcp_file"
-            if [ -f "$src_f" ]; then
-                if [ -f "$dst_f" ]; then
-                    local src_hash dst_hash
-                    src_hash="$(sha256sum "$src_f" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$src_f" | cut -d' ' -f1)"
-                    dst_hash="$(sha256sum "$dst_f" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$dst_f" | cut -d' ' -f1)"
-                    if [ "$src_hash" != "$dst_hash" ]; then
-                        _updates+=("$src_f|$dst_f|pforge-mcp/$mcp_file")
-                    fi
-                else
-                    _new_files+=("$src_f|$dst_f|pforge-mcp/$mcp_file")
+        while IFS= read -r -d '' f; do
+            local rel_path rel_name dst_f
+            rel_path="${f#"$src_mcp/"}"
+            rel_name="pforge-mcp/$rel_path"
+            dst_f="$dst_mcp/$rel_path"
+            local _skip=false
+            for nu in "${_never_update[@]}"; do
+                [ "$nu" = "$rel_name" ] && _skip=true && break
+            done
+            $_skip && continue
+            if [ -f "$dst_f" ]; then
+                if [ "$(_pf_sha256 "$f")" != "$(_pf_sha256 "$dst_f")" ]; then
+                    _updates+=("$f|$dst_f|$rel_name")
                 fi
+            else
+                _new_files+=("$f|$dst_f|$rel_name")
             fi
-        done
+        done < <(find "$src_mcp" -type f -not -path '*/node_modules/*' -print0 2>/dev/null)
     fi
 
     # ─── Report ───────────────────────────────────────────────────
@@ -1136,7 +1626,7 @@ print(v if isinstance(v, str) else ','.join(v))
 
     # ─── Confirm ──────────────────────────────────────────────────
     if ! $force; then
-        read -rp "Apply ${#_updates[@]} updates and ${#_new_files[@]} new files? [y/N] " confirm
+        read -rp "Apply ${#_updates[@]} updates and ${#_new_files[@]} new files? [y/N] (use --force to skip this prompt) " confirm
         case "$confirm" in
             y|Y|yes|Yes) ;;
             *) echo "Cancelled."; return 0 ;;
@@ -1183,6 +1673,17 @@ with open('$config_path', 'w') as f:
     echo "Update complete: v$current_version → v$source_version"
     echo "Run 'pforge check' to validate the updated setup."
 
+    # v2.53.1 — invalidate version caches so smith/dashboard pick up fresh state.
+    for cache_rel in ".forge/version-check.json" ".forge/install-health.json"; do
+        rm -f "$REPO_ROOT/$cache_rel" 2>/dev/null || true
+    done
+    # Write a fresh update-check.json so the next check returns isNewer=false
+    # without hitting the network (Fix A — self-update invalidates cache).
+    node --input-type=module -e "
+import { writeFreshCache } from './pforge-mcp/update-check.mjs';
+writeFreshCache(process.argv[1], process.argv[2]);
+" "$REPO_ROOT" "$source_version" 2>/dev/null || true
+
     # Check if MCP files were updated — remind to reinstall deps
     local mcp_updated=false
     for entry in "${_updates[@]}" "${_new_files[@]}"; do
@@ -1193,8 +1694,53 @@ with open('$config_path', 'w') as f:
         fi
     done
     if [ "$mcp_updated" = true ]; then
+        # Auto-install MCP dependencies
+        local mcp_dir="$REPO_ROOT/pforge-mcp"
+        if [ -f "$mcp_dir/package.json" ]; then
+            echo ""
+            echo "Installing MCP dependencies..."
+            if (cd "$mcp_dir" && npm install --silent 2>/dev/null); then
+                echo "  ✅ npm install complete"
+            else
+                echo "  ⚠️  npm install failed — run manually: cd pforge-mcp && npm install"
+            fi
+        fi
+
+        # Detect if MCP server is running and advise restart
+        if curl -s --max-time 2 "http://localhost:3100/api/status" >/dev/null 2>&1; then
+            echo ""
+            echo "⚠️  MCP server is running on port 3100 — restart it to pick up changes."
+            echo "  Stop the current server, then: node pforge-mcp/server.mjs"
+        fi
+    fi
+
+    # Check if CLI itself was updated
+    local cli_updated=false
+    for entry in "${_updates[@]}" "${_new_files[@]}"; do
+        local entry_name="${entry##*|}"
+        if [ "$entry_name" = "pforge.ps1" ] || [ "$entry_name" = "pforge.sh" ]; then
+            cli_updated=true
+            break
+        fi
+    done
+    if [ "$cli_updated" = true ]; then
         echo ""
-        echo "MCP server files were updated. Run: cd pforge-mcp && npm install"
+        echo "ℹ️  CLI scripts (pforge.ps1/pforge.sh) were updated."
+        echo "  The new version is already on disk. No restart needed."
+    fi
+
+    # ─── --from-github: audit log + cleanup ──────────────────────
+    if $from_github && ! $dry_run; then
+        local files_changed=$(( ${#_updates[@]} + ${#_new_files[@]} ))
+        local audit_json="{\"tag\":\"$resolved_tag\",\"sha256\":\"$gh_sha256\",\"sizeBytes\":$gh_size_bytes,\"source\":\"manual\",\"filesChanged\":$files_changed,\"outcome\":\"success\"}"
+        echo "$audit_json" | node "$REPO_ROOT/pforge-mcp/update-from-github.mjs" audit --project-dir "$REPO_ROOT" >/dev/null 2>&1 || true
+    fi
+    if $from_github && ! $keep_cache; then
+        [ -n "$gh_tarball" ] && [ -f "$gh_tarball" ] && rm -f "$gh_tarball"
+        [ -n "$gh_extract_dir" ] && [ -d "$gh_extract_dir" ] && rm -rf "$gh_extract_dir"
+        echo "  Cleaned up cache files."
+    elif $from_github && $keep_cache; then
+        echo "  Cache preserved (--keep-cache): $gh_tarball"
     fi
 }
 
@@ -1407,8 +1953,297 @@ cmd_analyze() {
     fi
 }
 
+# ─── Command: drift ────────────────────────────────────────────────────
+cmd_drift() {
+    local threshold=70
+    for arg in "$@"; do
+        case "$arg" in
+            --threshold=*) threshold="${arg#*=}" ;;
+            --threshold)   shift; threshold="$1" ;;
+            [0-9]*)        threshold="$arg" ;;
+        esac
+    done
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       Plan Forge — Drift Report                              ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Scanning source files for architecture guardrail violations..."
+    echo "Threshold: $threshold/100"
+    echo ""
+
+    local files_scanned=0
+    local violation_count=0
+    local violations_json="["
+    local first_violation=true
+    local penalty_per_violation=2
+
+    # Scan source files for guardrail violations
+    while IFS= read -r -d '' file; do
+        files_scanned=$((files_scanned + 1))
+        local rel="${file#$REPO_ROOT/}"
+        local content
+        content=$(cat "$file" 2>/dev/null) || continue
+
+        check_rule() {
+            local rule_id="$1" pattern="$2" severity="$3" label="$4"
+            local line_num=1 found=false
+            while IFS= read -r line; do
+                if echo "$line" | grep -qE "$pattern" 2>/dev/null; then
+                    violation_count=$((violation_count + 1))
+                    if [ "$first_violation" = "true" ]; then
+                        first_violation=false
+                    else
+                        violations_json="$violations_json,"
+                    fi
+                    local escaped_rel escaped_label
+                    escaped_rel=$(printf '%s' "$rel" | sed 's/\\/\\\\/g; s/"/\\"/g')
+                    escaped_label=$(printf '%s' "$label" | sed 's/"/\\"/g')
+                    violations_json="$violations_json{\"file\":\"$escaped_rel\",\"rule\":\"$rule_id\",\"severity\":\"$severity\",\"line\":$line_num,\"description\":\"$escaped_label\"}"
+                fi
+                line_num=$((line_num + 1))
+            done <<< "$content"
+        }
+
+        check_rule "empty-catch"     'catch[[:space:]]*(\([^)]*\))?[[:space:]]*\{[[:space:]]*(//[^}]*)?[[:space:]]*\}'   "high"     "Empty catch block"
+        check_rule "any-type"        ':[[:space:]]*any[[:space:];|,>]|<any>|as[[:space:]]+any'  "medium"   "Avoid 'any' type"
+        check_rule "sync-over-async" '\.(Result|Wait\(\))'                                      "high"     "Sync-over-async"
+        check_rule "sql-injection"   'SELECT|INSERT|UPDATE|DELETE.*\$\{'                        "critical" "SQL string interpolation"
+        check_rule "deferred-work"   '\b(TODO|FIXME|HACK)\b'                                    "low"      "Deferred work marker"
+
+    done < <(find "$REPO_ROOT" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.ts" -o -name "*.tsx" -o -name "*.cs" -o -name "*.py" \) \
+        ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/bin/*' ! -path '*/obj/*' \
+        ! -path '*/dist/*' ! -path '*/.forge/*' ! -path '*/vendor/*' ! -path '*/coverage/*' \
+        -print0 2>/dev/null)
+
+    violations_json="$violations_json]"
+
+    local score=$(( 100 - violation_count * penalty_per_violation ))
+    [ "$score" -lt 0 ] && score=0
+
+    printf "Files scanned:  %d\n" "$files_scanned"
+    if [ "$violation_count" -eq 0 ]; then
+        printf "Violations:     \033[32m%d\033[0m\n" "$violation_count"
+    elif [ "$violation_count" -le 5 ]; then
+        printf "Violations:     \033[33m%d\033[0m\n" "$violation_count"
+    else
+        printf "Violations:     \033[31m%d\033[0m\n" "$violation_count"
+    fi
+    if [ "$score" -ge 80 ]; then
+        printf "Score:          \033[32m%d/100\033[0m\n" "$score"
+    elif [ "$score" -ge "$threshold" ]; then
+        printf "Score:          \033[33m%d/100\033[0m\n" "$score"
+    else
+        printf "Score:          \033[31m%d/100\033[0m\n" "$score"
+    fi
+    echo ""
+
+    # Append to drift-history.json
+    local forge_dir="$REPO_ROOT/.forge"
+    mkdir -p "$forge_dir"
+    local history_file="$forge_dir/drift-history.json"
+    local prev_score=""
+    local history_count=0
+    if [ -f "$history_file" ]; then
+        history_count=$(grep -c '"score"' "$history_file" 2>/dev/null || echo 0)
+        prev_score=$(grep -o '"score":[0-9]*' "$history_file" 2>/dev/null | tail -1 | grep -o '[0-9]*$')
+    fi
+
+    local delta=0 trend="stable"
+    if [ -n "$prev_score" ]; then
+        delta=$((score - prev_score))
+        if [ "$delta" -gt 0 ]; then trend="improving"
+        elif [ "$delta" -lt 0 ]; then trend="degrading"
+        fi
+    fi
+
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local record="{\"timestamp\":\"$ts\",\"score\":$score,\"filesScanned\":$files_scanned,\"delta\":$delta,\"trend\":\"$trend\",\"violations\":$violations_json}"
+    echo "$record" >> "$history_file"
+
+    local history_length=$((history_count + 1))
+    printf "Trend:          %s\n" "$trend"
+    printf "History:        %d record(s) in .forge/drift-history.json\n" "$history_length"
+    echo ""
+
+    if [ "$score" -lt "$threshold" ]; then
+        printf "\033[31m⚠  DRIFT ALERT — score %d is below threshold %d\033[0m\n" "$score" "$threshold"
+        exit 1
+    else
+        printf "\033[32m✅ Drift score within threshold (%d >= %d)\033[0m\n" "$score" "$threshold"
+        exit 0
+    fi
+}
+
+# ─── Command: self-update (Phase AUTO-UPDATE-01 Slice 2) ──────────────
+cmd_self_update() {
+    print_manual_steps "self-update" \
+        "Force-refresh the update check (bypass 24h cache)" \
+        "If a newer version exists, prompt for confirmation" \
+        "Delegate to 'pforge update --from-github --tag <latest>'"
+
+    local auto_yes=false dry_run=false force_heal=false
+    for arg in "$@"; do
+        case "$arg" in
+            --yes|-y) auto_yes=true ;;
+            --dry-run) dry_run=true ;;
+            --force) force_heal=true ;;
+        esac
+    done
+
+    # Read autoUpdate.enabled from .forge.json (default false)
+    local au_enabled=false
+    if [ -f "$REPO_ROOT/.forge.json" ]; then
+        local au_val
+        au_val="$(python3 -c "import json; print(json.load(open('$REPO_ROOT/.forge.json')).get('autoUpdate',{}).get('enabled',False))" 2>/dev/null \
+                  || echo "false")"
+        [ "$au_val" = "True" ] || [ "$au_val" = "true" ] && au_enabled=true
+    fi
+    if [ "$au_enabled" = false ]; then
+        echo "  ℹ Auto-update is opt-in; this is a manual invocation."
+        echo "    Set autoUpdate.enabled = true in .forge.json to suppress this notice."
+    fi
+
+    # Force-refresh update check via node helper
+    local node_helper="$REPO_ROOT/pforge-mcp/update-check.mjs"
+    if [ ! -f "$node_helper" ]; then
+        echo "ERROR: update-check.mjs not found at $node_helper" >&2
+        exit 1
+    fi
+
+    echo "Checking for updates (force refresh)..."
+    local current_version
+    current_version="$(cat "$REPO_ROOT/VERSION" | tr -d '[:space:]')"
+
+    # Emit a distinct marker when checkForUpdate returns null so we can
+    # tell "GitHub API failed" apart from "checked and up to date" (meta-bug:
+    # client stuck on v2.66.0 saw 'Already current' after an API failure).
+    local check_script="import { checkForUpdate } from './pforge-mcp/update-check.mjs'; const r = await checkForUpdate({ currentVersion: process.argv[1], projectDir: process.argv[2], force: true }); console.log(JSON.stringify(r === null ? { checkFailed: true } : r));"
+    local check_result
+    check_result="$(node --input-type=module -e "$check_script" "$current_version" "$REPO_ROOT" 2>&1 | tail -1)"
+
+    local check_failed
+    check_failed="$(echo "$check_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('checkFailed',False))" 2>/dev/null || echo "false")"
+
+    local is_newer
+    is_newer="$(echo "$check_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('isNewer',False))" 2>/dev/null || echo "false")"
+
+    local latest_ver
+    latest_ver="$(echo "$check_result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('latest',''))" 2>/dev/null || echo "")"
+
+    # Check-failed path: tell the user the check didn't complete instead of
+    # claiming they're current. --force still proceeds (heal path).
+    if { [ "$check_failed" = "True" ] || [ "$check_failed" = "true" ]; } && ! $force_heal; then
+        echo "  ⚠ Could not check for updates — GitHub API unreachable, rate-limited, or timed out." >&2
+        echo "    Your local version is v$current_version. This is NOT a confirmation that it is current." >&2
+        echo "    Try again shortly, or set PFORGE_NO_UPDATE_CHECK=1 to suppress checks." >&2
+        echo "    To force-install the latest tagged release anyway: pforge self-update --force" >&2
+        exit 2
+    fi
+
+    # v2.53.3 — with --force, install the latest tagged release even when the
+    # local install reports 'newer' (the classic "stuck on 2.54.0-dev copied
+    # from a master sibling-clone" case). Without --force, preserve prior
+    # behaviour: stop when already current.
+    if [ "$is_newer" != "True" ] && [ "$is_newer" != "true" ] && ! $force_heal; then
+        echo "  ✅ Already current (v$current_version)"
+        if echo "$current_version" | grep -qE -- '-dev\b' && [ -n "$latest_ver" ]; then
+            echo ""
+            echo "  ℹ Your local VERSION ends in '-dev' but the latest tagged release is v$latest_ver."
+            echo "    If this is an accidental install from a master clone, heal with:"
+            echo "      pforge self-update --force"
+        fi
+        # v2.82.2 — explicit downgrade detection: warn when local VERSION is
+        # HIGHER than the latest release (clean local, no -dev suffix).
+        if [ -n "$latest_ver" ] && ! echo "$current_version" | grep -qE -- '-dev\b'; then
+            local cur_core latest_core highest
+            cur_core="$(echo "$current_version" | cut -d- -f1)"
+            latest_core="$(echo "$latest_ver" | cut -d- -f1)"
+            highest="$(printf '%s\n%s\n' "$cur_core" "$latest_core" | sort -V | tail -n1)"
+            if [ "$highest" = "$cur_core" ] && [ "$cur_core" != "$latest_core" ]; then
+                echo ""
+                echo "  ⚠  Your local VERSION (v$current_version) is HIGHER than the latest GitHub release (v$latest_ver)."
+                echo "    This usually means: a fork bumped past upstream, a manual VERSION edit, or a"
+                echo "    sibling-clone install from a branch with a higher dev version baked in."
+                echo "    'pforge self-update' is doing nothing on purpose — it refuses to silently downgrade."
+                echo "    To force a downgrade anyway: pforge self-update --force --downgrade"
+            fi
+        fi
+        exit 0
+    fi
+
+    local latest_tag="v$latest_ver"
+    if [ "$is_newer" = "True" ] || [ "$is_newer" = "true" ]; then
+        echo "  ⬆ New release available: $latest_tag (you have v$current_version)"
+    else
+        # v2.82.2 — force-heal path: distinguish heal-from-dev vs. real downgrade.
+        local is_real_downgrade=false
+        if [ -n "$latest_ver" ] && ! echo "$current_version" | grep -qE -- '-dev\b'; then
+            local cur_core latest_core highest
+            cur_core="$(echo "$current_version" | cut -d- -f1)"
+            latest_core="$(echo "$latest_ver" | cut -d- -f1)"
+            highest="$(printf '%s\n%s\n' "$cur_core" "$latest_core" | sort -V | tail -n1)"
+            if [ "$highest" = "$cur_core" ] && [ "$cur_core" != "$latest_core" ]; then
+                is_real_downgrade=true
+            fi
+        fi
+        if $is_real_downgrade; then
+            local allow_downgrade=false
+            for a in "$@"; do [ "$a" = "--downgrade" ] && allow_downgrade=true; done
+            echo ""
+            echo "  ⚠  DOWNGRADE: self-update wants to install $latest_tag but you already have v$current_version."
+            echo "    --force does NOT imply --downgrade. Re-run with: pforge self-update --force --downgrade"
+            if ! $allow_downgrade; then exit 1; fi
+            echo "  ↻ Proceeding with explicit downgrade (--downgrade): $latest_tag over v$current_version"
+        else
+            echo "  ↻ Forcing heal to latest tagged release: $latest_tag (you have v$current_version)"
+        fi
+    fi
+
+    if $dry_run; then
+        echo "  [dry-run] Would run: pforge update --from-github --tag $latest_tag"
+        exit 0
+    fi
+
+    # Prompt unless --yes
+    if [ "$auto_yes" = false ]; then
+        printf "  Install %s now? [Y/n] " "$latest_tag"
+        read -r answer
+        if [ -n "$answer" ] && echo "$answer" | grep -qvi '^y'; then
+            echo "  Cancelled."
+            exit 0
+        fi
+    fi
+
+    echo ""
+    if $force_heal; then
+        cmd_update --from-github --tag "$latest_tag" --force
+    else
+        cmd_update --from-github --tag "$latest_tag"
+    fi
+}
+
 # ─── Command: doctor ───────────────────────────────────────────────────
 cmd_doctor() {
+    # Phase AUTO-UPDATE-01 Slice 2 — --refresh-version-cache flag
+    for arg in "$@"; do
+        if [ "$arg" = "--refresh-version-cache" ]; then
+            local cleared=0
+            local vc_file="$REPO_ROOT/.forge/version-check.json"
+            local uc_file="$REPO_ROOT/.forge/update-check.json"
+            [ -f "$vc_file" ] && rm -f "$vc_file" && cleared=$((cleared + 1))
+            [ -f "$uc_file" ] && rm -f "$uc_file" && cleared=$((cleared + 1))
+            if [ "$cleared" -gt 0 ]; then
+                echo "  ✅ Version cache cleared ($cleared file(s) deleted) — next check will hit GitHub API."
+            else
+                echo "  ℹ No cache to clear."
+            fi
+            return 0
+        fi
+    done
+
     print_manual_steps "smith" \
         "Check that required tools are installed (git, VS Code, bash)" \
         "Verify VS Code settings for Copilot agent mode" \
@@ -1422,11 +2257,39 @@ cmd_doctor() {
     doctor_fail()  { echo "  ❌ $1"; [ -n "${2:-}" ] && echo "     FIX: $2"; d_fail=$((d_fail + 1)); }
     doctor_warn()  { echo "  ⚠️  $1"; [ -n "${2:-}" ] && echo "     FIX: $2"; d_warn=$((d_warn + 1)); }
 
+    # JSON field reader with graceful fallback: prefers jq, falls back to
+    # node -p (always available since Plan Forge requires Node). Never
+    # fails under `set -e` even if the field is missing.
+    _json_field() {
+        local file="$1" field="$2"
+        if [ ! -f "$file" ]; then return 0; fi
+        if command -v jq >/dev/null 2>&1; then
+            jq -r ".${field} // \"\"" "$file" 2>/dev/null || true
+        else
+            FIELD="$field" FILE="$file" node -e '
+              try{const c=JSON.parse(require("fs").readFileSync(process.env.FILE,"utf8"));
+                  const keys=process.env.FIELD.split(".");
+                  let v=c; for(const k of keys){if(v==null)break; v=v[k];}
+                  process.stdout.write(v==null?"":String(v));}
+              catch(e){process.stdout.write("");}
+            ' 2>/dev/null || true
+        fi
+    }
+
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║       Plan Forge — The Smith                                  ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
+
+    # Detect whether this is the plan-forge dev repo itself. Several checks
+    # only make sense in the dev repo — dashboard screenshots, site images,
+    # CHANGELOG entries per framework bump, tempering coverage minima.
+    # Downstream projects carry VERSION/.forge/ but shouldn't be graded on them.
+    local is_planforge_dev=0
+    if [ -d "$REPO_ROOT/presets" ] && [ -f "$REPO_ROOT/pforge-mcp/server.mjs" ]; then
+        is_planforge_dev=1
+    fi
 
     # ═══════════════════════════════════════════════════════════════
     # 1. ENVIRONMENT
@@ -1524,7 +2387,19 @@ cmd_doctor() {
         # Parse with grep/sed (no jq dependency)
         preset="$(grep -o '"preset"[^,}]*' "$config_path" | sed 's/"preset":\s*"//' | sed 's/"//' || echo "unknown")"
         template_version="$(grep -o '"templateVersion"[^,}]*' "$config_path" | sed 's/"templateVersion":\s*"//' | sed 's/"//' || echo "unknown")"
-        doctor_pass ".forge.json valid (preset: $preset, v$template_version)"
+        local label_bits=""
+        [ -n "$preset" ] && [ "$preset" != "unknown" ] && label_bits="preset: $preset"
+        if [ -n "$template_version" ] && [ "$template_version" != "unknown" ]; then
+            [ -n "$label_bits" ] && label_bits="$label_bits, v$template_version" || label_bits="v$template_version"
+        fi
+        if [ $is_planforge_dev -eq 1 ] && [ -z "$label_bits" ]; then
+            label_bits="framework dev repo"
+        fi
+        if [ -n "$label_bits" ]; then
+            doctor_pass ".forge.json valid ($label_bits)"
+        else
+            doctor_pass ".forge.json valid"
+        fi
 
         # Check configured agents
         local configured_agents
@@ -1572,7 +2447,7 @@ cmd_doctor() {
     local preset_key="${preset%%,*}"
     local exp_instr=3 exp_agents=5 exp_prompts=7 exp_skills=0
     case "$preset_key" in
-        dotnet|typescript|python|java|go|azure-iac)
+        dotnet|typescript|python|java|go|swift|azure-iac)
             exp_instr=15; exp_agents=17; exp_prompts=9; exp_skills=8 ;;
         custom)
             exp_instr=3; exp_agents=5; exp_prompts=7; exp_skills=0 ;;
@@ -1598,6 +2473,23 @@ cmd_doctor() {
             && doctor_pass "$prompt_count prompt templates (expected: >=$exp_prompts for $preset_key)" \
             || doctor_warn "$prompt_count prompt templates (expected: >=$exp_prompts for $preset_key)" "Run 'pforge update' to get missing prompts"
 
+        # Pipeline prompts — presence check by name (count alone can pass with
+        # only scaffolding prompts; pipeline prompts power the runbook).
+        if [ -d "$REPO_ROOT/.github/prompts" ]; then
+            local missing_pipeline=""
+            local _p
+            for _p in "step0-specify-feature.prompt.md" "step1-preflight-check.prompt.md" "step2-harden-plan.prompt.md" "step3-execute-slice.prompt.md" "step4-completeness-sweep.prompt.md" "step5-review-gate.prompt.md" "step6-ship.prompt.md" "project-profile.prompt.md"; do
+                if [ ! -f "$REPO_ROOT/.github/prompts/$_p" ]; then
+                    missing_pipeline="${missing_pipeline}${_p} "
+                fi
+            done
+            if [ -z "$missing_pipeline" ]; then
+                doctor_pass "Pipeline prompts present (step0-step6 + project-profile)"
+            else
+                doctor_warn "Missing pipeline prompts: ${missing_pipeline}" "Run 'pforge update' to install missing pipeline prompts"
+            fi
+        fi
+
         [ "$skill_count" -ge "$exp_skills" ] \
             && doctor_pass "$skill_count skills (expected: >=$exp_skills for $preset_key)" \
             || doctor_warn "$skill_count skills (expected: >=$exp_skills for $preset_key)" "Run 'pforge update' to get missing skills"
@@ -1610,27 +2502,130 @@ cmd_doctor() {
     # ═══════════════════════════════════════════════════════════════
     echo "Version Currency:"
 
-    local source_version=""
-    local parent_dir
-    parent_dir="$(dirname "$REPO_ROOT")"
-    for candidate in "$parent_dir/plan-forge" "$parent_dir/Plan-Forge"; do
-        if [ -f "$candidate/VERSION" ]; then
-            source_version="$(cat "$candidate/VERSION" | tr -d '[:space:]')"
-            break
+    # v2.53.1 — corrupt-install detection. If local VERSION file ends in '-dev',
+    # flag as possible corrupt install from a broken release tarball
+    # (v2.50.0/v2.51.0/v2.52.0 shipped with '-dev' VERSION baked in).
+    if [ -f "$REPO_ROOT/VERSION" ]; then
+        local local_version
+        local_version="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+        if echo "$local_version" | grep -qE -- '-dev\b'; then
+            if [ $is_planforge_dev -eq 1 ]; then
+                doctor_pass "Local VERSION='$local_version' (framework dev repo — between-release state)"
+            else
+                local bare_core
+                bare_core="${local_version#v}"
+                bare_core="${bare_core%%-*}"
+                doctor_warn "Local VERSION='$local_version' ends in '-dev' — possible corrupt install from a broken release tarball (bare v$bare_core may have shipped with '-dev' baked in)" "Run 'pforge self-update --force' to heal"
+            fi
         fi
-    done
+    fi
+
+    local source_version=""
+    local version_check_cache="$REPO_ROOT/.forge/version-check.json"
+    local cache_valid=false
+
+    # Try cache first (skip network call if < 24h old)
+    if [ -f "$version_check_cache" ]; then
+        local cached_ver cached_at cache_age_s
+        cached_ver="$(python3 -c "import json; print(json.load(open('$version_check_cache')).get('latestVersion',''))" 2>/dev/null \
+                      || grep -oP '"latestVersion"\s*:\s*"\K[^"]+' "$version_check_cache" 2>/dev/null | head -1)"
+        cached_at="$(python3 -c "import json; print(json.load(open('$version_check_cache')).get('checkedAt',''))" 2>/dev/null \
+                     || grep -oP '"checkedAt"\s*:\s*"\K[^"]+' "$version_check_cache" 2>/dev/null | head -1)"
+        if [ -n "$cached_ver" ] && [ -n "$cached_at" ]; then
+            cache_age_s=$(( $(date +%s) - $(date -d "$cached_at" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${cached_at%%.*}" +%s 2>/dev/null || echo 0) ))
+            if [ "$cache_age_s" -lt 86400 ] 2>/dev/null; then
+                source_version="$cached_ver"
+                cache_valid=true
+            fi
+        fi
+    fi
+
+    # Fetch from GitHub API if cache is stale or missing
+    if [ "$cache_valid" = false ]; then
+        local api_url="https://api.github.com/repos/srnichols/plan-forge/releases/latest"
+        local gh_response
+        gh_response="$(curl -sf --max-time 5 -H 'User-Agent: plan-forge-smith' "$api_url" 2>/dev/null)"
+        if [ -n "$gh_response" ]; then
+            source_version="$(echo "$gh_response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tag_name','').lstrip('v'))" 2>/dev/null \
+                              || echo "$gh_response" | grep -oP '"tag_name"\s*:\s*"\K[^"]+' | head -1 | sed 's/^v//')"
+            if [ -n "$source_version" ]; then
+                mkdir -p "$REPO_ROOT/.forge"
+                printf '{"checkedAt":"%s","latestVersion":"%s"}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$source_version" > "$version_check_cache"
+            fi
+        else
+            # Fall back to local source repo if offline
+            local parent_dir
+            parent_dir="$(dirname "$REPO_ROOT")"
+            for candidate in "$parent_dir/plan-forge" "$parent_dir/Plan-Forge"; do
+                if [ -f "$candidate/VERSION" ]; then
+                    source_version="$(cat "$candidate/VERSION" | tr -d '[:space:]')"
+                    break
+                fi
+            done
+        fi
+    fi
+
+    # In the framework dev repo, .forge.json has no templateVersion; VERSION is authoritative.
+    if [ $is_planforge_dev -eq 1 ] && [ -n "$local_version" ]; then
+        template_version="$local_version"
+    fi
 
     if [ -n "$source_version" ]; then
         if [ "$template_version" = "$source_version" ]; then
             doctor_pass "Up to date (v$template_version)"
-        elif [ "$template_version" = "unknown" ]; then
-            doctor_warn "Cannot determine installed version (.forge.json missing)"
+        elif [ "$template_version" = "unknown" ] || [ -z "$template_version" ]; then
+            if [ $is_planforge_dev -eq 1 ]; then
+                doctor_pass "Framework dev repo (v${local_version:-unknown}, latest release v$source_version)"
+            else
+                doctor_warn "Cannot determine installed version (.forge.json missing templateVersion)"
+            fi
+        elif [ $is_planforge_dev -eq 1 ] && echo "$template_version" | grep -qE -- '-dev\b'; then
+            doctor_pass "Framework dev repo (v$template_version ahead of last release v$source_version)"
         else
             doctor_warn "Installed v$template_version — latest is v$source_version" "Run 'pforge update' to upgrade"
         fi
+        if [ "$cache_valid" = true ]; then
+            local cache_min=$(( cache_age_s / 60 ))
+            echo "     (cached ${cache_min}m ago)"
+        fi
     else
-        doctor_pass "Installed v$template_version (source repo not found nearby — skipping currency check)"
+        doctor_pass "Installed v$template_version (GitHub unreachable and no local source — skipping currency check)"
     fi
+
+    echo ""
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4a. AUTO-UPDATE STATUS (Phase AUTO-UPDATE-01 Slice 2)
+    # ═══════════════════════════════════════════════════════════════
+    echo "Auto-update:"
+
+    local au_enabled=false
+    if [ -f "$REPO_ROOT/.forge.json" ]; then
+        local au_val
+        au_val="$(python3 -c "import json; print(json.load(open('$REPO_ROOT/.forge.json')).get('autoUpdate',{}).get('enabled',False))" 2>/dev/null \
+                  || echo "false")"
+        [ "$au_val" = "True" ] || [ "$au_val" = "true" ] && au_enabled=true
+    fi
+
+    local au_cache_age="no cache" au_last_tag="unknown" au_checked_at="never"
+    local update_cache_file="$REPO_ROOT/.forge/update-check.json"
+    if [ -f "$update_cache_file" ]; then
+        au_last_tag="$(python3 -c "import json; print(json.load(open('$update_cache_file')).get('latestVersion',''))" 2>/dev/null || echo "")"
+        au_checked_at="$(python3 -c "import json; print(json.load(open('$update_cache_file')).get('checkedAt',''))" 2>/dev/null || echo "")"
+        if [ -n "$au_checked_at" ]; then
+            local au_age_s=$(( $(date +%s) - $(date -d "$au_checked_at" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${au_checked_at%%.*}" +%s 2>/dev/null || echo 0) ))
+            au_cache_age="$(( au_age_s / 60 ))m"
+        fi
+        [ -n "$au_last_tag" ] && au_last_tag="v$au_last_tag" || au_last_tag="unknown"
+        [ -z "$au_checked_at" ] && au_checked_at="never"
+    fi
+
+    local enabled_label="disabled (opt-in)"
+    $au_enabled && enabled_label="enabled"
+
+    doctor_pass "Auto-update: $enabled_label | Cache age: $au_cache_age | Last tag: $au_last_tag | Last check: $au_checked_at"
+    echo "     Tip: Run 'pforge self-update' to check + install, or 'pforge smith --refresh-version-cache' to clear cache"
 
     echo ""
 
@@ -1666,6 +2661,369 @@ cmd_doctor() {
     fi
 
     echo ""
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4b-ii. IMAGE GENERATION STACK
+    # ═══════════════════════════════════════════════════════════════
+    if [ -f "$mcp_server" ]; then
+        echo "Image Generation:"
+
+        # Check for sharp (format conversion)
+        if [ -d "$REPO_ROOT/pforge-mcp/node_modules/sharp" ]; then
+            doctor_pass "sharp installed (WebP, PNG, AVIF conversion)"
+        else
+            doctor_warn "sharp not installed — image format conversion disabled" "Run: cd pforge-mcp && npm install sharp"
+        fi
+
+        # Check for API keys (env vars + .forge/secrets.json fallback)
+        local has_xai="${XAI_API_KEY:+1}"
+        local has_openai="${OPENAI_API_KEY:+1}"
+        local secrets_src=""
+
+        # Fallback: check .forge/secrets.json
+        local secrets_file="$REPO_ROOT/.forge/secrets.json"
+        if [ -f "$secrets_file" ]; then
+            if [ -z "$has_xai" ] && node -e "const s=JSON.parse(require('fs').readFileSync('$secrets_file','utf8'));process.exit(s.XAI_API_KEY?0:1)" 2>/dev/null; then
+                has_xai=1; secrets_src=" (from .forge/secrets.json)"
+            fi
+            if [ -z "$has_openai" ] && node -e "const s=JSON.parse(require('fs').readFileSync('$secrets_file','utf8'));process.exit(s.OPENAI_API_KEY?0:1)" 2>/dev/null; then
+                has_openai=1; secrets_src=" (from .forge/secrets.json)"
+            fi
+        fi
+
+        if [ -n "$has_xai" ] && [ -n "$has_openai" ]; then
+            doctor_pass "XAI_API_KEY set (Grok Aurora)$secrets_src"
+            doctor_pass "OPENAI_API_KEY set (DALL-E)$secrets_src"
+        elif [ -n "$has_xai" ]; then
+            doctor_pass "XAI_API_KEY set (Grok Aurora)$secrets_src"
+            doctor_pass "OPENAI_API_KEY not set (DALL-E unavailable — optional)"
+        elif [ -n "$has_openai" ]; then
+            doctor_pass "OPENAI_API_KEY set (DALL-E)$secrets_src"
+            doctor_pass "XAI_API_KEY not set (Grok Aurora unavailable — optional)"
+        else
+            doctor_warn "No image API keys configured" "Set XAI_API_KEY or OPENAI_API_KEY env var, or add to .forge/secrets.json"
+        fi
+
+        # Check Node.js version (sharp requires >= 18.17.0)
+        if command -v node &>/dev/null; then
+            local node_ver
+            node_ver="$(node --version 2>/dev/null | sed 's/^v//')"
+            local node_major="${node_ver%%.*}"
+            if [ "$node_major" -ge 18 ] 2>/dev/null; then
+                doctor_pass "Node.js v$node_ver (sharp requires >= 18.17)"
+            else
+                doctor_fail "Node.js v$node_ver — sharp requires >= 18.17" "Upgrade Node.js from https://nodejs.org/"
+            fi
+        else
+            doctor_fail "Node.js not found — required for image generation" "Install from https://nodejs.org/"
+        fi
+
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4d. MCP RUNTIME DEPENDENCIES
+    # ═══════════════════════════════════════════════════════════════
+    if [ -f "$mcp_server" ]; then
+        echo "MCP Runtime:"
+
+        # Granular dependency checks
+        local mcp_deps_dir="$REPO_ROOT/pforge-mcp/node_modules"
+        if [ -d "$mcp_deps_dir" ]; then
+            # Critical deps
+            local critical_deps=("@modelcontextprotocol/sdk:MCP SDK (protocol layer)" "express:Express (dashboard + REST API)" "ws:ws (WebSocket hub for real-time events)")
+            for entry in "${critical_deps[@]}"; do
+                local dep_name="${entry%%:*}"
+                local dep_label="${entry#*:}"
+                local dep_path="$mcp_deps_dir/$dep_name"
+                if [ -d "$dep_path" ]; then
+                    local dep_pkg="$dep_path/package.json"
+                    if [ -f "$dep_pkg" ]; then
+                        local dep_ver
+                        dep_ver=$(_json_field "$dep_pkg" version)
+                        [ -z "$dep_ver" ] && dep_ver="?"
+                        doctor_pass "$dep_label v$dep_ver"
+                    else
+                        doctor_pass "$dep_label installed"
+                    fi
+                else
+                    doctor_fail "$dep_label missing" "Run: cd pforge-mcp && npm install"
+                fi
+            done
+
+            # Optional deps
+            if [ -d "$mcp_deps_dir/playwright" ]; then
+                doctor_pass "Playwright (screenshot capture)"
+            else
+                doctor_warn "Playwright (screenshot capture) not installed (optional)" "Run: cd pforge-mcp && npm install playwright"
+            fi
+        fi
+
+        # MCP version sync
+        local mcp_pkg_path="$REPO_ROOT/pforge-mcp/package.json"
+        local version_path="$REPO_ROOT/VERSION"
+        if [ -f "$mcp_pkg_path" ] && [ -f "$version_path" ]; then
+            local mcp_ver repo_ver
+            mcp_ver=$(_json_field "$mcp_pkg_path" version)
+            repo_ver=$(cat "$version_path" | tr -d '[:space:]')
+            if [ "$mcp_ver" = "$repo_ver" ]; then
+                doctor_pass "MCP server version v$mcp_ver matches VERSION file"
+            else
+                doctor_warn "MCP server v$mcp_ver but VERSION file says v$repo_ver" "Update version in pforge-mcp/package.json"
+            fi
+        fi
+
+        # Phase-29: Forge-Master subsystem (routes + client bridge)
+        local forge_master_routes="$REPO_ROOT/pforge-mcp/forge-master-routes.mjs"
+        if [ -f "$forge_master_routes" ]; then
+            doctor_pass "forge-master-routes.mjs (Phase-29 route wiring)"
+        else
+            doctor_warn "pforge-mcp/forge-master-routes.mjs missing (Phase-29)" "Re-run 'pforge update' to restore Forge-Master routes"
+        fi
+
+        # Auto-generated capability surface (regenerated on server start)
+        local tools_json="$REPO_ROOT/pforge-mcp/tools.json"
+        local cli_schema="$REPO_ROOT/pforge-mcp/cli-schema.json"
+        if [ -f "$tools_json" ] && [ -f "$cli_schema" ]; then
+            local tool_count
+            tool_count=$(grep -c '"name"' "$tools_json" 2>/dev/null || echo 0)
+            doctor_pass "tools.json + cli-schema.json ($tool_count MCP tools registered)"
+        else
+            doctor_warn "tools.json or cli-schema.json missing" "Start the MCP server once to auto-generate: node pforge-mcp/server.mjs"
+        fi
+
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4d-ii. FORGE-MASTER STUDIO (Phase-29)
+    # ═══════════════════════════════════════════════════════════════
+    local forge_master_dir="$REPO_ROOT/pforge-master"
+    if [ -d "$forge_master_dir" ]; then
+        echo "Forge-Master Studio (Phase-29):"
+
+        if [ -f "$forge_master_dir/server.mjs" ]; then
+            doctor_pass "pforge-master/server.mjs"
+        else
+            doctor_warn "pforge-master/server.mjs missing" "Re-run 'pforge update' to restore"
+        fi
+
+        if [ -f "$forge_master_dir/src/lifecycle.mjs" ]; then
+            doctor_pass "pforge-master/src/lifecycle.mjs (status/logs backend)"
+        else
+            doctor_warn "pforge-master/src/lifecycle.mjs missing" "'pforge forge-master status|logs' will fail"
+        fi
+
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4e. DASHBOARD & SITE ASSETS
+    # ═══════════════════════════════════════════════════════════════
+    local dashboard_html="$REPO_ROOT/pforge-mcp/dashboard/index.html"
+    local dashboard_js="$REPO_ROOT/pforge-mcp/dashboard/app.js"
+    if [ -f "$dashboard_html" ] || [ -f "$dashboard_js" ]; then
+        echo "Dashboard:"
+
+        if [ -f "$dashboard_html" ]; then doctor_pass "dashboard/index.html"
+        else doctor_warn "dashboard/index.html missing" "MCP dashboard will not render"; fi
+
+        if [ -f "$dashboard_js" ]; then doctor_pass "dashboard/app.js"
+        else doctor_warn "dashboard/app.js missing" "MCP dashboard has no frontend logic"; fi
+
+        # Phase-29: Forge-Master Studio tab controller
+        local dashboard_forge_master_js="$REPO_ROOT/pforge-mcp/dashboard/forge-master.js"
+        if [ -f "$dashboard_forge_master_js" ]; then doctor_pass "dashboard/forge-master.js (Forge-Master Studio tab)"
+        else doctor_warn "dashboard/forge-master.js missing (Phase-29)" "Re-run 'pforge update' to restore Forge-Master Studio tab"; fi
+
+        # Dashboard screenshots for docs — only inside the plan-forge dev repo.
+        if [ $is_planforge_dev -eq 1 ]; then
+            local screenshot_dir="$REPO_ROOT/docs/assets/dashboard"
+            if [ -d "$screenshot_dir" ]; then
+                local expected_screenshots=("progress.png" "runs.png" "cost.png" "actions.png" "config.png" "traces.png" "skills.png" "replay.png" "extensions.png")
+                local found_count=0 missing_names=""
+                for ss in "${expected_screenshots[@]}"; do
+                    if [ -f "$screenshot_dir/$ss" ]; then
+                        found_count=$((found_count + 1))
+                    else
+                        [ -n "$missing_names" ] && missing_names="$missing_names, "
+                        missing_names="$missing_names$ss"
+                    fi
+                done
+                if [ $found_count -eq ${#expected_screenshots[@]} ]; then
+                    doctor_pass "$found_count dashboard screenshots in docs/assets/dashboard/"
+                else
+                    local missing_count=$(( ${#expected_screenshots[@]} - found_count ))
+                    doctor_warn "Missing $missing_count screenshot(s): $missing_names" "Run: node pforge-mcp/capture-screenshots.mjs"
+                fi
+            else
+                doctor_warn "docs/assets/dashboard/ not found" "Run: node pforge-mcp/capture-screenshots.mjs to generate"
+            fi
+        fi
+
+        # Site images — only relevant inside the plan-forge dev repo itself.
+        # These are plan-forge marketing assets; downstream projects don't need them.
+        local site_assets="$REPO_ROOT/docs/assets"
+        if [ $is_planforge_dev -eq 1 ] && [ -d "$site_assets" ]; then
+            local site_images=("og-card.webp" "hero-illustration.webp" "problem-80-20-wall.webp")
+            local si_missing=""
+            for img in "${site_images[@]}"; do
+                [ ! -f "$site_assets/$img" ] && { [ -n "$si_missing" ] && si_missing="$si_missing, "; si_missing="$si_missing$img"; }
+            done
+            if [ -z "$si_missing" ]; then
+                doctor_pass "${#site_images[@]} site images (WebP)"
+            else
+                doctor_warn "Missing site image(s): $si_missing" "Generate with forge_generate_image MCP tool"
+            fi
+        fi
+
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4f. LIFECYCLE HOOKS
+    # ═══════════════════════════════════════════════════════════════
+    local hooks_dir="$REPO_ROOT/.github/hooks"
+    if [ -d "$hooks_dir" ]; then
+        echo "Lifecycle Hooks:"
+        local expected_hooks=("SessionStart" "PreToolUse" "PostToolUse" "Stop")
+        local hook_count=0 hook_missing=""
+        # plan-forge.json (shipped by `pforge update` from templates/) declares core hooks in PascalCase.
+        local hooks_json="$hooks_dir/plan-forge.json"
+        for hook in "${expected_hooks[@]}"; do
+            local found=0
+            # Source 1: hook file matching the name (e.g. SessionStart.md, SessionStart.ps1)
+            if ls "$hooks_dir"/*"$hook"* >/dev/null 2>&1; then
+                found=1
+            fi
+            # Source 2: .github/hooks/plan-forge.json declares this hook
+            if [ $found -eq 0 ] && [ -f "$hooks_json" ] && command -v jq >/dev/null 2>&1; then
+                if jq -e ".hooks.\"$hook\"" "$hooks_json" >/dev/null 2>&1; then
+                    found=1
+                fi
+            fi
+            if [ $found -eq 1 ]; then
+                hook_count=$((hook_count + 1))
+            else
+                [ -n "$hook_missing" ] && hook_missing="$hook_missing, "
+                hook_missing="$hook_missing$hook"
+            fi
+        done
+        if [ $hook_count -eq ${#expected_hooks[@]} ]; then
+            doctor_pass "$hook_count/${#expected_hooks[@]} lifecycle hooks present"
+        elif [ $hook_count -gt 0 ]; then
+            if [ $is_planforge_dev -eq 1 ]; then
+                doctor_pass "Hooks missing locally (expected in framework dev repo — consumers get them via 'pforge update'): $hook_missing"
+            else
+                doctor_warn "$hook_count/${#expected_hooks[@]} hooks — missing: $hook_missing" "Run 'pforge update' to install missing hooks"
+            fi
+        else
+            if [ $is_planforge_dev -eq 1 ]; then
+                doctor_pass "No lifecycle hooks in framework dev repo (consumers get them via 'pforge update')"
+            else
+                doctor_warn "No lifecycle hooks found" "Run 'pforge update' to install hooks"
+            fi
+        fi
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4g. EXTENSIONS & SPEC KIT
+    # ═══════════════════════════════════════════════════════════════
+    local catalog_path="$REPO_ROOT/extensions/catalog.json"
+    if [ -f "$catalog_path" ]; then
+        echo "Extensions:"
+        local ext_count
+        ext_count=$(jq -r '.extensions | length // 0' "$catalog_path" 2>/dev/null || echo 0)
+        if [ $? -eq 0 ]; then
+            doctor_pass "Extension catalog valid ($ext_count extension(s))"
+            local speckit_compat
+            speckit_compat=$(jq -r '.speckit_compatible // false' "$catalog_path" 2>/dev/null || echo false)
+            if [ "$speckit_compat" = "true" ]; then
+                doctor_pass "Spec Kit compatible"
+            fi
+        else
+            doctor_fail "extensions/catalog.json has invalid JSON" "Fix the JSON syntax"
+        fi
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4h. VERSION & CHANGELOG SYNC
+    # ═══════════════════════════════════════════════════════════════
+    echo "Version & Changelog:"
+
+    local version_path="$REPO_ROOT/VERSION"
+    local changelog_path="$REPO_ROOT/CHANGELOG.md"
+    local current_ver=""
+
+    if [ -f "$version_path" ]; then
+        current_ver=$(cat "$version_path" | tr -d '[:space:]')
+        doctor_pass "VERSION: $current_ver"
+    else
+        doctor_warn "VERSION file not found"
+    fi
+
+    if [ -f "$changelog_path" ]; then
+        if grep -qiE "\[v?${current_ver}\]|## v?${current_ver}" "$changelog_path" 2>/dev/null; then
+            doctor_pass "CHANGELOG.md has entry for v$current_ver"
+        elif echo "$current_ver" | grep -qE -- '-dev\b'; then
+            doctor_pass "CHANGELOG.md present (v$current_ver is between-release; entry added at release cut)"
+        elif [ $is_planforge_dev -eq 1 ]; then
+            # Framework repo: VERSION == release cadence, so every bump needs a CHANGELOG line.
+            doctor_warn "CHANGELOG.md missing entry for v$current_ver" "Add a '## [$current_ver] — <date>' section with release notes"
+        else
+            # Downstream consumer: VERSION tracks the pforge framework, not the app's own version.
+            doctor_pass "CHANGELOG.md present (framework v$current_ver — downstream CHANGELOG tracks your app, not pforge)"
+        fi
+    else
+        doctor_warn "CHANGELOG.md not found"
+    fi
+
+    echo ""
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4c. QUORUM MODE
+    # ═══════════════════════════════════════════════════════════════
+    local config_path="$REPO_ROOT/.forge.json"
+    if [ -f "$config_path" ]; then
+        local quorum_enabled quorum_auto quorum_threshold quorum_models quorum_reviewer
+        quorum_enabled=$(jq -r '.quorum.enabled // false' "$config_path" 2>/dev/null || echo false)
+        if [ "$quorum_enabled" != "null" ] && [ "$quorum_enabled" != "false" ] || jq -e '.quorum' "$config_path" >/dev/null 2>&1; then
+            echo "Quorum Mode:"
+            quorum_enabled=$(jq -r '.quorum.enabled // false' "$config_path" 2>/dev/null || echo false)
+            quorum_auto=$(jq -r '.quorum.auto // true' "$config_path" 2>/dev/null || echo true)
+            quorum_threshold=$(jq -r '.quorum.threshold // 7' "$config_path" 2>/dev/null || echo 7)
+            quorum_models=$(jq -r '.quorum.models // [] | join(", ")' "$config_path" 2>/dev/null || echo "")
+            quorum_reviewer=$(jq -r '.quorum.reviewerModel // "claude-opus-4.6"' "$config_path" 2>/dev/null || echo "claude-opus-4.6")
+
+            if [ "$quorum_enabled" = "true" ]; then
+                if [ "$quorum_auto" = "true" ]; then
+                    doctor_pass "Quorum enabled — mode: auto (threshold: $quorum_threshold)"
+                else
+                    doctor_pass "Quorum enabled — mode: forced (all slices)"
+                fi
+            else
+                doctor_pass "Quorum disabled (configure in .forge.json to enable)"
+            fi
+
+            if [ -n "$quorum_models" ] && [ "$quorum_models" != "" ]; then
+                doctor_pass "Quorum models: $quorum_models"
+            else
+                doctor_warn "Quorum models not configured" "Add models array to .forge.json quorum block"
+            fi
+
+            # Threshold sanity
+            if [ -n "$quorum_threshold" ]; then
+                if [ "$quorum_threshold" -lt 3 ] 2>/dev/null || [ "$quorum_threshold" -gt 9 ] 2>/dev/null; then
+                    doctor_warn "Quorum threshold $quorum_threshold is unusual (recommended: 5-8)" "Most projects use threshold 6-8 for balanced cost/quality"
+                fi
+            fi
+
+            doctor_pass "Reviewer model: $quorum_reviewer"
+            echo ""
+        fi
+    fi
 
     # ═══════════════════════════════════════════════════════════════
     # 5. COMMON PROBLEMS
@@ -1712,7 +3070,8 @@ cmd_doctor() {
     fi
 
     # 5d. Unresolved placeholders in copilot-instructions.md
-    if [ -f "$copilot_instr" ]; then
+    # Skipped in the framework dev repo: the root file IS the template baseline.
+    if [ -f "$copilot_instr" ] && [ $is_planforge_dev -eq 0 ]; then
         local ph_count=0
         local ph_list=""
         for ph in '<YOUR PROJECT NAME>' '<YOUR TECH STACK>' '<YOUR BUILD COMMAND>' '<YOUR TEST COMMAND>' '<YOUR LINT COMMAND>' '<YOUR DEV COMMAND>' '<DATE>'; do
@@ -1728,7 +3087,8 @@ cmd_doctor() {
     fi
 
     # 5e. Roadmap missing
-    if [ ! -f "$REPO_ROOT/docs/plans/DEPLOYMENT-ROADMAP.md" ]; then
+    # Skipped in the framework dev repo: it uses root ROADMAP.md, not DEPLOYMENT-ROADMAP.md (consumer template).
+    if [ ! -f "$REPO_ROOT/docs/plans/DEPLOYMENT-ROADMAP.md" ] && [ $is_planforge_dev -eq 0 ]; then
         doctor_warn "DEPLOYMENT-ROADMAP.md not found" "Run 'pforge init' or create docs/plans/DEPLOYMENT-ROADMAP.md"
         problems_found=true
     fi
@@ -1736,6 +3096,261 @@ cmd_doctor() {
     if [ "$problems_found" = false ]; then
         doctor_pass "No common problems detected"
     fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # CRUCIBLE (v2.37 / Phase CRUCIBLE-02 Slice 02.2)
+    # ═══════════════════════════════════════════════════════════════
+    # The Crucible funnel (forge_crucible_submit → ask → preview → finalize)
+    # persists every smelt under .forge/crucible/ and every manual-import
+    # bypass into .forge/crucible/manual-imports.jsonl. Surfacing the counts
+    # here gives the forge operator a one-glance answer to "is the Crucible
+    # gate healthy?" without having to open the dashboard.
+    echo ""
+    echo "Crucible:"
+    crucible_dir="$REPO_ROOT/.forge/crucible"
+    if [ -d "$crucible_dir" ]; then
+        smelt_count=0
+        in_progress=0
+        finalized=0
+        abandoned=0
+        stale_in_progress=0
+        stale_cutoff=$(( $(date +%s) - 7*24*60*60 ))
+
+        for f in "$crucible_dir"/*.json; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            # Skip non-smelt files
+            case "$base" in
+                config.json|phase-claims.json) continue ;;
+            esac
+            smelt_count=$((smelt_count + 1))
+            # Best-effort status read via grep — avoids a jq dependency
+            status=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+            case "$status" in
+                in_progress) in_progress=$((in_progress + 1))
+                    # Stat portably: mtime in seconds
+                    mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+                    if [ "$mtime" -gt 0 ] && [ "$mtime" -lt "$stale_cutoff" ]; then
+                        stale_in_progress=$((stale_in_progress + 1))
+                    fi
+                    ;;
+                finalized) finalized=$((finalized + 1)) ;;
+                abandoned) abandoned=$((abandoned + 1)) ;;
+            esac
+        done
+
+        if [ "$smelt_count" -eq 0 ]; then
+            doctor_pass "No smelts yet — run 'forge_crucible_submit' to start the funnel"
+        else
+            doctor_pass "$smelt_count smelt(s): $finalized finalized, $in_progress in-progress, $abandoned abandoned"
+            if [ "$stale_in_progress" -gt 0 ]; then
+                doctor_warn "$stale_in_progress in-progress smelt(s) idle for 7+ days" "Abandon them with 'forge_crucible_abandon' or resume via the dashboard"
+            fi
+        fi
+
+        # Config file — Slice 01.5
+        if [ -f "$crucible_dir/config.json" ]; then
+            doctor_pass "Crucible config present — governance overrides active"
+        fi
+
+        # Manual-import audit trail — Slice 01.4
+        if [ -f "$crucible_dir/manual-imports.jsonl" ]; then
+            mi_count=$(wc -l < "$crucible_dir/manual-imports.jsonl" 2>/dev/null | tr -d ' ')
+            if [ "${mi_count:-0}" -gt 0 ]; then
+                doctor_pass "$mi_count manual-import bypass(es) recorded"
+            fi
+        fi
+
+        # Phase claims — atomic phase-number allocation
+        if [ -f "$crucible_dir/phase-claims.json" ]; then
+            # Count unique phase IDs in claims array — grep is sufficient
+            claim_count=$(grep -o '"phaseNumber"[[:space:]]*:' "$crucible_dir/phase-claims.json" 2>/dev/null | wc -l | tr -d ' ')
+            doctor_pass "${claim_count:-0} phase number(s) claimed atomically"
+        fi
+    else
+        doctor_pass "Crucible inactive — no .forge/crucible/ directory yet"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # TEMPERING (Phase TEMPER-01 Slice 01.2)
+    # ═══════════════════════════════════════════════════════════════
+    # The Tempering subsystem (forge_tempering_scan → forge_tempering_status)
+    # parses existing coverage reports and flags layers below configured
+    # minima. Surfacing freshness + gap counts here gives the forge operator
+    # a one-glance answer to "is my test coverage honest?" without having
+    # to open the dashboard.
+    echo ""
+    echo "Tempering:"
+    tempering_dir="$REPO_ROOT/.forge/tempering"
+    if [ -d "$tempering_dir" ]; then
+        # Find the newest scan-*.json by mtime
+        latest_scan=""
+        scan_count=0
+        for f in "$tempering_dir"/scan-*.json; do
+            [ -e "$f" ] || continue
+            scan_count=$((scan_count + 1))
+            if [ -z "$latest_scan" ] || [ "$f" -nt "$latest_scan" ]; then
+                latest_scan="$f"
+            fi
+        done
+
+        if [ "$scan_count" -eq 0 ]; then
+            doctor_pass "No Tempering scans yet — run 'forge_tempering_scan' to establish a baseline"
+        else
+            # Extract status + gap count — best-effort grep, no jq dep.
+            status=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$latest_scan" 2>/dev/null | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || echo "")
+            [ -z "$status" ] && status="unknown"
+            gap_count=$({ grep -o '"layer"[[:space:]]*:' "$latest_scan" 2>/dev/null || true; } | wc -l | tr -d ' ')
+
+            # Age in days from mtime — portable across GNU/BSD stat.
+            if stat -c %Y "$latest_scan" >/dev/null 2>&1; then
+                mtime=$(stat -c %Y "$latest_scan")
+            else
+                mtime=$(stat -f %m "$latest_scan" 2>/dev/null || echo "0")
+            fi
+            now=$(date +%s)
+            age_days=$(( (now - mtime) / 86400 ))
+
+            doctor_pass "$scan_count scan(s); latest: $status, ${gap_count:-0} gap(s), $age_days day(s) old"
+
+            # Stale-scan warning mirrors the `tempering-scan-stale` watcher rule.
+            if [ "$age_days" -ge 7 ]; then
+                doctor_warn "Latest scan is $age_days days old" "Re-run 'forge_tempering_scan' — coverage drifts fast"
+            fi
+
+            # Below-minimum warning — count gap records with gap ≥ 5.
+            # Only surface inside the plan-forge dev repo — downstream projects may
+            # have `.forge/tempering/` state seeded from pforge but unrelated to
+            # their own coverage.
+            below_min=$(awk '/"gap"[[:space:]]*:/ { gsub(/[^0-9.]/,"",$0); if ($0+0 >= 5) c++ } END { print c+0 }' "$latest_scan" 2>/dev/null)
+            if [ "${below_min:-0}" -gt 0 ] && [ $is_planforge_dev -eq 1 ]; then
+                doctor_warn "$below_min coverage layer(s) below minimum by ≥ 5 points" "Run 'forge_tempering_status' to inspect the gap report"
+            fi
+        fi
+
+        if [ -f "$tempering_dir/config.json" ]; then
+            doctor_pass "Tempering config present — enterprise minima active"
+        fi
+
+        # TEMPER-02 Slice 02.2 — summarise the latest Tempering run
+        # record (`run-*.json`). Mirrors the PowerShell equivalent.
+        latest_run=""
+        run_count=0
+        for f in "$tempering_dir"/run-*.json; do
+            [ -e "$f" ] || continue
+            run_count=$((run_count + 1))
+            if [ -z "$latest_run" ] || [ "$f" -nt "$latest_run" ]; then
+                latest_run="$f"
+            fi
+        done
+        if [ "$run_count" -gt 0 ]; then
+            run_verdict=$(grep -o '"verdict"[[:space:]]*:[[:space:]]*"[^"]*"' "$latest_run" 2>/dev/null | tail -n1 | sed 's/.*"\([^"]*\)"$/\1/')
+            [ -z "$run_verdict" ] && run_verdict="unknown"
+            scanner_count=$(grep -o '"scanner"[[:space:]]*:' "$latest_run" 2>/dev/null | wc -l | tr -d ' ')
+            run_pass=$(awk 'BEGIN{s=0} /"pass"[[:space:]]*:[[:space:]]*[0-9]+/ { match($0,/[0-9]+/); s+=substr($0,RSTART,RLENGTH) } END{print s}' "$latest_run" 2>/dev/null)
+            run_fail=$(awk 'BEGIN{s=0} /"fail"[[:space:]]*:[[:space:]]*[0-9]+/ { match($0,/[0-9]+/); s+=substr($0,RSTART,RLENGTH) } END{print s}' "$latest_run" 2>/dev/null)
+            if stat -c %Y "$latest_run" >/dev/null 2>&1; then
+                run_mtime=$(stat -c %Y "$latest_run")
+            else
+                run_mtime=$(stat -f %m "$latest_run" 2>/dev/null || echo "0")
+            fi
+            run_age_min=$(( ($(date +%s) - run_mtime) / 60 ))
+            doctor_pass "$run_count run(s); latest: $run_verdict, ${run_pass:-0} pass / ${run_fail:-0} fail across ${scanner_count:-0} scanner(s), $run_age_min min old"
+            case "$run_verdict" in
+                fail|error|budget-exceeded)
+                    if [ $is_planforge_dev -eq 1 ]; then
+                        doctor_warn "Latest Tempering run verdict=$run_verdict" "Open $(basename "$latest_run") for per-scanner detail"
+                    fi
+                    ;;
+            esac
+        fi
+    else
+        doctor_pass "Tempering inactive — no .forge/tempering/ directory yet"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # BUG REGISTRY (Phase BUG-01+)
+    # ═══════════════════════════════════════════════════════════════
+    echo ""
+    printf "\033[36mBug Registry:\033[0m\n"
+
+    local bugs_dir="$REPO_ROOT/.forge/bugs"
+    if [ -d "$bugs_dir" ]; then
+        local bug_files=()
+        while IFS= read -r -d '' f; do bug_files+=("$f"); done < <(find "$bugs_dir" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+        if [ ${#bug_files[@]} -eq 0 ]; then
+            doctor_pass "Bug registry empty — no open bugs tracked"
+        else
+            local total=${#bug_files[@]} open=0 resolved=0 critical=0 high=0
+            for bf in "${bug_files[@]}"; do
+                local status sev
+                status=$(grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]+"' "$bf" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)"$/\1/' | tr '[:upper:]' '[:lower:]')
+                sev=$(grep -oE '"severity"[[:space:]]*:[[:space:]]*"[^"]+"' "$bf" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)"$/\1/' | tr '[:upper:]' '[:lower:]')
+                case "$status" in
+                    resolved|closed|fixed) resolved=$((resolved+1)) ;;
+                    *) open=$((open+1)) ;;
+                esac
+                case "$sev" in
+                    critical) critical=$((critical+1)) ;;
+                    high) high=$((high+1)) ;;
+                esac
+            done
+            doctor_pass "$total total; $open open, $resolved resolved ($critical critical, $high high)"
+            if [ "$critical" -gt 0 ]; then
+                doctor_warn "$critical critical bug(s) open" "Run 'forge_bug_list --severity=critical' via MCP to triage"
+            fi
+        fi
+    else
+        doctor_pass "Bug registry inactive — no .forge/bugs/ directory yet"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # NOTIFICATIONS (Phase NOTIFY-01+)
+    # ═══════════════════════════════════════════════════════════════
+    echo ""
+    printf "\033[36mNotifications:\033[0m\n"
+
+    local forge_cfg="$REPO_ROOT/.forge.json"
+    if [ -f "$forge_cfg" ]; then
+        if grep -q '"notifications"' "$forge_cfg"; then
+            # Extract adapter keys under notifications (best-effort, no jq dependency)
+            local adapters
+            adapters=$(NOTIFY_FILE="$forge_cfg" node -e '
+              try { const c=JSON.parse(require("fs").readFileSync(process.env.NOTIFY_FILE,"utf8"));
+                    const n=c.notifications||{};
+                    const keys=Object.keys(n).filter(k=>k!=="enabled"&&n[k]);
+                    process.stdout.write(keys.join(", "));
+              } catch(e){ process.stdout.write(""); }
+            ' 2>/dev/null)
+            if [ -n "$adapters" ]; then
+                doctor_pass "Configured: $adapters"
+            else
+                doctor_pass "notifications block present — no adapters configured"
+            fi
+        else
+            doctor_pass "No notifications block — adapters inactive (optional)"
+        fi
+    else
+        doctor_pass "No .forge.json — notifications inactive (optional)"
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # L2 TIMELINE / SEARCH SOURCES (Phase SEARCH-01+)
+    # ═══════════════════════════════════════════════════════════════
+    echo ""
+    printf "\033[36mTimeline / Search sources:\033[0m\n"
+
+    local l2_paths=(".forge/runs" ".forge/memory" ".forge/crucible" ".forge/tempering" ".forge/bugs" ".forge/incidents")
+    local l2_total=${#l2_paths[@]} l2_active=0
+    for rel in "${l2_paths[@]}"; do
+        local p="$REPO_ROOT/$rel"
+        if [ -d "$p" ]; then
+            local n
+            n=$(find "$p" -type f 2>/dev/null | head -1)
+            if [ -n "$n" ]; then l2_active=$((l2_active+1)); fi
+        fi
+    done
+    doctor_pass "$l2_active of $l2_total L2 source(s) with indexable events"
 
     # ═══════════════════════════════════════════════════════════════
     # SUMMARY
@@ -1764,7 +3379,7 @@ cmd_doctor() {
 cmd_run_plan() {
     if [ $# -lt 1 ]; then
         echo "ERROR: Missing plan path" >&2
-        echo "Usage: pforge run-plan <plan-file> [--estimate] [--assisted] [--model <name>] [--resume-from <N>] [--dry-run]" >&2
+        echo "Usage: pforge run-plan <plan-file> [--estimate] [--assisted] [--model <name>] [--worker <name>] [--resume-from <N>] [--dry-run] [--foreground] [--no-quorum] [--quorum] [--quorum=auto] [--quorum-threshold <N>] [--strict-gates] [--manual-import [--manual-import-source <human|speckit|grandfather>] [--manual-import-reason <text>]] [--only-slices <expr>] [--no-tempering]" >&2
         exit 1
     fi
 
@@ -1781,26 +3396,67 @@ cmd_run_plan() {
     local estimate=false
     local assisted=false
     local dry_run=false
+    local foreground=false
     local model=""
+    local worker=""
     local resume_from=""
+    local quorum_arg=""
+    local quorum_threshold=""
+    local manual_import=false
+    local manual_import_source=""
+    local manual_import_reason=""
+    local strict_gates=false
+    local only_slices=""
+    local no_tempering=false
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --estimate)     estimate=true ;;
             --assisted)     assisted=true ;;
             --dry-run)      dry_run=true ;;
+            --foreground)   foreground=true ;;
+            --no-quorum)    quorum_arg="--no-quorum" ;;
+            --quorum=*)     quorum_arg="$1" ;;
+            --quorum)       quorum_arg="--quorum" ;;
+            --manual-import) manual_import=true ;;
+            --strict-gates)  strict_gates=true ;;
+            --no-tempering)  no_tempering=true ;;
+            --only-slices)
+                shift
+                if [ -z "$1" ]; then echo "ERROR: --only-slices requires a value" >&2; exit 1; fi
+                only_slices="$1" ;;
+            --manual-import-source)
+                shift
+                if [ -z "$1" ]; then echo "ERROR: --manual-import-source requires a value" >&2; exit 1; fi
+                manual_import_source="$1" ;;
+            --manual-import-reason)
+                shift
+                if [ -z "$1" ]; then echo "ERROR: --manual-import-reason requires a value" >&2; exit 1; fi
+                manual_import_reason="$1" ;;
             --model)
                 shift
                 if [ -z "$1" ] || [ "${1#-}" != "$1" ]; then
                     echo "ERROR: --model requires a value" >&2; exit 1
                 fi
                 model="$1" ;;
+            --worker)
+                shift
+                if [ -z "$1" ] || [ "${1#-}" != "$1" ]; then
+                    echo "ERROR: --worker requires a value" >&2; exit 1
+                fi
+                worker="$1" ;;
             --resume-from)
                 shift
                 if [ -z "$1" ] || [ "${1#-}" != "$1" ]; then
                     echo "ERROR: --resume-from requires a value" >&2; exit 1
                 fi
                 resume_from="$1" ;;
+            --quorum-threshold)
+                shift
+                if [ -z "$1" ]; then
+                    echo "ERROR: --quorum-threshold requires a value" >&2; exit 1
+                fi
+                quorum_threshold="$1" ;;
         esac
         shift
     done
@@ -1819,25 +3475,2404 @@ cmd_run_plan() {
     if [ "$estimate" = true ]; then node_args+=("--estimate"); fi
     if [ "$dry_run" = true ]; then node_args+=("--dry-run"); fi
     if [ -n "$model" ]; then node_args+=("--model" "$model"); fi
+    if [ -n "$worker" ]; then node_args+=("--worker" "$worker"); fi
     if [ -n "$resume_from" ]; then node_args+=("--resume-from" "$resume_from"); fi
+    if [ -n "$quorum_arg" ]; then node_args+=("$quorum_arg"); fi
+    if [ -n "$quorum_threshold" ]; then node_args+=("--quorum-threshold" "$quorum_threshold"); fi
+    if [ "$manual_import" = true ]; then node_args+=("--manual-import"); fi
+    if [ "$strict_gates" = true ]; then node_args+=("--strict-gates"); fi
+    if [ -n "$manual_import_source" ]; then node_args+=("--manual-import-source" "$manual_import_source"); fi
+    if [ -n "$manual_import_reason" ]; then node_args+=("--manual-import-reason" "$manual_import_reason"); fi
+    if [ -n "$only_slices" ]; then node_args+=("--only-slices" "$only_slices"); fi
+    if [ "$no_tempering" = true ]; then node_args+=("--no-tempering"); fi
 
     echo ""
     if [ "$estimate" = true ]; then
         echo "Estimating cost for: $plan_path"
+        echo ""
+        node "${node_args[@]}"
     elif [ "$dry_run" = true ]; then
         echo "Dry run for: $plan_path"
-    elif [ "$assisted" = true ]; then
-        echo "Starting assisted execution: $plan_path"
-        echo "You code in VS Code, orchestrator validates gates."
+        echo ""
+        node "${node_args[@]}"
+    elif [ "$foreground" = true ]; then
+        # Blocking mode — useful for debugging or CI pipelines
+        if [ "$assisted" = true ]; then
+            echo "Starting assisted execution (foreground): $plan_path"
+            echo "You code in VS Code, orchestrator validates gates."
+        else
+            echo "Starting full auto execution (foreground): $plan_path"
+        fi
+        echo ""
+        node "${node_args[@]}"
     else
-        echo "Starting full auto execution: $plan_path"
+        # Background mode — default for interactive use
+        if [ "$assisted" = true ]; then
+            echo "Starting assisted execution (background): $plan_path"
+            echo "You code in VS Code, orchestrator validates gates."
+        else
+            echo "Starting full auto execution (background): $plan_path"
+        fi
+        echo ""
+        node "${node_args[@]}" &
+        local bg_pid=$!
+        echo "Orchestrator running in background  PID: $bg_pid"
+        echo "Monitor : pforge plan-status"
+        echo "Logs    : .forge/runs/ (latest sub-directory)"
+        echo "Stop    : kill $bg_pid"
     fi
+}
+
+# ─── Command: org-rules ────────────────────────────────────────────────
+cmd_org_rules() {
+    local subcmd="${1:-export}"
+    local format="github"
+    local out_file=""
+    shift 2>/dev/null || true
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --format)      format="$2"; shift 2 ;;
+            --format=*)    format="${1#--format=}"; shift ;;
+            --output)      out_file="$2"; shift 2 ;;
+            --output=*)    out_file="${1#--output=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ "$subcmd" != "export" ]; then
+        echo "ERROR: Unknown org-rules sub-command '$subcmd'. Use: export" >&2
+        exit 1
+    fi
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       Plan Forge — Org Rules Export                          ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
-    node "${node_args[@]}"
+    # Try MCP server REST API (port 3100) first
+    if command -v curl >/dev/null 2>&1; then
+        local body="{\"format\":\"${format}\"}"
+        [ -n "$out_file" ] && body="{\"format\":\"${format}\",\"output\":\"${out_file}\"}"
+        local http_code
+        http_code=$(curl -s -o /tmp/pforge_org_rules_out.txt -w "%{http_code}" \
+            -X POST "http://localhost:3100/api/tool/org-rules" \
+            -H "Content-Type: application/json" \
+            -d "$body" --max-time 5 2>/dev/null)
+        if [ "$http_code" = "200" ]; then
+            if [ -n "$out_file" ]; then
+                echo "  ✅ Org rules exported to: $out_file"
+            else
+                cat /tmp/pforge_org_rules_out.txt
+            fi
+            rm -f /tmp/pforge_org_rules_out.txt
+            return 0
+        fi
+        rm -f /tmp/pforge_org_rules_out.txt
+    fi
+
+    # Fallback: inline Node.js
+    if ! command -v node >/dev/null 2>&1; then
+        echo "ERROR: node not found. Install Node.js or start the MCP server (pforge-mcp/server.mjs)." >&2
+        exit 1
+    fi
+
+    ORG_RULES_FORMAT="$format" ORG_RULES_OUTPUT="$out_file" node -e "
+const fs=require('fs'),path=require('path'),cwd=process.cwd();
+const fmt=process.env.ORG_RULES_FORMAT||'github';
+const outFile=process.env.ORG_RULES_OUTPUT||'';
+const instrDir=path.join(cwd,'.github','instructions');
+const instrFiles=fs.existsSync(instrDir)?fs.readdirSync(instrDir).filter(f=>f.endsWith('.instructions.md')).sort().map(f=>path.join(instrDir,f)):[];
+function stripFrontmatter(raw){return raw.replace(/^---[\s\S]*?---\s*/m,'').trim();}
+const parts=[];
+instrFiles.forEach(f=>{const body=stripFrontmatter(fs.readFileSync(f,'utf8'));if(body)parts.push(body);});
+const ci=path.join(cwd,'.github','copilot-instructions.md');
+if(fs.existsSync(ci))parts.push(stripFrontmatter(fs.readFileSync(ci,'utf8')));
+const pp=path.join(cwd,'PROJECT-PRINCIPLES.md');
+if(fs.existsSync(pp))parts.push(fs.readFileSync(pp,'utf8').trim());
+const out=parts.join('\n\n---\n\n');
+if(outFile){fs.writeFileSync(outFile,out,'utf8');console.log('Exported to: '+outFile);}
+else{process.stdout.write(out+'\n');}
+"
+}
+
+# ─── Command: incident ─────────────────────────────────────────────────
+cmd_incident() {
+    local description="${1:-}"
+    if [ -z "$description" ]; then
+        echo "ERROR: description is required. Usage: pforge incident \"<description>\" [--severity S] [--files f1,f2] [--resolved-at ISO]" >&2
+        exit 1
+    fi
+    shift
+
+    local severity="medium"
+    local files=""
+    local resolved_at=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --severity)    severity="$2";    shift 2 ;;
+            --files)       files="$2";       shift 2 ;;
+            --resolved-at) resolved_at="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "incident" \
+        "Build incident payload (description, severity, files, resolvedAt)" \
+        "POST to /api/incident on the MCP server" \
+        "Append record to .forge/incidents.jsonl" \
+        "Dispatch bridge notification if onCall configured in .forge.json"
+
+    local port=3100
+
+    # Build JSON payload using node to avoid manual escaping
+    local payload
+    payload=$(node -e "
+      const p = {
+        description: process.env.INC_DESC,
+        severity: process.env.INC_SEV || 'medium',
+        files: process.env.INC_FILES ? process.env.INC_FILES.split(',').map(f => f.trim()).filter(Boolean) : [],
+      };
+      if (process.env.INC_RESOLVED) p.resolvedAt = process.env.INC_RESOLVED;
+      console.log(JSON.stringify(p));
+    " INC_DESC="$description" INC_SEV="$severity" INC_FILES="$files" INC_RESOLVED="$resolved_at")
+
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/incident" \
+        -H "Content-Type: application/json" \
+        -d "$payload") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      const sev_colors = { critical: '\x1b[31m', high: '\x1b[33m', medium: '\x1b[33m', low: '\x1b[37m' };
+      const sc = sev_colors[d.severity] || '\x1b[37m';
+      console.log('\n\u{1F6A8} Incident Captured');
+      console.log('   ID:          ' + d.id);
+      console.log('   Description: ' + d.description);
+      console.log('   Severity:    ' + sc + d.severity + '\x1b[0m');
+      console.log('   Captured at: ' + d.capturedAt);
+      if (d.resolvedAt) {
+        const mttrMin = Math.round(d.mttr / 60000 * 10) / 10;
+        console.log('   Resolved at: \x1b[32m' + d.resolvedAt + '\x1b[0m');
+        console.log('   MTTR:        \x1b[32m' + mttrMin + ' minutes\x1b[0m');
+      } else {
+        console.log('   MTTR:        \x1b[90mpending (supply --resolved-at when resolved)\x1b[0m');
+      }
+      if (d.files && d.files.length > 0) console.log('   Files:       ' + d.files.join(', '));
+      console.log('   Saved to:    \x1b[90m.forge/incidents.jsonl\x1b[0m');
+    "
+}
+
+# ─── Command: deploy-log ──────────────────────────────────────────────
+cmd_deploy_log() {
+    local version="${1:-}"
+    if [ -z "$version" ]; then
+        echo "ERROR: version is required. Usage: pforge deploy-log \"<version>\" [--by CI] [--notes \"...\"] [--slice S]" >&2
+        exit 1
+    fi
+    shift
+
+    local by="unknown"
+    local notes=""
+    local slice=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --by)    by="$2";    shift 2 ;;
+            --notes) notes="$2"; shift 2 ;;
+            --slice) slice="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "deploy-log" \
+        "Build deploy payload (version, by, notes, slice)" \
+        "POST to /api/deploy-journal on the MCP server" \
+        "Append record to .forge/deploy-journal.jsonl"
+
+    local port=3100
+
+    local payload
+    payload=$(node -e "
+      const p = {
+        version: process.env.DPL_VER,
+        by: process.env.DPL_BY || 'unknown',
+      };
+      if (process.env.DPL_NOTES) p.notes = process.env.DPL_NOTES;
+      if (process.env.DPL_SLICE) p.slice = process.env.DPL_SLICE;
+      console.log(JSON.stringify(p));
+    " DPL_VER="$version" DPL_BY="$by" DPL_NOTES="$notes" DPL_SLICE="$slice")
+
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/deploy-journal" \
+        -H "Content-Type: application/json" \
+        -d "$payload") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F680} Deploy Recorded');
+      console.log('   ID:          ' + d.id);
+      console.log('   Version:     ' + d.version);
+      console.log('   By:          ' + d.by);
+      console.log('   Deployed at: ' + d.deployedAt);
+      if (d.notes) console.log('   Notes:       ' + d.notes);
+      if (d.slice) console.log('   Slice:       ' + d.slice);
+      console.log('   Saved to:    \x1b[90m.forge/deploy-journal.jsonl\x1b[0m');
+    "
+}
+
+# ─── Command: triage ───────────────────────────────────────────────────
+cmd_triage() {
+    local min_severity="low"
+    local max_results=20
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --min-severity) min_severity="$2"; shift 2 ;;
+            --max)          max_results="$2";  shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "triage" \
+        "Read open incidents from .forge/incidents.jsonl" \
+        "Read latest drift violations from .forge/drift-history.json" \
+        "Score each alert: severity_weight * recency_factor" \
+        "Rank by priority (tiebreak: more recent first)"
+
+    local port=3100
+    local response
+    response=$(curl -sf "http://localhost:${port}/api/triage?minSeverity=${min_severity}&max=${max_results}") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F6A8} Alert Triage (' + d.showing + '/' + d.total + ' alerts, min-severity: ' + d.minSeverity + ')');
+      console.log('');
+      if (d.alerts.length === 0) {
+        console.log('   \x1b[32mNo open alerts found.\x1b[0m');
+      } else {
+        const sev_colors = { critical: '\x1b[31m', high: '\x1b[33m', medium: '\x1b[33m', low: '\x1b[37m' };
+        for (const a of d.alerts) {
+          const sc = sev_colors[a.severity] || '\x1b[37m';
+          const icon = a.source === 'incident' ? '\u{1F6A8}' : '\u{1F4CA}';
+          console.log('   ' + icon + ' ' + sc + '[' + a.severity + '] ' + a.description + '\x1b[0m');
+          console.log('      \x1b[90mPriority: ' + a.priority + '  Source: ' + a.source + '  ID: ' + a.id + '\x1b[0m');
+        }
+      }
+      console.log('');
+      console.log('   \x1b[90mGenerated: ' + d.generatedAt + '\x1b[0m');
+    "
+}
+
+# ─── Command: runbook ──────────────────────────────────────────────────
+cmd_runbook() {
+    local plan=""
+    local no_incidents=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-incidents) no_incidents=true; shift ;;
+            --*) shift ;;
+            *)
+                if [ -z "$plan" ]; then plan="$1"; fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$plan" ]; then
+        echo "ERROR: plan file is required. Usage: ./pforge.sh runbook <plan-file> [--no-incidents]" >&2
+        exit 1
+    fi
+
+    print_manual_steps "runbook" \
+        "Parse the plan file (slices, scope contract, gates)" \
+        "Collect recent incidents from .forge/incidents.jsonl (unless --no-incidents)" \
+        "Render a structured Markdown runbook" \
+        "Save to .forge/runbooks/<plan-name>-runbook.md"
+
+    local port=3100
+    local include_incidents="true"
+    if [ "$no_incidents" = "true" ]; then include_incidents="false"; fi
+
+    local payload
+    payload=$(node -e "
+      console.log(JSON.stringify({ plan: process.env.RB_PLAN, includeIncidents: process.env.RB_INC === 'true' }));
+    " RB_PLAN="$plan" RB_INC="$include_incidents")
+
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/runbook" \
+        -H "Content-Type: application/json" \
+        -d "$payload") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F4D6} Runbook Generated');
+      console.log('   File:   ' + d.runbook);
+      console.log('   Slices: ' + d.slices);
+      console.log('   At:     \x1b[90m' + d.generatedAt + '\x1b[0m');
+    "
+}
+
+# ─── Command: hotspot ──────────────────────────────────────────────────
+cmd_hotspot() {
+    local top=10
+    local since="6 months ago"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --top)   top="$2";   shift 2 ;;
+            --since) since="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "hotspot" \
+        "Run git log to collect file change frequency" \
+        "Rank files by number of commits" \
+        "Cache results in .forge/hotspot-cache.json (24h TTL)" \
+        "Return top N hotspot files"
+
+    local port=3100
+    local encoded_since
+    encoded_since=$(node -e "process.stdout.write(encodeURIComponent('${since}'))")
+    local response
+    response=$(curl -sf "http://localhost:${port}/api/hotspots?top=${top}&since=${encoded_since}") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F525} Git Churn Hotspots');
+      console.log('   Since:       ' + d.since);
+      console.log('   Total files: ' + d.totalFiles);
+      console.log('   Showing:     ' + d.showing);
+      console.log('');
+      d.hotspots.forEach((h, i) => {
+        const bar = '\u2588'.repeat(Math.min(h.commits, 40));
+        console.log('   ' + (i + 1) + '. \x1b[33m' + h.file + ' (' + h.commits + ' commits)\x1b[0m');
+        console.log('      \x1b[33m' + bar + '\x1b[0m');
+      });
+      console.log('');
+      console.log('   Cached at: \x1b[90m' + d.generatedAt + '\x1b[0m');
+    "
+}
+
+# ─── Command: secret-scan ──────────────────────────────────────────────
+cmd_secret_scan() {
+    local since="HEAD~1"
+    local threshold="4.0"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since)     since="$2";     shift 2 ;;
+            --threshold) threshold="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "secret-scan" \
+        "Run git diff to collect changed lines" \
+        "Compute Shannon entropy for token-like strings" \
+        "Flag findings above threshold ($threshold)" \
+        "Cache results in .forge/secret-scan-cache.json"
+
+    local port=3100
+    local response
+    response=$(curl -sf "http://localhost:${port}/api/secret-scan") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      if (d.cache === null) {
+        console.log('\n\u{1F50D} Secret Scan Results');
+        console.log('   No scan results yet. Run forge_secret_scan to populate.');
+      } else {
+        console.log('\n\u{1F50D} Secret Scan Results');
+        console.log('   Since:         ' + d.since);
+        console.log('   Threshold:     ' + d.threshold);
+        console.log('   Scanned files: ' + d.scannedFiles);
+        if (d.clean) {
+          console.log('   Status:        \x1b[32m\u2705 Clean — no secrets detected\x1b[0m');
+        } else {
+          console.log('   Status:        \x1b[33m\u26A0 ' + d.findings.length + ' finding(s)\x1b[0m');
+          d.findings.forEach(f => {
+            console.log('      \x1b[31m' + f.file + ':' + f.line + ' [' + f.confidence + '] entropy=' + f.entropyScore + ' type=' + f.type + '\x1b[0m');
+          });
+        }
+        console.log('');
+        console.log('   Scanned at: \x1b[90m' + d.scannedAt + '\x1b[0m');
+      }
+    "
+}
+
+# ─── Command: env-diff ──────────────────────────────────────────────────
+cmd_env_diff() {
+    local baseline=".env"
+    local files=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --baseline) baseline="$2"; shift 2 ;;
+            --files)    files="$2";    shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "env-diff" \
+        "Read baseline $baseline and compare key names" \
+        "Detect missing keys across target .env files" \
+        "Cache results in .forge/env-diff-cache.json (key names only, no values)"
+
+    local port=3100
+    local response
+    response=$(curl -sf "http://localhost:${port}/api/env/diff") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      if (d.cache === null) {
+        console.log('\n\u{1F50E} Environment Key Diff');
+        console.log('   No diff data yet. Run forge_env_diff to populate.');
+      } else {
+        console.log('\n\u{1F50E} Environment Key Diff');
+        console.log('   Baseline:       ' + d.baseline);
+        console.log('   Files compared: ' + d.filesCompared);
+        if (d.summary.clean) {
+          console.log('   Status:        \x1b[32m\u2705 Clean — all keys aligned\x1b[0m');
+        } else {
+          console.log('   Status:        \x1b[33m\u26A0 ' + d.summary.totalGaps + ' gap(s) found\x1b[0m');
+          d.pairs.forEach(p => {
+            if ((p.missingInTarget && p.missingInTarget.length) || (p.missingInBaseline && p.missingInBaseline.length)) {
+              console.log('   --- ' + p.file + ' ---');
+              (p.missingInTarget || []).forEach(k => console.log('      \x1b[31mMissing in target: ' + k + '\x1b[0m'));
+              (p.missingInBaseline || []).forEach(k => console.log('      \x1b[33mMissing in baseline: ' + k + '\x1b[0m'));
+            }
+          });
+        }
+        console.log('');
+        console.log('   Scanned at: \x1b[90m' + d.scannedAt + '\x1b[0m');
+      }
+    "
+}
+
+# ─── Command: fix-proposal ──────────────────────────────────────────────
+cmd_fix_proposal() {
+    local source=""
+    local incident_id=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --source)      source="$2";      shift 2 ;;
+            --incident-id) incident_id="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "fix-proposal" \
+        "Read LiveGuard data (drift, incidents, secrets, regression)" \
+        "Generate 1-2 slice fix plan" \
+        "Write to docs/plans/auto/LIVEGUARD-FIX-<id>.md" \
+        "Append record to .forge/fix-proposals.json"
+
+    local port=3100
+    local body="{}"
+    if [ -n "$source" ] && [ -n "$incident_id" ]; then
+        body="{\"source\":\"${source}\",\"incidentId\":\"${incident_id}\"}"
+    elif [ -n "$source" ]; then
+        body="{\"source\":\"${source}\"}"
+    elif [ -n "$incident_id" ]; then
+        body="{\"incidentId\":\"${incident_id}\"}"
+    fi
+    local response
+    response=$(curl -sf -X POST -H "Content-Type: application/json" -d "$body" "http://localhost:${port}/api/fix/propose") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F527} Fix Proposal');
+      if (d.error) {
+        console.log('   \x1b[33m' + d.error + '\x1b[0m');
+      } else if (d.alreadyExists) {
+        console.log('   \x1b[90mAlready exists: ' + d.plan + '\x1b[0m');
+      } else {
+        console.log('   Fix ID:   ' + d.fixId);
+        console.log('   Source:   ' + d.source);
+        console.log('   Plan:     \x1b[32m' + d.plan + '\x1b[0m');
+        console.log('   Slices:   ' + (d.sliceCount || 'unknown'));
+      }
+    "
+}
+
+# ─── Command: quorum-analyze ───────────────────────────────────────────
+cmd_quorum_analyze() {
+    local source=""
+    local goal=""
+    local custom_question=""
+    local quorum_size=3
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --source)          source="$2";          shift 2 ;;
+            --goal)            goal="$2";             shift 2 ;;
+            --custom-question) custom_question="$2";  shift 2 ;;
+            --quorum-size)     quorum_size="$2";      shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "quorum-analyze" \
+        "Read LiveGuard data from .forge/ (source: ${source:-all})" \
+        "Assemble 3-section prompt (context, question, voting instruction)" \
+        "Return structured prompt object for multi-model dispatch"
+
+    local port=3100
+    local body="{\"quorumSize\":${quorum_size}}"
+    if [ -n "$custom_question" ]; then
+        if [ -n "$source" ]; then
+            body="{\"source\":\"${source}\",\"customQuestion\":\"${custom_question}\",\"quorumSize\":${quorum_size}}"
+        else
+            body="{\"customQuestion\":\"${custom_question}\",\"quorumSize\":${quorum_size}}"
+        fi
+    elif [ -n "$goal" ]; then
+        if [ -n "$source" ]; then
+            body="{\"source\":\"${source}\",\"analysisGoal\":\"${goal}\",\"quorumSize\":${quorum_size}}"
+        else
+            body="{\"analysisGoal\":\"${goal}\",\"quorumSize\":${quorum_size}}"
+        fi
+    elif [ -n "$source" ]; then
+        body="{\"source\":\"${source}\",\"quorumSize\":${quorum_size}}"
+    fi
+
+    local response
+    response=$(curl -sf -X POST -H "Content-Type: application/json" -d "$body" "http://localhost:${port}/api/quorum/prompt") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F50E} Quorum Analyze');
+      if (d.error) {
+        console.log('   \x1b[33m' + d.error + '\x1b[0m');
+      } else {
+        console.log('   Question:  ' + d.questionUsed);
+        console.log('   Tokens:    ~' + d.promptTokenEstimate);
+        console.log('   Models:    ' + (d.suggestedModels || []).join(', '));
+        console.log('   Data age:  \x1b[90m' + d.dataSnapshotAge + '\x1b[0m');
+        console.log('');
+        console.log('   \x1b[32mPrompt assembled — pipe to quorum runner or copy from JSON output.\x1b[0m');
+      }
+    "
+}
+
+# ─── Command: health-trend ─────────────────────────────────────────────
+cmd_health_trend() {
+    local days=30
+    local metrics=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days)    days="$2";    shift 2 ;;
+            --metrics) metrics="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "health-trend" \
+        "Read .forge/ operational data (drift, cost, incidents, model performance)" \
+        "Filter to requested time window ($days days)" \
+        "Compute per-metric summaries and overall health score" \
+        "Report trend direction"
+
+    local port=3100
+    local uri="http://localhost:${port}/api/health-trend?days=${days}"
+    if [ -n "$metrics" ]; then
+        uri="${uri}&metrics=${metrics}"
+    fi
+    local response
+    response=$(curl -sf "$uri") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      console.log('\n\u{1F3E5} Health Trend (' + d.days + '-day window)');
+      const sc = d.healthScore;
+      const color = sc >= 80 ? '\x1b[32m' : sc >= 50 ? '\x1b[33m' : '\x1b[31m';
+      console.log('   Health Score: ' + color + (sc != null ? sc + '/100' : 'N/A') + '\x1b[0m');
+      console.log('   Trend:        ' + d.trend);
+      console.log('   Data Points:  ' + d.dataPoints);
+      console.log('');
+      if (d.drift) {
+        console.log('   Drift:');
+        console.log('     Snapshots: ' + d.drift.snapshots + '  Avg: ' + (d.drift.avg != null ? d.drift.avg : 'N/A') + '  Trend: ' + d.drift.trend);
+      }
+      if (d.cost) {
+        console.log('   Cost:');
+        console.log('     Runs: ' + d.cost.runs + '  Total: \$' + d.cost.totalUsd + '  Avg/run: \$' + d.cost.avgPerRun);
+      }
+      if (d.incidents) {
+        console.log('   Incidents:');
+        console.log('     Total: ' + d.incidents.total + '  Open: ' + d.incidents.open + '  Resolved: ' + d.incidents.resolved);
+      }
+      if (d.models) {
+        console.log('   Models:');
+        console.log('     Total slices: ' + d.models.totalSlices);
+      }
+      console.log('');
+      console.log('   Generated: \x1b[90m' + d.generatedAt + '\x1b[0m');
+    "
+}
+
+# ─── Command: drift ────────────────────────────────────────────────────
+cmd_drift() {
+    local threshold=70
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --threshold) threshold="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "drift" \
+        "Scan source files for architecture rule violations" \
+        "Score codebase (100 minus penalties)" \
+        "Compare against .forge/drift-history.json" \
+        "Report trend: improving / stable / degrading"
+
+    local port=3100
+    local response
+    response=$(curl -sf "http://localhost:${port}/api/drift?threshold=${threshold}") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+      const color = d.score >= ${threshold} ? '\x1b[32m' : '\x1b[31m';
+      console.log('\n\u{1F4CA} Drift Score: ' + color + d.score + '/100\x1b[0m');
+      console.log('   Trend: ' + d.trend + ' (\u0394' + d.delta + ')');
+      console.log('   Files scanned: ' + d.filesScanned);
+      console.log('   Violations: ' + d.violations.length);
+      console.log('   History entries: ' + d.historyLength);
+      d.violations.forEach(v => {
+        const vc = v.severity === 'critical' ? '\x1b[31m' : '\x1b[33m';
+        console.log('   \u26A0 ' + vc + '[' + v.severity + '] ' + v.file + ':' + v.line + ' ' + v.rule + '\x1b[0m');
+      });
+    "
+}
+
+# ─── Command: regression-guard ──────────────────────────────────────────
+cmd_regression_guard() {
+    local files=""
+    local plan=""
+    local fail_fast="false"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --files)     files="$2";     shift 2 ;;
+            --plan)      plan="$2";      shift 2 ;;
+            --fail-fast) fail_fast="true"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    print_manual_steps "regression-guard" \
+        "Extract validation gate commands from plan files in docs/plans/" \
+        "Check each command against the gate allowlist" \
+        "Execute allowed commands and report passed/failed results" \
+        "Return structured result with per-gate status"
+
+    local port=3100
+
+    local payload
+    payload=$(node -e "
+      const p = { files: process.env.RG_FILES ? process.env.RG_FILES.split(',').map(f => f.trim()).filter(Boolean) : [], failFast: process.env.RG_FAIL_FAST === 'true' };
+      if (process.env.RG_PLAN) p.plan = process.env.RG_PLAN;
+      console.log(JSON.stringify(p));
+    " RG_FILES="$files" RG_FAIL_FAST="$fail_fast" RG_PLAN="$plan")
+
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/regression-guard" \
+        -H "Content-Type: application/json" \
+        -d "$payload") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      const ok = d.success;
+      const icon = ok ? '\u2705' : '\u274C';
+      const color = ok ? '\x1b[32m' : '\x1b[31m';
+      console.log('\n' + icon + ' Regression Guard: ' + color + (ok ? 'PASSED' : 'FAILED') + '\x1b[0m');
+      console.log('   Gates checked: ' + d.gatesChecked);
+      console.log('   \x1b[32mPassed:        ' + d.passed + '\x1b[0m');
+      if (d.failed > 0) console.log('   \x1b[31mFailed:        ' + d.failed + '\x1b[0m');
+      if (d.blocked > 0) console.log('   \x1b[33mBlocked:       ' + d.blocked + '\x1b[0m');
+      if (d.skipped > 0) console.log('   \x1b[90mSkipped:       ' + d.skipped + '\x1b[0m');
+      (d.results || []).forEach(r => {
+        if (r.status === 'failed') {
+          console.log('   \u274C Slice ' + r.sliceNumber + ' [' + r.planFile + ']: ' + r.sliceTitle);
+          if (r.output) console.log('      \x1b[90m' + r.output + '\x1b[0m');
+        } else if (r.status === 'blocked') {
+          console.log('   \u26A0 Slice ' + r.sliceNumber + ' [' + r.planFile + ']: BLOCKED \u2014 ' + r.reason);
+        }
+      });
+    "
+
+    # Exit non-zero if any gates failed
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      process.exit(d.success ? 0 : 1);
+    " || exit 1
+}
+
+# ─── Command: tour ─────────────────────────────────────────────────────
+cmd_tour() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║           Welcome to Plan Forge — Guided Tour               ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    local instr_dir="$REPO_ROOT/.github/instructions"
+    local agents_dir="$REPO_ROOT/.github/agents"
+    local prompts_dir="$REPO_ROOT/.github/prompts"
+    local skills_dir="$REPO_ROOT/.github/skills"
+    local hooks_dir="$REPO_ROOT/.github/hooks"
+    local forge_json="$REPO_ROOT/.forge.json"
+
+    local sections=(
+        "1|6|Instruction Files (.github/instructions/)|These auto-load in Copilot based on the file type you're editing.|They contain coding standards, security rules, testing patterns, and Temper Guards.|Each file has an 'applyTo' pattern — e.g., database.instructions.md loads for *.sql files.|$instr_dir|*.instructions.md|file"
+        "2|6|Agent Definitions (.github/agents/)|Specialized AI reviewer personas — each focuses on one concern.|Agents are read-only: they audit code but can't edit files.|Invoke via the agent picker dropdown in Copilot Chat.|$agents_dir|*.agent.md|file"
+        "3|6|Prompt Templates (.github/prompts/)|Scaffolding recipes and pipeline step prompts.|Attach in Copilot Chat to generate consistent code patterns.|Step prompts (step0–step6) guide the full pipeline workflow.|$prompts_dir|*.prompt.md|file"
+        "4|6|Skills (.github/skills/)|Multi-step executable procedures invoked with / slash commands.|Each skill chains tool calls with validation between steps.|Examples: /database-migration, /test-sweep, /security-audit|$skills_dir||dir"
+        "5|6|Lifecycle Hooks (.github/hooks/)|Automatic actions during agent sessions — no manual activation needed.|SessionStart: injects project context. PostToolUse: warns on TODOs.|PreToolUse: blocks edits to forbidden files. Stop: warns if no tests ran.|$hooks_dir||file"
+        "6|6|Configuration (.forge.json)|Project config — preset, build/test commands, model routing, and extensions.|The orchestrator reads this to know how to execute your plans.|Edit directly or use the dashboard Config tab at localhost:3100/dashboard.|$forge_json||json"
+    )
+
+    for section in "${sections[@]}"; do
+        IFS='|' read -r num total title desc1 desc2 desc3 dir_path pattern mode <<< "$section"
+
+        printf "\033[33m[%s/%s] %s\033[0m\n" "$num" "$total" "$title"
+        echo ""
+        printf "  \033[37m%s\033[0m\n" "$desc1"
+        printf "  \033[37m%s\033[0m\n" "$desc2"
+        printf "  \033[37m%s\033[0m\n" "$desc3"
+        echo ""
+
+        if [ "$mode" = "json" ]; then
+            if [ -f "$dir_path" ]; then
+                printf "  \033[32mFound: %s\033[0m\n" "$(basename "$dir_path")"
+                read -rp "  Press Enter to show key fields, or 's' to skip: " choice
+                if [ "$choice" != "s" ]; then
+                    local pname tpreset tstack
+                    pname=$(node -e "try{const j=JSON.parse(require('fs').readFileSync('$dir_path','utf8'));console.log(j.projectName||'(not set)')}catch{console.log('(parse error)')}" 2>/dev/null)
+                    tpreset=$(node -e "try{const j=JSON.parse(require('fs').readFileSync('$dir_path','utf8'));console.log(j.preset||'(not set)')}catch{console.log('(parse error)')}" 2>/dev/null)
+                    tstack=$(node -e "try{const j=JSON.parse(require('fs').readFileSync('$dir_path','utf8'));console.log(j.stack||'(not set)')}catch{console.log('(parse error)')}" 2>/dev/null)
+                    echo "    Project: $pname"
+                    echo "    Preset:  $tpreset"
+                    echo "    Stack:   $tstack"
+                fi
+            else
+                printf "  \033[33mNot found — run 'pforge init' first\033[0m\n"
+            fi
+        elif [ -d "$dir_path" ]; then
+            local count=0
+            if [ "$mode" = "dir" ]; then
+                count=$(find "$dir_path" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+            elif [ -n "$pattern" ]; then
+                count=$(find "$dir_path" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l | tr -d ' ')
+            fi
+            printf "  \033[32mFound: %s items\033[0m\n" "$count"
+            read -rp "  Press Enter to list them, or 's' to skip: " choice
+            if [ "$choice" != "s" ]; then
+                if [ "$mode" = "dir" ]; then
+                    find "$dir_path" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sort | while read -r f; do
+                        echo "    • $f"
+                    done
+                elif [ -n "$pattern" ]; then
+                    find "$dir_path" -maxdepth 1 -name "$pattern" -type f -exec basename {} \; 2>/dev/null | sort | while read -r f; do
+                        echo "    • $f"
+                    done
+                fi
+            fi
+        else
+            printf "  \033[33mNot found — run 'pforge init' first\033[0m\n"
+        fi
+
+        echo ""
+        if [ "$num" -lt "$total" ]; then
+            read -rp "  Press Enter to continue: "
+        fi
+        echo ""
+    done
+
+    echo "═══════════════════════════════════════════════════════════════"
+    printf "  \033[32mTour complete! Next steps:\033[0m\n"
+    echo ""
+    echo "  • Run 'pforge smith' to verify your forge health"
+    echo "  • Select the Specifier agent in Copilot Chat to plan your first feature"
+    echo "  • Read the walkthrough: docs/QUICKSTART-WALKTHROUGH.md"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+}
+
+# ─── Command: version-bump ─────────────────────────────────────────────
+# Pure-bash port of Invoke-VersionBump from pforge.ps1.
+# Supports --dry-run (preview unified diffs, no writes) and --strict
+# (promote every unmatched pattern to a hard failure).
+cmd_version_bump() {
+    local new_version="" dry_run=0 strict=0
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) dry_run=1 ;;
+            --strict)  strict=1 ;;
+            -*)        ;;
+            *)         [ -z "$new_version" ] && new_version="$arg" ;;
+        esac
+    done
+
+    if [ -z "$new_version" ]; then
+        printf "\033[31mERROR: Version required.\033[0m\n" >&2
+        printf "\033[33m  Usage: pforge version-bump <version>\033[0m\n" >&2
+        printf "\033[33m  Example: pforge version-bump 2.14.0\033[0m\n" >&2
+        exit 1
+    fi
+
+    local short_version today
+    short_version="$(printf '%s' "$new_version" | sed -E 's/\.[0-9]+$//')"
+    today="${PFORGE_TEST_TODAY:-$(date +%Y-%m-%d)}"
+
+    # Parallel arrays — one entry per target (index.html appears twice)
+    local target_files target_strategies target_patterns target_replaces target_descs target_optional target_validates
+    target_files=(VERSION "pforge-mcp/package.json" "docs/index.html" "docs/index.html" "README.md" "ROADMAP.md")
+    target_strategies=(Overwrite RegexReplace RegexReplace RegexReplace RegexReplace RegexReplace)
+    target_patterns=("" '"version":[[:space:]]*"[^"]+"' 'Dogfooded · v[0-9.]+' '>v[0-9.]+</div>' 'v1\.0 → v[0-9.]+' '\*\*v[0-9.]+\*\* \([0-9]{4}-[0-9]{2}-[0-9]{2}\)')
+    target_replaces=("" "\"version\": \"$new_version\"" "Dogfooded · v$new_version" ">v$short_version</div>" "v1.0 → v$short_version" "**v$new_version** ($today)")
+    target_descs=("VERSION file" "MCP package.json" "index.html hero badge" "index.html stats card" "README track record" "ROADMAP current release")
+    target_optional=(0 0 0 0 1 0)
+    # validate: substring that MUST be present after each write (short_version for targets that write the truncated form)
+    target_validates=("$new_version" "$new_version" "$new_version" "$short_version" "$short_version" "$new_version")
+
+    local total=${#target_files[@]}
+    local written=0 warned=0 failed=0 dry_would_update=0 dry_warnings=0
+
+    printf "\n\033[36mVersion Bump: → v%s\033[0m\n" "$new_version"
+    printf "\033[90m─────────────────────────────────────\033[0m\n"
+
+    local i=0
+    while [ "$i" -lt "$total" ]; do
+        local file="${target_files[$i]}"
+        local strategy="${target_strategies[$i]}"
+        local p="${target_patterns[$i]}"
+        local r="${target_replaces[$i]}"
+        local desc="${target_descs[$i]}"
+        local optional="${target_optional[$i]}"
+        local validate="${target_validates[$i]}"
+        local filepath="$REPO_ROOT/$file"
+
+        if [ ! -f "$filepath" ]; then
+            if [ "$optional" -eq 1 ]; then
+                printf "  \033[90m⏭️  %s not found (optional, skipping)\033[0m\n" "$file"
+            elif [ "$strict" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
+                printf "  \033[31m❌ %s not found (strict mode)\033[0m\n" "$desc" >&2
+                failed=$((failed + 1))
+            else
+                printf "  \033[33m⚠️  %s not found\033[0m\n" "$file"
+                if [ "$dry_run" -eq 1 ]; then
+                    dry_warnings=$((dry_warnings + 1))
+                else
+                    warned=$((warned + 1))
+                fi
+            fi
+            i=$((i + 1))
+            continue
+        fi
+
+        if [ "$dry_run" -eq 1 ]; then
+            local tmpfile diffout
+            tmpfile="$(mktemp)"
+            diffout="$(mktemp)"
+            if [ "$strategy" = "Overwrite" ]; then
+                printf '%s' "$new_version" > "$tmpfile"
+                dry_would_update=$((dry_would_update + 1))
+                diff -u "$filepath" "$tmpfile" > "$diffout" || true
+                sed -e "1s|^--- .*|--- a/$file|" -e "2s|^+++ .*|+++ b/$file|" "$diffout"
+            else
+                if grep -Eq "$p" "$filepath"; then
+                    sed -E "s|$p|$r|g" "$filepath" > "$tmpfile"
+                    dry_would_update=$((dry_would_update + 1))
+                    diff -u "$filepath" "$tmpfile" > "$diffout" || true
+                    sed -e "1s|^--- .*|--- a/$file|" -e "2s|^+++ .*|+++ b/$file|" "$diffout"
+                else
+                    if [ "$optional" -eq 1 ]; then
+                        printf "  \033[90m⏭️  %s — pattern not found (optional)\033[0m\n" "$desc"
+                    else
+                        printf "  \033[33m⚠️  %s — pattern not found\033[0m\n" "$desc"
+                        dry_warnings=$((dry_warnings + 1))
+                    fi
+                fi
+            fi
+            rm -f "$tmpfile" "$diffout"
+        else
+            if [ "$strategy" = "Overwrite" ]; then
+                printf '%s' "$new_version" > "$filepath"
+                if grep -Fq "$validate" "$filepath"; then
+                    printf "  \033[32m✅ %s\033[0m\n" "$desc"
+                    written=$((written + 1))
+                else
+                    printf "  \033[31m❌ %s — post-write validation failed: %s\033[0m\n" "$desc" "$filepath" >&2
+                    failed=$((failed + 1))
+                fi
+            else
+                if grep -Eq "$p" "$filepath"; then
+                    sed -i.bak -E "s|$p|$r|g" "$filepath"
+                    rm -f "$filepath.bak"
+                    if grep -Fq "$validate" "$filepath"; then
+                        printf "  \033[32m✅ %s\033[0m\n" "$desc"
+                        written=$((written + 1))
+                    else
+                        printf "  \033[31m❌ %s — post-write validation failed: %s\033[0m\n" "$desc" "$filepath" >&2
+                        failed=$((failed + 1))
+                    fi
+                else
+                    if [ "$optional" -eq 1 ]; then
+                        if [ "$strict" -eq 1 ]; then
+                            printf "  \033[31m❌ %s — pattern not found (strict mode)\033[0m\n" "$desc" >&2
+                            failed=$((failed + 1))
+                        else
+                            printf "  \033[90m⏭️  %s — pattern not found (optional)\033[0m\n" "$desc"
+                            warned=$((warned + 1))
+                        fi
+                    else
+                        if [ "$strict" -eq 1 ]; then
+                            printf "  \033[31m❌ %s — pattern not found (strict mode)\033[0m\n" "$desc" >&2
+                            failed=$((failed + 1))
+                        else
+                            printf "  \033[33m⚠️  %s — pattern not found\033[0m\n" "$desc"
+                            warned=$((warned + 1))
+                        fi
+                    fi
+                fi
+            fi
+        fi
+
+        i=$((i + 1))
+    done
+
+    printf "\n"
+
+    if [ "$dry_run" -eq 1 ]; then
+        printf "(dry-run) would update %d/%d targets, %d warning(s)\n" "$dry_would_update" "$total" "$dry_warnings"
+        return 0
+    fi
+
+    if [ "$failed" -gt 0 ]; then
+        printf "\033[31mUpdated %d/%d targets, %d failure(s)\033[0m\n" "$written" "$total" "$failed" >&2
+        exit 1
+    elif [ "$warned" -gt 0 ]; then
+        printf "\033[33mUpdated %d/%d targets, 0 failure(s)\033[0m\n" "$written" "$total" >&2
+    else
+        printf "\033[32mUpdated %d/%d targets, 0 failure(s)\033[0m\n" "$written" "$total"
+    fi
+}
+
+# ─── Command: drain-memory (Phase-28.4 v2.62.3) ───────────────────────
+cmd_drain_memory() {
+    print_manual_steps "drain-memory" \
+        "POST to http://localhost:3100/api/memory/drain with bridge secret" \
+        "Drain pending OpenBrain queue records via the running MCP server" \
+        "Print summary of delivered/deferred/dlq counts"
+
+    local port=3100
+
+    # Read bridge secret
+    local secret=""
+    local secret_path="$REPO_ROOT/.forge/bridge-secret"
+    if [ -f "$secret_path" ]; then
+        secret=$(cat "$secret_path" | tr -d '[:space:]')
+    fi
+    if [ -z "$secret" ] && [ -n "$PFORGE_BRIDGE_SECRET" ]; then
+        secret="$PFORGE_BRIDGE_SECRET"
+    fi
+
+    local auth_header=""
+    if [ -n "$secret" ]; then
+        auth_header="-H \"Authorization: Bearer ${secret}\""
+    fi
+
+    local response
+    response=$(eval curl -sf -X POST "http://localhost:${port}/api/memory/drain" \
+        -H "\"Content-Type: application/json\"" \
+        ${auth_header}) || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      if (d.ok) {
+        console.log('');
+        console.log('\x1b[36m\u{1F4E4} Drain Memory\x1b[0m');
+        console.log('   Attempted: ' + d.attempted);
+        console.log('   \x1b[32mDelivered: ' + d.delivered + '\x1b[0m');
+        const defColor = d.deferred > 0 ? '\x1b[33m' : '';
+        const defReset = d.deferred > 0 ? '\x1b[0m' : '';
+        console.log('   ' + defColor + 'Deferred:  ' + d.deferred + defReset);
+        const dlqColor = d.dlq > 0 ? '\x1b[31m' : '';
+        const dlqReset = d.dlq > 0 ? '\x1b[0m' : '';
+        console.log('   ' + dlqColor + 'DLQ:       ' + d.dlq + dlqReset);
+        console.log('   \x1b[90mDuration:  ' + d.durationMs + 'ms\x1b[0m');
+        console.log('');
+      } else {
+        console.error('\x1b[31mERROR: Drain failed — ' + (d.error || 'unknown') + '\x1b[0m');
+        process.exit(1);
+      }
+    "
+}
+
+# ─── Command: migrate-memory (GX.5 v2.36) ──────────────────────────────
+# Port of Invoke-MigrateMemory from pforge.ps1. Merges legacy `*-history.json`
+# ledgers into their canonical `.jsonl` siblings. Idempotent; safe to re-run.
+# Backs up the legacy file as `<name>.json.bak-<date>` before removing it.
+# Pass `--dry-run` to preview without touching files.
+cmd_migrate_memory() {
+    echo ""
+    printf "\033[36m─── pforge migrate-memory (GX.5 v2.36) ───\033[0m\n"
+    echo ""
+
+    local forge_dir="$REPO_ROOT/.forge"
+    if [ ! -d "$forge_dir" ]; then
+        printf "\033[33m  ℹ  No .forge/ directory found at %s — nothing to migrate.\033[0m\n" "$REPO_ROOT"
+        return 0
+    fi
+
+    local dry_run="false"
+    for a in "$@"; do
+        case "$a" in
+            --dry-run|-DryRun) dry_run="true" ;;
+        esac
+    done
+
+    FORGE_DIR="$forge_dir" DRY_RUN="$dry_run" node -e '
+const fs=require("fs"),path=require("path");
+const forgeDir=process.env.FORGE_DIR,dryRun=process.env.DRY_RUN==="true";
+const pairs=[
+  {legacy:"drift-history.json",canonical:"drift-history.jsonl"},
+  {legacy:"regression-history.json",canonical:"regression-history.jsonl"},
+  {legacy:"fix-proposals.json",canonical:"fix-proposals.jsonl"},
+];
+const stamp=new Date().toISOString().slice(0,10);
+let migrated=0,skipped=0,merged=0;
+for(const p of pairs){
+  const lp=path.join(forgeDir,p.legacy),cp=path.join(forgeDir,p.canonical);
+  if(!fs.existsSync(lp)){console.log(`  \x1b[90m· ${p.legacy}: not present, skipping.\x1b[0m`);skipped++;continue;}
+  const legacyLines=fs.readFileSync(lp,"utf8").split(/\r?\n/).filter(l=>l&&l.trim().length>0);
+  const canonicalLines=fs.existsSync(cp)?fs.readFileSync(cp,"utf8").split(/\r?\n/).filter(l=>l&&l.trim().length>0):[];
+  const seen=new Set();const combined=[];
+  for(const l of canonicalLines){if(!seen.has(l)){seen.add(l);combined.push(l);}}
+  let newFromLegacy=0;
+  for(const l of legacyLines){if(!seen.has(l)){seen.add(l);combined.push(l);newFromLegacy++;}}
+  if(dryRun){console.log(`  \x1b[33m[dry-run] ${p.legacy} -> ${p.canonical}: would merge ${newFromLegacy} new of ${legacyLines.length} legacy line(s); total after = ${combined.length}\x1b[0m`);continue;}
+  try{
+    fs.writeFileSync(cp,combined.join("\n"));
+    let bak=`${lp}.bak-${stamp}`;
+    if(fs.existsSync(bak)){bak=`${bak}-${Math.random().toString(36).slice(2,8)}`;}
+    fs.renameSync(lp,bak);
+    console.log(`  \x1b[32m✅ ${p.legacy} -> ${p.canonical}: merged ${newFromLegacy} new line(s); legacy backed up as ${path.basename(bak)}\x1b[0m`);
+    migrated++;merged+=newFromLegacy;
+  }catch(e){console.log(`  \x1b[31m❌ Failed to migrate ${p.legacy}: ${e.message}\x1b[0m`);}
+}
+console.log("");
+if(dryRun)console.log("\x1b[33m─── dry-run complete — no files modified ───\x1b[0m");
+else console.log(`\x1b[36m─── migrate-memory complete: ${migrated} migrated, ${skipped} skipped, ${merged} new line(s) merged ───\x1b[0m`);
+'
+}
+
+# ─── Command: mcp-call ─────────────────────────────────────────────────
+# Generic proxy for any MCP tool exposed by the running pforge-mcp server
+# on :3100. Covers crucible-*, tempering-*, bug-*, generate-image,
+# run-skill, skill-status, and every future tool without needing a
+# bespoke CLI wrapper per tool. Mirrors Invoke-McpCall in pforge.ps1.
+#
+# Usage:
+#   pforge mcp-call <tool_name> [--arg=value ...] [--json '{"key":"val"}']
+cmd_mcp_call() {
+    if [ $# -lt 1 ]; then
+        printf "\033[31mERROR: Tool name required.\033[0m\n" >&2
+        printf "\033[33m  Usage: pforge mcp-call <tool_name> [--arg=value ...] [--json '{...}']\033[0m\n" >&2
+        printf "\033[33m  Example: pforge mcp-call forge_crucible_list\033[0m\n" >&2
+        exit 1
+    fi
+
+    local tool_name="$1"
+    shift
+
+    # Normalize: accept either "forge_crucible_list" or "crucible-list".
+    case "$tool_name" in
+        forge_*) ;;
+        *) tool_name="forge_${tool_name//-/_}" ;;
+    esac
+
+    # Assemble params. --key=value pairs, or --json '{...}' override.
+    local json_payload=""
+    local kv_pairs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json)
+                json_payload="${2:-}"
+                shift 2
+                ;;
+            --*=*)
+                kv_pairs+=("$1")
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local body
+    if [ -n "$json_payload" ]; then
+        body="$json_payload"
+    else
+        body=$(PAIRS="${kv_pairs[*]-}" node -e '
+          const pairs=(process.env.PAIRS||"").split(" ").filter(Boolean);
+          const obj={};
+          for(const p of pairs){const m=p.match(/^--([^=]+)=(.*)$/);if(m)obj[m[1]]=m[2];}
+          process.stdout.write(JSON.stringify(obj));
+        ' 2>/dev/null || echo "{}")
+    fi
+
+    local url="http://localhost:3100/api/tool/${tool_name}"
+    local response http_code
+    if ! command -v curl >/dev/null 2>&1; then
+        printf "\033[31mERROR: curl not found — required for mcp-call.\033[0m\n" >&2
+        exit 1
+    fi
+    response=$(curl -s -o /tmp/pforge-mcp-call.$$ -w "%{http_code}" \
+        -X POST "$url" \
+        -H "Content-Type: application/json" \
+        -d "$body" \
+        --max-time 30 2>/dev/null || echo "000")
+    http_code="$response"
+    local body_out=""
+    [ -f /tmp/pforge-mcp-call.$$ ] && body_out=$(cat /tmp/pforge-mcp-call.$$) && rm -f /tmp/pforge-mcp-call.$$
+
+    case "$http_code" in
+        200)
+            echo "$body_out"
+            ;;
+        404)
+            printf "\033[31mERROR: Unknown tool '%s'. The MCP server returned 404.\033[0m\n" "$tool_name" >&2
+            printf "\033[33m  Tip: run 'pforge mcp-call forge_capabilities' to list available tools.\033[0m\n" >&2
+            exit 1
+            ;;
+        000)
+            printf "\033[31mERROR: Plan Forge MCP server not running on localhost:3100.\033[0m\n" >&2
+            printf "\033[33m  Start it via VS Code (.vscode/mcp.json) or 'cd pforge-mcp && npm start'.\033[0m\n" >&2
+            exit 1
+            ;;
+        *)
+            printf "\033[31mERROR: HTTP %s\033[0m\n" "$http_code" >&2
+            [ -n "$body_out" ] && echo "$body_out" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# ─── Command: testbed-happypath ────────────────────────────────────────
+cmd_testbed_happypath() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       Plan Forge — Testbed Happy-Path Runner                 ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    local node_args=("$REPO_ROOT/pforge-mcp/testbed/cli-happypath.mjs" "--project-dir" "$REPO_ROOT")
+
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) node_args+=("--dry-run") ;;
+            --testbed-path=*) node_args+=("--testbed-path" "${arg#--testbed-path=}") ;;
+            *) node_args+=("$arg") ;;
+        esac
+    done
+
+    echo "Running happy-path scenarios..."
+    if node "${node_args[@]}"; then
+        echo "All happy-path scenarios passed."
+    else
+        echo "Some scenarios failed." >&2
+        exit 1
+    fi
+}
+
+# ─── pforge config (v2.56.0) ──────────────────────────────────────────
+# Minimal CLI for reading/writing `.forge.json` enum keys.
+# Supported keys: update-source (jsonKey: updateSource; values: auto|github-tags|local-sibling)
+cmd_config() {
+    local action="${1:-}"
+    local key="${2:-}"
+    local value="${3:-}"
+    local config_path="$REPO_ROOT/.forge.json"
+
+    if [ -z "$action" ] || [ "$action" = "help" ] || [ "$action" = "--help" ]; then
+        echo ""
+        echo "pforge config"
+        echo "─────────────────────────────────────────────"
+        echo "  pforge config get <key>          Read a value from .forge.json"
+        echo "  pforge config set <key> <value>  Write a value to .forge.json"
+        echo "  pforge config list               Show all settable keys"
+        echo ""
+        echo "Settable keys:"
+        echo "  update-source"
+        echo "    Where pforge update pulls template bytes from."
+        echo "    Values: auto, github-tags, local-sibling  (default: auto)"
+        return 0
+    fi
+
+    # Map CLI key → JSON key + allowed values
+    local json_key="" allowed="" default_value=""
+    case "$key" in
+        update-source) json_key="updateSource"; allowed="auto github-tags local-sibling"; default_value="auto" ;;
+        "")            : ;;
+        *)
+            if [ "$action" != "list" ]; then
+                echo "ERROR: unknown config key '$key'" >&2
+                echo "  Run 'pforge config' to see available keys." >&2
+                exit 1
+            fi
+            ;;
+    esac
+
+    case "$action" in
+        list)
+            local cur_val=""
+            if [ -f "$config_path" ]; then
+                cur_val="$(python3 -c "import json; print(json.load(open('$config_path')).get('updateSource',''))" 2>/dev/null || echo "")"
+            fi
+            if [ -z "$cur_val" ]; then cur_val="(unset → auto)"; fi
+            printf "  %-18s  %s\n" "update-source" "$cur_val"
+            ;;
+        get)
+            if [ -z "$json_key" ]; then
+                echo "ERROR: missing key — usage: pforge config get <key>" >&2; exit 1
+            fi
+            local val=""
+            if [ -f "$config_path" ]; then
+                val="$(python3 -c "import json; print(json.load(open('$config_path')).get('$json_key',''))" 2>/dev/null || echo "")"
+            fi
+            if [ -z "$val" ]; then val="$default_value"; fi
+            echo "$val"
+            ;;
+        set)
+            if [ -z "$json_key" ]; then
+                echo "ERROR: missing key — usage: pforge config set <key> <value>" >&2; exit 1
+            fi
+            if [ -z "$value" ]; then
+                echo "ERROR: missing value — usage: pforge config set $key <value>" >&2
+                echo "  Allowed: $allowed" >&2
+                exit 1
+            fi
+            local ok=false
+            for a in $allowed; do [ "$a" = "$value" ] && ok=true; done
+            if ! $ok; then
+                echo "ERROR: '$value' is not a valid value for '$key'" >&2
+                echo "  Allowed: $allowed" >&2
+                exit 1
+            fi
+            # Merge into existing JSON atomically
+            local tmp="$config_path.tmp"
+            python3 -c "
+import json, os, sys
+path = '$config_path'
+data = {}
+if os.path.exists(path):
+    try: data = json.load(open(path))
+    except Exception as e:
+        print(f'ERROR: .forge.json is malformed: {e}', file=sys.stderr); sys.exit(1)
+data['$json_key'] = '$value'
+with open('$tmp','w') as f:
+    json.dump(data, f, indent=2)
+" || exit 1
+            mv "$tmp" "$config_path"
+            echo "  ✅ $json_key = $value"
+            ;;
+        *)
+            echo "ERROR: unknown action '$action' — expected get|set|list" >&2; exit 1
+            ;;
+    esac
+}
+
+# ─── Command: skills (Phase-26 Slice 8) ───────────────────────────────
+cmd_skills() {
+    local sub="${1:-}"; shift 2>/dev/null || true
+    local memory_module="$REPO_ROOT/pforge-mcp/memory.mjs"
+
+    if [ -z "$sub" ] || [ "$sub" = "help" ] || [ "$sub" = "--help" ]; then
+        echo ""
+        echo "pforge skills — auto-skill promotion (Phase-26 Slice 8)"
+        echo "─────────────────────────────────────────────"
+        echo "  pforge skills pending [--threshold N] [--json]"
+        echo "  pforge skills accept <sha256Prefix>"
+        echo "  pforge skills reject <sha256Prefix> [--reason <text>]"
+        echo "  pforge skills defer  <sha256Prefix>"
+        echo "  pforge skills promote --auto-promote [--threshold N]"
+        return 0
+    fi
+
+    if [ ! -f "$memory_module" ]; then
+        echo "ERROR: pforge-mcp/memory.mjs not found at $memory_module" >&2
+        exit 1
+    fi
+    local module_url="file://$memory_module"
+
+    case "$sub" in
+        pending)
+            local threshold_arg="undefined"
+            local as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --threshold) threshold_arg="$2"; shift 2 ;;
+                    --json)      as_json=1; shift ;;
+                    *)           shift ;;
+                esac
+            done
+            local output
+            output=$(MODULE_URL="$module_url" THRESHOLD="$threshold_arg" node -e '
+                import(process.env.MODULE_URL).then(m => {
+                  const t = process.env.THRESHOLD === "undefined" ? undefined : Number(process.env.THRESHOLD);
+                  const skills = m.listPendingAutoSkills({ cwd: process.cwd(), threshold: t });
+                  process.stdout.write(JSON.stringify(skills, null, 2));
+                }).catch(e => { console.error(e.message); process.exit(1); });
+            ') || exit $?
+            if [ "$as_json" = "1" ]; then
+                echo "$output"
+            else
+                local count
+                count=$(echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{try{const a=JSON.parse(d);process.stdout.write(String(a.length));}catch{process.stdout.write("0");}});')
+                if [ "$count" = "0" ]; then
+                    echo "No auto-skills pending promotion."
+                    return 0
+                fi
+                echo ""
+                echo "Pending auto-skills ($count)"
+                echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{const a=JSON.parse(d);for(const s of a){console.log(`  ${s.sha256Prefix}  reused ${s.reuseCount}×  ${s.summary}`);}});'
+                echo ""
+                echo "Use 'pforge skills accept <prefix>' to promote, or 'pforge skills promote --auto-promote' to accept all."
+            fi
+            ;;
+        accept)
+            local prefix="${1:-}"
+            if [ -z "$prefix" ]; then
+                echo "ERROR: sha256Prefix required — usage: pforge skills accept <prefix>" >&2; exit 1
+            fi
+            local output
+            output=$(MODULE_URL="$module_url" PREFIX="$prefix" node -e '
+                import(process.env.MODULE_URL).then(m => {
+                  const r = m.acceptAutoSkill({ cwd: process.cwd(), sha256Prefix: process.env.PREFIX });
+                  process.stdout.write(JSON.stringify(r));
+                  if (!r.ok) process.exit(2);
+                }).catch(e => { console.error(e.message); process.exit(1); });
+            ')
+            local rc=$?
+            if [ $rc -eq 0 ]; then
+                echo "✅ Promoted: $(echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(JSON.parse(d).promotedPath||"");});')"
+            else
+                echo "ERROR: $output" >&2; exit $rc
+            fi
+            ;;
+        reject)
+            local prefix="${1:-}"; shift 2>/dev/null || true
+            if [ -z "$prefix" ]; then
+                echo "ERROR: sha256Prefix required — usage: pforge skills reject <prefix>" >&2; exit 1
+            fi
+            local reason=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --reason) reason="$2"; shift 2 ;;
+                    *)        shift ;;
+                esac
+            done
+            local output
+            output=$(MODULE_URL="$module_url" PREFIX="$prefix" REASON="$reason" node -e '
+                import(process.env.MODULE_URL).then(m => {
+                  const r = m.rejectAutoSkill({ cwd: process.cwd(), sha256Prefix: process.env.PREFIX, reason: process.env.REASON || "" });
+                  process.stdout.write(JSON.stringify(r));
+                  if (!r.ok) process.exit(2);
+                }).catch(e => { console.error(e.message); process.exit(1); });
+            ')
+            local rc=$?
+            if [ $rc -eq 0 ]; then
+                echo "✅ Rejected: $(echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(JSON.parse(d).rejectedPath||"");});')"
+            else
+                echo "ERROR: $output" >&2; exit $rc
+            fi
+            ;;
+        defer)
+            local prefix="${1:-}"
+            if [ -z "$prefix" ]; then
+                echo "ERROR: sha256Prefix required — usage: pforge skills defer <prefix>" >&2; exit 1
+            fi
+            local output
+            output=$(MODULE_URL="$module_url" PREFIX="$prefix" node -e '
+                import(process.env.MODULE_URL).then(m => {
+                  const r = m.deferAutoSkill({ cwd: process.cwd(), sha256Prefix: process.env.PREFIX });
+                  process.stdout.write(JSON.stringify(r));
+                  if (!r.ok) process.exit(2);
+                }).catch(e => { console.error(e.message); process.exit(1); });
+            ')
+            local rc=$?
+            if [ $rc -eq 0 ]; then
+                echo "⏳ Deferred until: $(echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(JSON.parse(d).deferredUntil||"");});')"
+            else
+                echo "ERROR: $output" >&2; exit $rc
+            fi
+            ;;
+        promote)
+            local auto_promote=0
+            local threshold_arg="undefined"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --auto-promote) auto_promote=1; shift ;;
+                    --threshold)    threshold_arg="$2"; shift 2 ;;
+                    *)              shift ;;
+                esac
+            done
+            if [ $auto_promote -ne 1 ]; then
+                echo "ERROR: --auto-promote flag required for non-interactive bulk promotion." >&2
+                echo "  Use 'pforge skills pending' to review candidates first." >&2
+                exit 1
+            fi
+            local output
+            output=$(MODULE_URL="$module_url" THRESHOLD="$threshold_arg" node -e '
+                import(process.env.MODULE_URL).then(m => {
+                  const t = process.env.THRESHOLD === "undefined" ? undefined : Number(process.env.THRESHOLD);
+                  const pending = m.listPendingAutoSkills({ cwd: process.cwd(), threshold: t });
+                  const results = [];
+                  for (const s of pending) {
+                    results.push(m.acceptAutoSkill({ cwd: process.cwd(), sha256Prefix: s.sha256Prefix }));
+                  }
+                  process.stdout.write(JSON.stringify({ count: pending.length, results }, null, 2));
+                }).catch(e => { console.error(e.message); process.exit(1); });
+            ') || exit $?
+            local count
+            count=$(echo "$output" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(String(JSON.parse(d).count||0));});')
+            echo "✅ Auto-promoted $count skill(s)."
+            ;;
+        *)
+            echo "ERROR: unknown skills subcommand '$sub'" >&2
+            echo "  Run 'pforge skills' for usage." >&2
+            exit 1
+            ;;
+    esac
 }
 
 # ─── Command Router ────────────────────────────────────────────────────
+cmd_forge_master() {
+    local sub="${1:-}"
+    local lifecycle_path="$REPO_ROOT/pforge-master/src/lifecycle.mjs"
+    if [[ ! -f "$lifecycle_path" ]]; then
+        echo "ERROR: pforge-master not found at $lifecycle_path" >&2
+        exit 1
+    fi
+    case "$sub" in
+        status) node "$lifecycle_path" status ;;
+        logs)   node "$lifecycle_path" logs ;;
+        *)
+            echo "Usage: pforge forge-master <status|logs>" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# ─── Command: fm-session ───────────────────────────────────────────
+cmd_fm_session() {
+    local sub="${1:-}"
+    local fm_dir="$REPO_ROOT/.forge/fm-sessions"
+    case "$sub" in
+        list)
+            if [[ ! -d "$fm_dir" ]]; then
+                echo "No fm-sessions directory found at $fm_dir"
+                exit 0
+            fi
+            local found=0
+            for f in "$fm_dir"/*.jsonl; do
+                [[ "$f" == *.archive.jsonl ]] && continue
+                [[ -f "$f" ]] || continue
+                local id
+                id="$(basename "$f" .jsonl)"
+                local turns
+                turns="$(wc -l < "$f" | tr -d ' ')"
+                printf "  %-40s %4s turn(s)\n" "$id" "$turns"
+                found=1
+            done
+            [[ "$found" -eq 0 ]] && echo "No active sessions found."
+            ;;
+        purge)
+            local target="${2:-}"
+            if [[ "$target" == "--all" ]]; then
+                if [[ -d "$fm_dir" ]]; then
+                    rm -rf "$fm_dir"
+                    echo "All fm-sessions purged."
+                else
+                    echo "No fm-sessions directory to purge."
+                fi
+            elif [[ -n "$target" ]]; then
+                local safe
+                safe="$(echo "$target" | tr -cd 'A-Za-z0-9._-')"
+                if [[ "$safe" != "$target" ]]; then
+                    echo "ERROR: invalid session id '$target'" >&2; exit 1
+                fi
+                local removed=0
+                [[ -f "$fm_dir/$safe.jsonl" ]] && { rm -f "$fm_dir/$safe.jsonl"; ((removed++)); }
+                [[ -f "$fm_dir/$safe.archive.jsonl" ]] && { rm -f "$fm_dir/$safe.archive.jsonl"; ((removed++)); }
+                if [[ "$removed" -gt 0 ]]; then
+                    echo "Purged session '$safe'."
+                else
+                    echo "Session '$safe' not found."
+                fi
+            else
+                echo "Usage: pforge fm-session purge <id> | purge --all" >&2; exit 1
+            fi
+            ;;
+        *)
+            echo "Usage: pforge fm-session <list | purge <id> | purge --all>" >&2; exit 1
+            ;;
+    esac
+}
+
+# ─── Command: fm-recall ────────────────────────────────────────────
+cmd_fm_recall() {
+    local script_path="$REPO_ROOT/scripts/fm-recall.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: fm-recall script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: timeline ───────────────────────────────────────────────
+cmd_timeline() {
+    local script_path="$REPO_ROOT/scripts/timeline.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: timeline script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: patterns ───────────────────────────────────────────
+cmd_patterns() {
+    local script_path="$REPO_ROOT/scripts/patterns.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: patterns script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: lattice ────────────────────────────────────────────
+cmd_lattice() {
+    local sub="${1:-}"
+    local port=3100
+
+    _lattice_mcp_tool() {
+        local tool_name="$1"
+        local body="${2:-{}}"
+        local response
+        response=$(curl -sf -X POST "http://localhost:$port/api/tool/$tool_name" \
+            -H "Content-Type: application/json" \
+            -d "$body" 2>/dev/null) || {
+            echo "ERROR: MCP server not running on port $port. Start with: node pforge-mcp/server.mjs" >&2
+            exit 1
+        }
+        echo "$response"
+    }
+
+    case "$sub" in
+        index)
+            local since=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --since) since="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local body="{}"
+            [[ -n "$since" ]] && body="{\"since\":\"$since\"}"
+            local result; result=$(_lattice_mcp_tool "forge_lattice_index" "$body")
+            echo ""
+            echo "🕸 Lattice Index"
+            echo "   Files indexed: $(echo "$result" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const r=JSON.parse(d);console.log(r.filesIndexed??0)}catch{console.log(0)}})")"
+            echo "$result" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const r=JSON.parse(d);console.log('   Chunks:       ',r.chunks??0,'\n   Edges:        ',r.edges??0,'\n   Anvil hits:   ',r.anvilHits??0,'\n   Anvil misses: ',r.anvilMisses??0)}catch{}})"
+            echo ""
+            ;;
+        stat)
+            local result; result=$(_lattice_mcp_tool "forge_lattice_stat" "{}")
+            echo "$result" | node -e "
+process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+try{const r=JSON.parse(d);
+console.log('\n🕸 Lattice Stat');
+console.log('   Chunks:        ',r.chunks??0);
+console.log('   Edges:         ',r.edges??0);
+console.log('   Index bytes:   ',r.indexBytes??0);
+console.log('   Anvil hit rate:',r.anvilHitRate??0);
+console.log('   Last indexed:  ',r.lastIndexedAt??'never');
+console.log('   Chunker:       ',(r.chunkerImpl??'?')+' v'+(r.chunkerVersion??'?'));
+if(r.languages){console.log('   Languages:');Object.entries(r.languages).forEach(([k,v])=>console.log('    ',k,v))}
+console.log('')}catch(e){console.error('parse error',e.message)}
+})"
+            ;;
+        query)
+            local query="" language="" kind="" limit=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --query)    query="$2";    shift 2 ;;
+                    --language) language="$2"; shift 2 ;;
+                    --kind)     kind="$2";     shift 2 ;;
+                    --limit)    limit="$2";    shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local body="{\"query\":\"$query\""
+            [[ -n "$language" ]] && body+=",\"language\":\"$language\""
+            [[ -n "$kind" ]]     && body+=",\"kind\":\"$kind\""
+            [[ -n "$limit" ]]    && body+=",\"limit\":$limit"
+            body+="}"
+            local result; result=$(_lattice_mcp_tool "forge_lattice_query" "$body")
+            echo "$result" | node -e "
+process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+try{const r=JSON.parse(d);
+console.log(r.message??'');
+(r.chunks??[]).forEach(c=>console.log('  ['+c.id+']',c.name.padEnd(30),c.filePath,'('+c.kind+')'));
+}catch(e){console.error(d)}
+})"
+            ;;
+        callers)
+            local name="${2:-}"
+            local limit=""
+            shift 2 || shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --limit) limit="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            if [[ -z "$name" ]]; then
+                echo "Usage: pforge lattice callers <symbol-name> [--limit <n>]" >&2
+                exit 1
+            fi
+            local body="{\"name\":\"$name\""
+            [[ -n "$limit" ]] && body+=",\"limit\":$limit"
+            body+="}"
+            local result; result=$(_lattice_mcp_tool "forge_lattice_callers" "$body")
+            echo "$result" | node -e "
+process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+try{const r=JSON.parse(d);
+console.log(r.message??'');
+(r.chunks??[]).forEach(c=>console.log('  ['+c.id+']',c.name.padEnd(30),c.filePath));
+}catch(e){console.error(d)}
+})"
+            ;;
+        blast)
+            local name="" chunk_id="" direction="both" depth="" limit=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --id)        chunk_id="$2";   shift 2 ;;
+                    --direction) direction="$2";  shift 2 ;;
+                    --depth)     depth="$2";      shift 2 ;;
+                    --limit)     limit="$2";      shift 2 ;;
+                    --*)         shift ;;
+                    *)           name="$1";       shift ;;
+                esac
+            done
+            local body="{\"direction\":\"$direction\""
+            [[ -n "$chunk_id" ]] && body+=",\"chunkId\":\"$chunk_id\""
+            [[ -n "$name" ]]     && body+=",\"name\":\"$name\""
+            [[ -n "$depth" ]]    && body+=",\"depth\":$depth"
+            [[ -n "$limit" ]]    && body+=",\"limit\":$limit"
+            body+="}"
+            local result; result=$(_lattice_mcp_tool "forge_lattice_blast" "$body")
+            echo "$result" | node -e "
+process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+try{const r=JSON.parse(d);
+console.log(r.message??'');
+(r.nodes??[]).forEach(n=>console.log('  [d='+n.distance+']','['+n.id+']',n.name.padEnd(30),n.filePath));
+if((r.unresolvedNames??[]).length)console.log('  Unresolved:',r.unresolvedNames.join(', '));
+}catch(e){console.error(d)}
+})"
+            ;;
+        *)
+            echo "Usage: pforge lattice <index|stat|query|callers|blast>"
+            echo ""
+            echo "Subcommands:"
+            echo "  index [--since <sha>]           Build or update the code-graph index"
+            echo "  stat                            Show index statistics"
+            echo "  query [--query <q>] [--language <l>] [--kind <k>] [--limit <n>]"
+            echo "  callers <name> [--limit <n>]    Find callers of a symbol"
+            echo "  blast [<name>|--id <id>] [--direction callees|callers|both] [--depth <n>]"
+            exit 1
+            ;;
+    esac
+}
+
+# ─── Command: anvil ──────────────────────────────────────────────
+cmd_anvil() {
+    local sub="${1:-}"
+    local port=3100
+
+    _anvil_mcp_tool() {
+        local tool_name="$1"
+        local body="${2:-{}}"
+        local response
+        response=$(curl -sf -X POST "http://localhost:${port}/api/tool/${tool_name}" \
+            -H "Content-Type: application/json" \
+            -d "$body") || {
+            echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+            exit 1
+        }
+        echo "$response"
+    }
+
+    case "$sub" in
+        stat)
+            _anvil_mcp_tool "forge_anvil_stat" '{}' | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              console.log('');
+              console.log('\u{1F527} Anvil Cache Stat');
+              console.log('   Entries:     ' + d.entries);
+              console.log('   Total bytes: ' + d.totalBytes);
+              if (d.perTool && Object.keys(d.perTool).length > 0) {
+                console.log('   Per-tool:');
+                for (const [k,v] of Object.entries(d.perTool)) {
+                  console.log('     ' + k.padEnd(30) + ' hits=' + String(v.hits).padStart(4) + '  misses=' + String(v.misses).padStart(4) + '  cached=' + String(v.count).padStart(4));
+                }
+              }
+              console.log('');
+            "
+            ;;
+        clear)
+            local tool_filter=""
+            local older_than_ms=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --tool)        tool_filter="$2";  shift 2 ;;
+                    --olderThanMs) older_than_ms="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local body="{}"
+            if [[ -n "$tool_filter" && -n "$older_than_ms" ]]; then
+                body="{\"tool\":\"$tool_filter\",\"olderThanMs\":$older_than_ms}"
+            elif [[ -n "$tool_filter" ]]; then
+                body="{\"tool\":\"$tool_filter\"}"
+            elif [[ -n "$older_than_ms" ]]; then
+                body="{\"olderThanMs\":$older_than_ms}"
+            fi
+            _anvil_mcp_tool "forge_anvil_clear" "$body" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              console.log('Deleted ' + d.deleted + ' cache entry(ies).');
+            "
+            ;;
+        rebuild)
+            local since=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --since) since="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            if [[ -z "$since" ]]; then
+                echo "Usage: pforge anvil rebuild --since <git-sha>" >&2
+                exit 1
+            fi
+            _anvil_mcp_tool "forge_anvil_rebuild" "{\"since\":\"$since\"}" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              console.log('Invalidated ' + d.invalidated + ' cache entry(ies).');
+              if (d.changedFiles && d.changedFiles.length > 0) {
+                console.log('Changed files:');
+                d.changedFiles.forEach(f => console.log('  - ' + f));
+              }
+            "
+            ;;
+        dlq)
+            local dlq_sub="${2:-}"
+            case "$dlq_sub" in
+                list)
+                    local limit=""
+                    shift 2
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --limit) limit="$2"; shift 2 ;;
+                            *) shift ;;
+                        esac
+                    done
+                    local body="{}"
+                    [[ -n "$limit" ]] && body="{\"limit\":$limit}"
+                    _anvil_mcp_tool "forge_anvil_dlq_list" "$body" | node -e "
+                      const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+                      console.log('DLQ total: ' + d.total);
+                      if (d.items && d.items.length > 0) {
+                        d.items.forEach(r => console.log('  [' + r.id + '] ' + r.toolName + ' @ ' + r.failedAt));
+                      } else {
+                        console.log('  (no entries)');
+                      }
+                    "
+                    ;;
+                drain)
+                    local id_filter=""
+                    local tool_filter2=""
+                    shift 2
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --id)   id_filter="$2";   shift 2 ;;
+                            --tool) tool_filter2="$2"; shift 2 ;;
+                            *) shift ;;
+                        esac
+                    done
+                    local body="{}"
+                    if [[ -n "$id_filter" && -n "$tool_filter2" ]]; then
+                        body="{\"id\":\"$id_filter\",\"tool\":\"$tool_filter2\"}"
+                    elif [[ -n "$id_filter" ]]; then
+                        body="{\"id\":\"$id_filter\"}"
+                    elif [[ -n "$tool_filter2" ]]; then
+                        body="{\"tool\":\"$tool_filter2\"}"
+                    fi
+                    _anvil_mcp_tool "forge_anvil_dlq_drain" "$body" | node -e "
+                      const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+                      console.log('Drained ' + d.drained + ' DLQ record(s).');
+                    "
+                    ;;
+                *)
+                    echo "Usage: pforge anvil dlq <list|drain>" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            echo "Usage: pforge anvil <stat|clear|rebuild|dlq>"
+            echo ""
+            echo "Subcommands:"
+            echo "  stat                              Show cache statistics"
+            echo "  clear [--tool <n>] [--olderThanMs <ms>]  Delete cache entries"
+            echo "  rebuild --since <sha>             Invalidate stale entries"
+            echo "  dlq list [--limit <n>]            List DLQ records"
+            echo "  dlq drain [--id <id>] [--tool <n>]  Drain DLQ records"
+            exit 1
+            ;;
+    esac
+}
+
+# ─── Command: hallmark ───────────────────────────────────────────
+cmd_hallmark() {
+    local sub="${1:-}"
+    local id="${2:-}"
+    local port=3100
+
+    _hallmark_mcp_tool() {
+        local tool_name="$1"
+        local body="${2:-{}}"
+        local response
+        response=$(curl -sf -X POST "http://localhost:${port}/api/tool/${tool_name}" \
+            -H "Content-Type: application/json" \
+            -d "$body") || {
+            echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+            exit 1
+        }
+        echo "$response"
+    }
+
+    case "$sub" in
+        show)
+            local body="{}"
+            [[ -n "$id" ]] && body="{\"id\":\"$id\"}"
+            _hallmark_mcp_tool "forge_hallmark_show" "$body" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              if (d.error) { console.error('ERROR: ' + d.message); process.exit(1); }
+              console.log(JSON.stringify(d, null, 2));
+            "
+            ;;
+        verify)
+            if [[ -z "$id" ]]; then
+                echo "Usage: pforge hallmark verify <id>" >&2
+                exit 1
+            fi
+            _hallmark_mcp_tool "forge_hallmark_verify" "{\"id\":\"$id\"}" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              if (!d.ok) { console.error('ERROR: ' + d.message); process.exit(1); }
+              const color = d.drift ? '\x1b[33m' : '\x1b[32m';
+              console.log(color + '[' + d.id + '] ' + d.message + '\x1b[0m');
+              if (d.driftDetail) {
+                console.log('  Stored:  ' + d.driftDetail.storedHash);
+                console.log('  Current: ' + d.driftDetail.currentHash);
+              }
+            "
+            ;;
+        *)
+            echo "Usage: pforge hallmark <show|verify> [id]"
+            echo ""
+            echo "Subcommands:"
+            echo "  show [<id>]    Show a hallmark (omit id to list all)"
+            echo "  verify <id>    Verify a hallmark and report drift"
+            exit 1
+            ;;
+    esac
+}
+}
+
+# ─── Command: graph ────────────────────────────────────────────────
+cmd_graph() {
+    local script_path="$REPO_ROOT/scripts/graph.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: graph script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: digest ───────────────────────────────────────────────
+cmd_digest() {
+    local script_path="$REPO_ROOT/scripts/digest.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: digest script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: hammer-fm ────────────────────────────────────────────
+cmd_hammer_fm() {
+    local script_path="$REPO_ROOT/scripts/hammer-fm.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: hammer-fm harness not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: plan-from-sarif ─────────────────────────────────────
+cmd_plan_from_sarif() {
+    local script_path="$REPO_ROOT/pforge-mcp/sarif-to-plan.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: sarif-to-plan script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
+# ─── Command: audit export (Phase-OTEL-AUDIT-EXPORT Slice 10) ─────
+cmd_audit_export() {
+    local since=""
+    local until=""
+    local types=()
+    local run_id=""
+    local format="json"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                cat <<'EOF'
+Usage: pforge audit export [options]
+
+Export audit events from .forge/runs/ as JSONL or CSV.
+Reads events.log files written by the orchestrator — streaming,
+never loads all events into memory.
+
+Options:
+  --since <ISO>     Only events on or after this timestamp (inclusive).
+  --until <ISO>     Only events on or before this timestamp (inclusive).
+  --type <name>     Filter by event type (repeatable, e.g. --type slice-start --type gate-pass).
+  --run <id>        Scope to a single run directory ID.
+  --format <fmt>    Output format: json (default, JSONL) or csv.
+  --help, -h        Show this help and exit.
+
+Examples:
+  pforge audit export                                  # All events as JSONL
+  pforge audit export --since 2026-05-01               # Events from May onwards
+  pforge audit export --format csv > audit.csv         # CSV to file
+  pforge audit export --type gate-pass --type gate-fail
+  pforge audit export --run 20260507T120000Z           # Single run
+
+See docs/CLI-GUIDE.md for the full audit export reference.
+EOF
+                return 0
+                ;;
+            --since=*) since="${1#--since=}"; shift ;;
+            --since)   since="$2"; shift 2 ;;
+            --until=*) until="${1#--until=}"; shift ;;
+            --until)   until="$2"; shift 2 ;;
+            --type=*)  types+=("${1#--type=}"); shift ;;
+            --type)    types+=("$2"); shift 2 ;;
+            --run=*)   run_id="${1#--run=}"; shift ;;
+            --run)     run_id="$2"; shift 2 ;;
+            --format=*) format="${1#--format=}"; shift ;;
+            --format)  format="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ "$format" != "json" ] && [ "$format" != "csv" ]; then
+        echo "ERROR: --format must be 'json' or 'csv', got '$format'" >&2
+        exit 1
+    fi
+
+    # Build JS type array
+    local type_array_js="[]"
+    if [ ${#types[@]} -gt 0 ]; then
+        local escaped=""
+        for t in "${types[@]}"; do
+            [ -n "$escaped" ] && escaped="$escaped,"
+            escaped="$escaped\"$t\""
+        done
+        type_array_js="[$escaped]"
+    fi
+
+    local since_js="undefined"
+    [ -n "$since" ] && since_js="\"$since\""
+    local until_js="undefined"
+    [ -n "$until" ] && until_js="\"$until\""
+    local run_js="undefined"
+    [ -n "$run_id" ] && run_js="\"$run_id\""
+
+    node --input-type=module -e "
+import { exportAudit } from './pforge-mcp/audit-export.mjs';
+for await (const line of exportAudit({
+  cwd: process.cwd(),
+  since: $since_js,
+  until: $until_js,
+  type: $type_array_js,
+  run: $run_js,
+  format: \"$format\"
+})) { console.log(line); }
+"
+}
+
+# ─── Command: audit-loop (Phase-39 Slice 7) ───────────────────────
+cmd_audit_loop() {
+    local auto_mode=false
+    local max_rounds=""
+    local dry_run=false
+    local env_name="dev"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                cat <<'EOF'
+Usage: pforge audit-loop [options]
+
+Run the tempering audit drain loop — discover bugs by re-probing until
+findings converge to zero or the max-rounds cap fires.
+
+Options:
+  --auto            Respect audit.mode in .forge.json; exit early when no
+                    auto-activation signals trip. Default: always run.
+  --max=N           Cap the drain at N rounds (default: 5).
+  --dry-run         Print the plan; write no artifacts and run no drain.
+  --env=NAME        Target environment (dev|staging). 'production' is forbidden.
+  --help, -h        Show this help and exit.
+
+Examples:
+  pforge audit-loop                          # Run drain now (manual trigger)
+  pforge audit-loop --auto                   # Only run if signals trip
+  pforge audit-loop --dry-run                # Preview without side effects
+  pforge audit-loop --max=3 --env=staging    # Cap rounds, target staging
+
+See docs/CLI-GUIDE.md for the full audit-loop reference.
+EOF
+                return 0
+                ;;
+            --auto)     auto_mode=true; shift ;;
+            --dry-run)  dry_run=true; shift ;;
+            --max=*)    max_rounds="${1#--max=}"; shift ;;
+            --max)      max_rounds="$2"; shift 2 ;;
+            --env=*)    env_name="${1#--env=}"; shift ;;
+            --env)      env_name="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ "$env_name" = "production" ]; then
+        echo "ERROR: Audit loop is forbidden in production (forbidProduction: true)." >&2
+        exit 1
+    fi
+
+    print_manual_steps "audit-loop" \
+        "Load audit activation config from .forge.json" \
+        "Evaluate auto-activation thresholds (if --auto)" \
+        "Run tempering drain loop (up to maxRounds rounds)" \
+        "Triage each finding into bug / spec / classifier lanes" \
+        "Write drain curve to .forge/tempering/drain-history.jsonl"
+
+    local port=3100
+
+    if [ "$auto_mode" = "true" ]; then
+        local config
+        config=$(curl -sf "http://localhost:${port}/api/audit/config") || {
+            echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+            exit 1
+        }
+        local mode
+        mode=$(echo "$config" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));console.log(d.mode||'off')")
+        echo ""
+        echo -e "\xF0\x9F\x94\x8D Audit Loop (mode: $mode)"
+        if [ "$mode" = "off" ]; then
+            echo "   Audit loop is disabled (mode: off). Set audit.mode in .forge.json to 'auto' or 'always'."
+            return 0
+        fi
+    fi
+
+    local payload="{\"env\":\"${env_name}\",\"dryRun\":${dry_run}}"
+    if [ -n "$max_rounds" ]; then
+        payload="{\"env\":\"${env_name}\",\"dryRun\":${dry_run},\"maxRounds\":${max_rounds}}"
+    fi
+
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/audit/drain" \
+        -H "Content-Type: application/json" \
+        -d "$payload") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+
+    echo "$response" | node -e "
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+      if (d.dryRun) {
+        console.log('\n\u{1F4CB} Dry Run — would run drain with maxRounds=' + d.maxRounds);
+        process.exit(0);
+      }
+      const s = d.summary || {};
+      const terminated = s.terminated || 'unknown';
+      if (terminated === 'no-work') {
+        console.log('\n\u26A0 Audit Drain Did Not Run');
+        console.log('   Reason: ' + (s.reason || 'unknown'));
+        console.log('   No scanners executed. Check .forge/tempering/config.json (enabled/scanners) and that an adapter exists for your stack.');
+        if (s.historyPath) console.log('   History: ' + s.historyPath);
+        if (s.fsErrors) {
+          console.log('   Filesystem errors:');
+          for (const e of s.fsErrors) console.log('     ' + e.op + ' ' + e.path + ': ' + e.message);
+        }
+        process.exit(2);
+      }
+      if (terminated === 'aborted') {
+        console.log('\n\u26D4 Audit Drain Aborted');
+        console.log('   Rounds:   ' + (s.totalRounds || 0));
+        if (s.historyPath) console.log('   History: ' + s.historyPath);
+        process.exit(1);
+      }
+      console.log('\n\u2705 Audit Drain Complete');
+      console.log('   Rounds:   ' + (s.totalRounds || 0));
+      console.log('   Outcome:  ' + terminated);
+      console.log('   Curve:    ' + (s.drainCurve || []).join(' -> '));
+      if (s.historyPath) console.log('   History: ' + s.historyPath);
+      if (s.fsErrors) {
+        console.log('   WARNING: Failed to persist some drain history lines:');
+        for (const e of s.fsErrors) console.log('     ' + e.op + ' ' + e.path + ': ' + e.message);
+      }
+    "
+}
+
+# ─── Command: github ───────────────────────────────────────────────────
+cmd_github() {
+    local sub="${1:-}"
+    shift 2>/dev/null || true
+
+    if [[ -z "$sub" || "$sub" == "--help" || "$sub" == "-h" || "$sub" == "help" ]]; then
+        cat <<'EOF'
+
+pforge github — Inspect the GitHub-native AI surface
+
+SUBCOMMANDS:
+  status            Print a checklist of GitHub-native primitives Plan-Forge integrates with
+  doctor            Same as status, plus one-line fix hints for warn/fail rows
+  metrics           Manage GitHub Copilot usage metrics (pull | --help)
+
+OPTIONS:
+  --project <dir>   Project root to inspect (default: current directory)
+  --json            Emit structured JSON to stdout
+  --extra           Run optional depth checks (instruction-file applyTo, etc.)
+
+EXAMPLES:
+  pforge github status
+  pforge github doctor --extra
+  pforge github status --json | jq .summary
+  pforge github metrics pull --org myorg
+
+EOF
+        return 0
+    fi
+
+    if [[ "$sub" == "metrics" ]]; then
+        local metrics_sub="${1:-}"
+        shift 2>/dev/null || true
+
+        if [[ -z "$metrics_sub" || "$metrics_sub" == "--help" || "$metrics_sub" == "-h" || "$metrics_sub" == "help" ]]; then
+            cat <<'EOF'
+
+pforge github metrics — Manage GitHub Copilot usage metrics
+
+SUBCOMMANDS:
+  pull              Fetch Copilot metrics from the GitHub API and persist locally
+
+OPTIONS (pull):
+  --org <name>       GitHub org slug (required)
+  --since <date>     ISO date or shorthand like '30d' (default: 30d)
+  --until <date>     ISO date upper bound (default: today)
+  --store-dir <dir>  JSONL store directory (default: .forge/metrics)
+  --json             Emit result summary as JSON
+
+EXAMPLES:
+  pforge github metrics pull --org myorg
+  pforge github metrics pull --org myorg --since 7d
+  pforge github metrics pull --org myorg --since 2024-01-01 --until 2024-01-31 --json
+
+EOF
+            return 0
+        fi
+
+        if [[ "$metrics_sub" != "pull" ]]; then
+            echo "ERROR: unknown subcommand 'pforge github metrics $metrics_sub'. Try 'pforge github metrics --help'." >&2
+            exit 1
+        fi
+
+        # ── metrics pull ─────────────────────────────────────────────────
+        local org="" since="" until="" store_dir="" json_output=false
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --org)       org="$2";       shift 2 ;;
+                --since)     since="$2";     shift 2 ;;
+                --until)     until="$2";     shift 2 ;;
+                --store-dir) store_dir="$2"; shift 2 ;;
+                --json)      json_output=true; shift ;;
+                *) shift ;;
+            esac
+        done
+
+        if [[ -z "$org" ]]; then
+            echo "ERROR: --org is required. Usage: pforge github metrics pull --org <orgname>" >&2
+            exit 1
+        fi
+
+        local metrics_script="${REPO_ROOT}/pforge-mcp/github-metrics.mjs"
+        if [[ ! -f "$metrics_script" ]]; then
+            echo "ERROR: github-metrics.mjs not found at $metrics_script" >&2
+            exit 1
+        fi
+
+        [[ -z "$store_dir" ]] && store_dir="$(pwd)/.forge/metrics"
+        local since_arg="${since:-30d}"
+        local until_arg="${until:-}"
+
+        local pull_inline
+        pull_inline=$(cat <<'JSEOF'
+import { pullMetrics, writeMetrics } from './pforge-mcp/github-metrics.mjs';
+const [org, since, until, storeDir] = process.argv.slice(1);
+try {
+  const records = pullMetrics({ org, since, until: until || undefined });
+  const result  = writeMetrics(records, { storeDir });
+  const summary = { ok: true, org, fetched: records.length, written: result.written, skipped: result.skipped };
+  console.log(JSON.stringify(summary));
+} catch (e) {
+  process.stderr.write(JSON.stringify({ ok: false, error: e.message, name: e.name }) + '\n');
+  process.exit(1);
+}
+JSEOF
+)
+
+        local raw_out node_exit
+        pushd "$REPO_ROOT" >/dev/null || true
+        raw_out=$(node --input-type=module -e "$pull_inline" "$org" "$since_arg" "$until_arg" "$store_dir" 2>&1)
+        node_exit=$?
+        popd >/dev/null || true
+
+        local last_line
+        last_line=$(printf '%s\n' "$raw_out" | grep -v '^$' | tail -1)
+
+        if $json_output; then
+            echo "$last_line"
+        else
+            echo "$last_line" | node -e "
+try {
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8').trim());
+  if (d.ok) {
+    console.log('\u2705 Fetched ' + d.fetched + \" records for org '\" + d.org + \"'\");
+    if (d.written && d.written.length > 0) console.log('   Written:  ' + d.written.join(', '));
+    if (d.skipped && d.skipped.length > 0) console.log('   Skipped (already stored): ' + d.skipped.join(', '));
+  } else {
+    process.stderr.write('ERROR: ' + (d.error || 'unknown error') + '\n');
+    process.exit(1);
+  }
+} catch (err) {
+  process.stderr.write('ERROR: Failed to parse output from github-metrics.mjs\n');
+  process.exit(1);
+}"
+        fi
+        exit $node_exit
+    fi
+
+    if [[ "$sub" != "status" && "$sub" != "doctor" ]]; then
+        echo "ERROR: unknown subcommand 'pforge github $sub'. Try 'pforge github --help'." >&2
+        exit 1
+    fi
+
+    local script="${REPO_ROOT}/pforge-mcp/github-introspect.mjs"
+    if [[ ! -f "$script" ]]; then
+        echo "ERROR: github-introspect.mjs not found at $script" >&2
+        exit 1
+    fi
+
+    # Default --project to caller's CWD (not the framework REPO_ROOT) unless
+    # the user already supplied --project explicitly.
+    local has_project=0
+    for a in "$@"; do
+        case "$a" in
+            --project|--project=*) has_project=1; break ;;
+        esac
+    done
+
+    local args=("$script")
+    if [[ $has_project -eq 0 ]]; then
+        args+=(--project "$(pwd)")
+    fi
+    if [[ "$sub" == "doctor" ]]; then
+        args+=(--doctor)
+    fi
+    if [[ $# -gt 0 ]]; then
+        args+=("$@")
+    fi
+
+    node "${args[@]}"
+}
+
+# ─── Command: crucible (Phase CRUCIBLE-IMPORT-CLI Slice 3) ────────────────
+# Dispatch for the "crucible" command — delegates to crucible-import.mjs.
+cmd_crucible() {
+    local script_path="$REPO_ROOT/pforge-mcp/crucible-import.mjs"
+    if [[ ! -f "$script_path" ]]; then
+        echo "ERROR: crucible-import script not found at $script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+}
+
 COMMAND="${1:-help}"
 shift 2>/dev/null || true
 
@@ -1855,7 +5890,59 @@ case "$COMMAND" in
     update)       cmd_update "$@" ;;
     analyze)      cmd_analyze "$@" ;;
     run-plan)     cmd_run_plan "$@" ;;
-    smith)        cmd_smith ;;
+    org-rules)    cmd_org_rules "$@" ;;
+    drift)        cmd_drift "$@" ;;
+    incident)     cmd_incident "$@" ;;
+    deploy-log)   cmd_deploy_log "$@" ;;
+    triage)       cmd_triage "$@" ;;
+    regression-guard) cmd_regression_guard "$@" ;;
+    runbook)      cmd_runbook "$@" ;;
+    hotspot)      cmd_hotspot "$@" ;;
+    secret-scan)  cmd_secret_scan "$@" ;;
+    env-diff)     cmd_env_diff "$@" ;;
+    fix-proposal)    cmd_fix_proposal "$@" ;;
+    quorum-analyze)  cmd_quorum_analyze "$@" ;;
+    health-trend)    cmd_health_trend "$@" ;;
+    smith)        cmd_doctor "$@" ;;
+    testbed-happypath) cmd_testbed_happypath "$@" ;;
+    self-update)  cmd_self_update "$@" ;;
+    version-bump) cmd_version_bump "$@" ;;
+    migrate-memory) cmd_migrate_memory "$@" ;;
+    drain-memory) cmd_drain_memory "$@" ;;
+    mcp-call)     cmd_mcp_call "$@" ;;
+    tour)         cmd_tour ;;
+    config)       cmd_config "$@" ;;
+    skills)       cmd_skills "$@" ;;
+    forge-master) cmd_forge_master "$@" ;;
+    hammer-fm)    cmd_hammer_fm "$@" ;;
+    audit-loop)   cmd_audit_loop "$@" ;;
+    audit)
+        sub="${1:-}"
+        case "$sub" in
+            export) shift; cmd_audit_export "$@" ;;
+            *)
+                echo "Usage: pforge audit <subcommand>"
+                echo ""
+                echo "Subcommands:"
+                echo "  export    Export audit events from .forge/runs/ as JSONL or CSV"
+                echo ""
+                echo "See also: pforge audit-loop"
+                exit 1
+                ;;
+        esac
+        ;;
+    fm-session)   cmd_fm_session "$@" ;;
+    fm-recall)    cmd_fm_recall "$@" ;;
+    timeline)     cmd_timeline "$@" ;;
+    patterns)     cmd_patterns "$@" ;;
+    lattice)      cmd_lattice "$@" ;;
+    graph)        cmd_graph "$@" ;;
+    digest)       cmd_digest "$@" ;;
+    plan-from-sarif) cmd_plan_from_sarif "$@" ;;
+    github)       cmd_github "$@" ;;
+    crucible)     cmd_crucible "$@" ;;
+    anvil)        cmd_anvil "$@" ;;
+    hallmark)     cmd_hallmark "$@" ;;
     help|--help)  show_help ;;
     *)
         echo "ERROR: Unknown command '$COMMAND'" >&2
