@@ -1,0 +1,19 @@
+{
+  "planBasename": "Phase-6-WEB-UI-PLAN",
+  "createdAt": "2026-05-16T21:42:02.146Z",
+  "status": "completed",
+  "totalDurationMs": 2120794,
+  "retriesPerSlice": {},
+  "gateFlaps": 0,
+  "topFailureReason": null,
+  "costDelta": {
+    "before": null,
+    "after": 0.07,
+    "delta": null
+  },
+  "driftDelta": {
+    "before": null,
+    "after": 80,
+    "delta": null
+  }
+}
