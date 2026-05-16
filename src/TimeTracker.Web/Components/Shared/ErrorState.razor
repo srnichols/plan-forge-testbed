@@ -1,8 +1,13 @@
-<FluentMessageBar Intent="MessageIntent.Error" Title="@(Title ?? "Error")" aria-live="assertive">
-    @(Message ?? "An unexpected error occurred. Please try again.")
+<FluentMessageBar Intent="MessageIntent.Error" Title="@Message">
+    @Detail
 </FluentMessageBar>
+@if (OnRetry.HasDelegate)
+{
+    <FluentButton Appearance="Appearance.Accent" OnClick="OnRetry">Retry</FluentButton>
+}
 
 @code {
-    [Parameter] public string? Title { get; set; }
-    [Parameter] public string? Message { get; set; }
+    [Parameter, EditorRequired] public string Message { get; set; } = default!;
+    [Parameter] public string? Detail { get; set; }
+    [Parameter] public EventCallback OnRetry { get; set; }
 }

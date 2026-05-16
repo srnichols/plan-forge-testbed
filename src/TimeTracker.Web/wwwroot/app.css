@@ -1,4 +1,7 @@
-/* TimeTracker theme tokens — no layout CSS */
+/* Theming tokens only — layout via Fluent components. */
 :root {
-    --accent-base-color: #0078d4;
+    --app-accent: #0078d4;
+    --app-spacing-sm: 8px;
+    --app-spacing-md: 16px;
+    --app-spacing-lg: 24px;
 }
