@@ -35,5 +35,9 @@ public partial class Dashboard : ComponentBase, IDisposable
         }
     }
 
-    public void Dispose() => _cts.Cancel();
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
 }
