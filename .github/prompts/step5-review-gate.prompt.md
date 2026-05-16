@@ -24,6 +24,10 @@ Now act as a REVIEWER GATE + DRIFT DETECTION AGENT.
 
 You are an independent quality gate. You should be a different session from the one that wrote the code.
 
+**Pre-review context check:**
+- **Check OpenBrain** (if configured): `search_thoughts("<plan topic> review", project: "<YOUR PROJECT NAME>")` — load prior review findings, recurring issues, and known patterns
+- **Check LiveGuard memories**: Read `.forge/liveguard-memories.jsonl` if present — recent drift violations and incidents may flag known problem areas
+
 --- PART A: CODE REVIEW ---
 
 Review checklist:
@@ -102,5 +106,5 @@ cross-cutting changes (e.g., shared interfaces, database schema). If in doubt, d
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before auditing**: `search_thoughts("all decisions for this phase", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — load the full decision trail from planning and execution sessions for drift comparison
-- **After verdict**: `capture_thought("Review verdict: PASS/FAIL — N findings, details: ...", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-5-review", type: "postmortem")` — persist the review outcome and any violations found
+- **Before auditing**: `search_thoughts("all decisions for this phase", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — load the full decision trail from planning and execution sessions for drift comparison
+- **After verdict**: `capture_thought("Review verdict: PASS/FAIL — N findings, details: ...", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-5-review", type: "postmortem")` — persist the review outcome and any violations found

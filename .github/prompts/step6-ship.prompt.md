@@ -4,9 +4,9 @@ description: "Pipeline Step 6 — Ship the completed phase: commit, update roadm
 
 # Step 6: Ship
 
-> **Pipeline**: Step 6 of 6 (Session 4 — Ship)  
-> **When**: After the Review Gate passes (Step 5)  
-> **Model suggestion**: Any model / Copilot Auto (10% token savings) — commit, roadmap update, and postmortem are straightforward  
+> **Pipeline**: Step 6 of 6 (Session 4 — Ship)
+> **When**: After the Review Gate passes (Step 5)
+> **Model suggestion**: Any model / Copilot Auto (10% token savings) — commit, roadmap update, and postmortem are straightforward
 > **Prerequisite**: Step 5 verdict must be **PASS**
 
 Replace `<YOUR-HARDENED-PLAN>` with your hardened plan filename.
@@ -17,6 +17,8 @@ Read these files first:
 1. docs/plans/<YOUR-HARDENED-PLAN>.md (Definition of Done + Execution Slices)
 2. docs/plans/DEPLOYMENT-ROADMAP.md
 3. .github/instructions/git-workflow.instructions.md
+
+> **Plan Forge maintainers shipping a framework release** (i.e., bumping the `pforge` version itself, not just closing a project phase): follow [docs/RELEASE-CHECKLIST.md](../../docs/RELEASE-CHECKLIST.md) instead of this prompt. The checklist covers VERSION/package.json sync, hooks mirror, instruction enumeration, the mandatory `gh release create` step, and bump-back-to-dev.
 
 Now act as a SHIPPING AGENT. The Review Gate has passed — your job is to finalize and close out this phase.
 
@@ -123,6 +125,6 @@ If it already exists, append — never overwrite prior entries.
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before shipping**: `search_thoughts("postmortem lessons", project: "TimeTracker", created_by: "copilot-vscode", type: "postmortem")` — load lessons from prior phase postmortems to check for recurring shipping issues (failed pushes, missed changelog entries, forgotten tags)
-- **After postmortem**: `capture_thoughts([...lessons], project: "TimeTracker", created_by: "copilot-vscode", source: "phase-N-postmortem", type: "postmortem")` — batch capture all lessons, patterns, architecture decisions, bugs, and conventions from this phase
+- **Before shipping**: `search_thoughts("postmortem lessons", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "postmortem")` — load lessons from prior phase postmortems to check for recurring shipping issues (failed pushes, missed changelog entries, forgotten tags)
+- **After postmortem**: `capture_thoughts([...lessons], project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "phase-N-postmortem", type: "postmortem")` — batch capture all lessons, patterns, architecture decisions, bugs, and conventions from this phase
 - **Include**: architecture decisions, patterns discovered, bugs encountered, conventions established, and anything flagged for future phases

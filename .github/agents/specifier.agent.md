@@ -178,8 +178,8 @@ Output a summary:
 
 If the OpenBrain MCP server is available:
 
-- **Before interviewing**: `search_thoughts("<feature topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — surface prior decisions, patterns, and lessons relevant to this feature area
-- **After specification is complete**: `capture_thought("Feature spec: <summary>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions
+- **Before interviewing**: `search_thoughts("<feature topic>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — surface prior decisions, patterns, and lessons relevant to this feature area
+- **After specification is complete**: `capture_thought("Feature spec: <summary>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions
 
 ## Constraints
 

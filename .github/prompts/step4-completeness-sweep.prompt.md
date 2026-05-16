@@ -54,5 +54,5 @@ If ANY finding cannot be resolved without scope expansion: pause and report the 
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before sweeping**: `search_thoughts("common stubs", project: "TimeTracker", created_by: "copilot-vscode", type: "bug")` — check if prior sweeps found recurring stub patterns so you can look for them proactively
-- **After sweep**: `capture_thoughts([...findings], project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns and conventions discovered during cleanup
+- **Before sweeping**: `search_thoughts("common stubs", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "bug")` — check if prior sweeps found recurring stub patterns so you can look for them proactively
+- **After sweep**: `capture_thoughts([...findings], project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns and conventions discovered during cleanup

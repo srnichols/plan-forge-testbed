@@ -20,7 +20,13 @@ Your job is to help me describe WHAT I want to build and WHY — not HOW to buil
 
 ---
 
-### FIRST: Check for Spec Kit Artifacts
+### FIRST: Check for Prior Context
+
+1. **Check OpenBrain** (if configured): `search_thoughts("<FEATURE-NAME>", project: "<YOUR PROJECT NAME>")` — load prior decisions, gotchas, and lessons about this feature area. If results found, reference them in the specification.
+
+2. **Check LiveGuard memories**: Read `.forge/liveguard-memories.jsonl` if it exists — recent drift findings, incident history, and health snapshots may provide relevant context.
+
+3. **Check Spec Kit Artifacts**:
 
 Before asking any questions, scan the project for Spec Kit artifacts:
 
@@ -42,6 +48,8 @@ Before asking any questions, scan the project for Spec Kit artifacts:
 > 4. **Start fresh** → Ignore Spec Kit files and run the full interview
 >
 > Which would you like?"
+>
+> **CLI shortcut**: `pforge crucible import --from=spec-kit` runs all four import steps non-interactively and emits a ready-to-run Phase Plan with Crucible frontmatter already applied.
 
 **If the user chooses to import:**
 
@@ -56,6 +64,15 @@ Before asking any questions, scan the project for Spec Kit artifacts:
    - Plan source: `specs/<feature>/plan.md`
    - Constitution: `memory/constitution.md`
    ```
+6. **v2.37 Crucible requirement** — write a YAML frontmatter block as the very first lines of the new phase plan (before the `# Title`):
+   ```
+   ---
+   crucibleId: imported-speckit-<uuid>
+   lane: full
+   source: speckit
+   ---
+   ```
+   Use any valid UUID v4 (e.g. `imported-speckit-a1b2c3d4-...`). This lets `pforge run-plan` accept the imported plan without needing `--manual-import`. Without this frontmatter, execution will be blocked by the Crucible enforcement gate introduced in v2.37.
 
 **If no Spec Kit artifacts found** — continue to the document check below.
 
@@ -305,5 +322,5 @@ If there ARE markers, say:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before interviewing**: `search_thoughts("<feature topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — check if this feature or similar has been specified before, load prior decisions and lessons
-- **After specification is complete**: `capture_thought("Feature spec: <summary of what and why>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions
+- **Before interviewing**: `search_thoughts("<feature topic>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — check if this feature or similar has been specified before, load prior decisions and lessons
+- **After specification is complete**: `capture_thought("Feature spec: <summary of what and why>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions

@@ -4,9 +4,9 @@ description: "Pipeline Step 3 — Execute a hardened plan slice-by-slice with va
 
 # Step 3: Execute Slices
 
-> **Pipeline**: Step 3 of 5 (Session 2 — Execution)  
-> **When**: After plan is hardened (Step 2), in a new agent session  
-> **Model suggestion**: Any model / Codex / Copilot Auto (10% token savings) — execution is mechanical; Codex is fast and focused  
+> **Pipeline**: Step 3 of 5 (Session 2 — Execution)
+> **When**: After plan is hardened (Step 2), in a new agent session
+> **Model suggestion**: Any model / Codex / Copilot Auto (10% token savings) — execution is mechanical; Codex is fast and focused
 > **Next Step**: `step4-completeness-sweep.prompt.md`
 
 Replace `<YOUR-HARDENED-PLAN>` with your hardened plan filename.
@@ -37,6 +37,8 @@ The right amount of complexity is the minimum needed for the current slice.
 Execute the hardened plan one slice at a time, starting with Slice 1.
 
 Before starting Slice 1, run a **Pre-Execution Traceability Check**:
+- **Check OpenBrain** (if configured): `search_thoughts("<plan topic>", project: "<YOUR PROJECT NAME>")` — load prior gotchas, patterns, and lessons for the affected files/areas
+- **Check LiveGuard memories**: Read `.forge/liveguard-memories.jsonl` if present — prior drift violations and incident history for this project
 - Scan the spec's MUST acceptance criteria
 - Verify each MUST criterion maps to at least one slice's validation gate
 - If any MUST criterion has no corresponding validation gate, flag it and ask before proceeding
@@ -55,6 +57,25 @@ For [parallel-safe] slices:
 - If any parallel slice fails, pause all slices in that group and report
 
 After ALL slices pass, run the COMPLETENESS SWEEP (Section 6.1).
+
+---
+
+### Files Modified Verification (Issue #152)
+
+Before declaring a slice complete — even if the validation gate passes — re-read
+the slice's **Files Modified (Exhaustive)** table (when present). For each row,
+confirm via `git diff --name-only HEAD` (or `git status --porcelain` for new
+files) that the path appears in the slice's working-tree changes.
+
+If any declared file is missing from the diff, **the slice is not finished**:
+- Either complete the missing modification, OR
+- Amend the plan to remove the row (with a brief rationale) before continuing.
+
+Do not rely on the validation gate alone. Gates often only test what the worker
+*chose* to add to the build (`dotnet test <slnx>`, `npm test`, etc.) — they do
+not catch a silently-skipped registration like a missing `.csproj` reference,
+an unedited README, or an unreleased CHANGELOG entry. The Exhaustive table is
+the contract; the gate is one verification of it, not the only one.
 
 ---
 
@@ -99,6 +120,14 @@ SESSION RESUME CHECKLIST:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before each slice**: `search_thoughts("<slice topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
-- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
-- **After completeness sweep**: `capture_thoughts([...lessons], project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
+- **Before each slice**: `search_thoughts("<slice topic>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
+- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
+- **After completeness sweep**: `capture_thoughts([...lessons], project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
+
+---
+
+## Self-Repair Reporting
+
+If you had to work around a Plan Forge defect to complete a slice (brittle gate, orchestrator bug, prompt issue), call `forge_meta_bug_file` before ending the slice. This files a meta-bug against Plan Forge itself so the problem is captured and not repeated.
+
+See `.github/instructions/self-repair-reporting.instructions.md` for the three canonical defect classes, worked examples, and the full tool signature.
