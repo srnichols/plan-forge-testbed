@@ -9,23 +9,41 @@ public class TimeEntryReportService(TimeTrackerDbContext db) : ITimeEntryReportS
     public async Task<HoursSummaryResponse> GetHoursSummaryAsync(
         DateOnly start, DateOnly end, int? projectId = null, CancellationToken ct = default)
     {
-        var query = db.TimeEntries
-            .Where(e => DateOnly.FromDateTime(e.Date) >= start && DateOnly.FromDateTime(e.Date) <= end);
+        (DateTime startDt, DateTime endExclusiveDt) = ToDateTimeBounds(start, end);
+
+        IQueryable<TimeEntry> query = db.TimeEntries
+            .AsNoTracking()
+            .Where(e => e.Date >= startDt && e.Date < endExclusiveDt);
 
         if (projectId.HasValue)
             query = query.Where(e => e.ProjectId == projectId.Value);
 
-        var entries = await query.ToListAsync(ct);
+        var agg = await query
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Sum(e => e.Hours),
+                Billable = g.Sum(e => e.IsBillable ? e.Hours : 0m),
+                EntryCount = g.Count()
+            })
+            .SingleOrDefaultAsync(ct);
 
-        decimal totalHours = entries.Sum(e => e.Hours);
-        decimal billableHours = entries.Where(e => e.IsBillable).Sum(e => e.Hours);
-        decimal nonBillableHours = totalHours - billableHours;
+        if (agg is null)
+        {
+            return new HoursSummaryResponse(
+                TotalHours: 0m,
+                BillableHours: 0m,
+                NonBillableHours: 0m,
+                EntryCount: 0,
+                PeriodStart: start,
+                PeriodEnd: end);
+        }
 
         return new HoursSummaryResponse(
-            TotalHours: totalHours,
-            BillableHours: billableHours,
-            NonBillableHours: nonBillableHours,
-            EntryCount: entries.Count,
+            TotalHours: agg.Total,
+            BillableHours: agg.Billable,
+            NonBillableHours: agg.Total - agg.Billable,
+            EntryCount: agg.EntryCount,
             PeriodStart: start,
             PeriodEnd: end);
     }
@@ -33,24 +51,31 @@ public class TimeEntryReportService(TimeTrackerDbContext db) : ITimeEntryReportS
     public async Task<ProjectBreakdownResponse> GetProjectBreakdownAsync(
         DateOnly start, DateOnly end, CancellationToken ct = default)
     {
-        var entries = await db.TimeEntries
-            .Include(e => e.Project)
-            .Where(e => DateOnly.FromDateTime(e.Date) >= start && DateOnly.FromDateTime(e.Date) <= end)
+        (DateTime startDt, DateTime endExclusiveDt) = ToDateTimeBounds(start, end);
+
+        List<ProjectRow> rows = await db.TimeEntries
+            .AsNoTracking()
+            .Where(e => e.Date >= startDt && e.Date < endExclusiveDt)
+            .GroupBy(e => new { e.ProjectId, ProjectName = e.Project!.Name })
+            .Select(g => new ProjectRow(
+                g.Key.ProjectId,
+                g.Key.ProjectName,
+                g.Sum(e => e.Hours),
+                g.Sum(e => e.IsBillable ? e.Hours : 0m)))
             .ToListAsync(ct);
 
-        decimal totalHours = entries.Sum(e => e.Hours);
+        decimal totalHours = rows.Sum(r => r.Total);
 
-        var projects = entries
-            .GroupBy(e => new { e.ProjectId, e.Project.Name })
-            .Select(g => new ProjectBreakdownItem(
-                ProjectId: g.Key.ProjectId,
-                ProjectName: g.Key.Name,
-                TotalHours: g.Sum(e => e.Hours),
-                BillableHours: g.Where(e => e.IsBillable).Sum(e => e.Hours),
-                NonBillableHours: g.Where(e => !e.IsBillable).Sum(e => e.Hours),
-                PercentageOfTotal: totalHours > 0
-                    ? Math.Round(g.Sum(e => e.Hours) / totalHours * 100, 2)
-                    : 0))
+        List<ProjectBreakdownItem> projects = rows
+            .Select(r => new ProjectBreakdownItem(
+                ProjectId: r.ProjectId,
+                ProjectName: r.ProjectName,
+                TotalHours: r.Total,
+                BillableHours: r.Billable,
+                NonBillableHours: r.Total - r.Billable,
+                PercentageOfTotal: totalHours > 0m
+                    ? Math.Round(r.Total / totalHours * 100m, 2)
+                    : 0m))
             .OrderByDescending(p => p.TotalHours)
             .ToList();
 
@@ -64,29 +89,45 @@ public class TimeEntryReportService(TimeTrackerDbContext db) : ITimeEntryReportS
     public async Task<DailyTimelineResponse> GetDailyTimelineAsync(
         DateOnly start, DateOnly end, int? projectId = null, CancellationToken ct = default)
     {
-        var query = db.TimeEntries
-            .Where(e => DateOnly.FromDateTime(e.Date) >= start && DateOnly.FromDateTime(e.Date) <= end);
+        (DateTime startDt, DateTime endExclusiveDt) = ToDateTimeBounds(start, end);
+
+        IQueryable<TimeEntry> query = db.TimeEntries
+            .AsNoTracking()
+            .Where(e => e.Date >= startDt && e.Date < endExclusiveDt);
 
         if (projectId.HasValue)
             query = query.Where(e => e.ProjectId == projectId.Value);
 
-        var entries = await query.ToListAsync(ct);
+        var rows = await query
+            .GroupBy(e => e.Date.Date)
+            .Select(g => new
+            {
+                Day = g.Key,
+                Total = g.Sum(e => e.Hours),
+                Billable = g.Sum(e => e.IsBillable ? e.Hours : 0m),
+                Count = g.Count()
+            })
+            .OrderBy(x => x.Day)
+            .ToListAsync(ct);
 
-        var days = entries
-            .GroupBy(e => DateOnly.FromDateTime(e.Date))
-            .Select(g => new DailyTimelineEntry(
-                Date: g.Key,
-                TotalHours: g.Sum(e => e.Hours),
-                BillableHours: g.Where(e => e.IsBillable).Sum(e => e.Hours),
-                NonBillableHours: g.Where(e => !e.IsBillable).Sum(e => e.Hours),
-                EntryCount: g.Count()))
-            .OrderBy(d => d.Date)
+        List<DailyTimelineEntry> days = rows
+            .Select(x => new DailyTimelineEntry(
+                Date: DateOnly.FromDateTime(x.Day),
+                TotalHours: x.Total,
+                BillableHours: x.Billable,
+                NonBillableHours: x.Total - x.Billable,
+                EntryCount: x.Count))
             .ToList();
 
         return new DailyTimelineResponse(
             PeriodStart: start,
             PeriodEnd: end,
-            TotalHours: entries.Sum(e => e.Hours),
+            TotalHours: rows.Sum(r => r.Total),
             Days: days);
     }
+
+    private static (DateTime StartDt, DateTime EndExclusiveDt) ToDateTimeBounds(DateOnly start, DateOnly end)
+        => (start.ToDateTime(TimeOnly.MinValue), end.AddDays(1).ToDateTime(TimeOnly.MinValue));
+
+    private sealed record ProjectRow(int ProjectId, string ProjectName, decimal Total, decimal Billable);
 }
