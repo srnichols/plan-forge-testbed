@@ -21,11 +21,24 @@ docker compose up -d db
 # Run the API
 dotnet run --project src/TimeTracker.Api
 
-# Run the web UI (Blazor Server) — http://localhost:5100
+# Run the web UI (Blazor Server)
 dotnet run --project src/TimeTracker.Web
+# Browse to http://localhost:5100
 
 # Run tests
 dotnet test
+```
+
+> **Note**: The Blazor Web app calls the REST API at `http://localhost:5000`. Run **both** `TimeTracker.Api` and `TimeTracker.Web` for a full end-to-end demo.
+
+## Solution Layout
+
+```
+src/
+├── TimeTracker.Api/          REST API (ASP.NET Core, EF Core, PostgreSQL)
+├── TimeTracker.Core/         Domain entities & contracts
+├── TimeTracker.Web/          Blazor Server UI (Fluent UI, port 5100)
+└── TimeTracker.Web.Client/   Typed HttpClient SDK used by Web
 ```
 
 ## Plan Forge Testing
