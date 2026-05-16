@@ -1,0 +1,78 @@
+@page "/clients/new"
+@page "/clients/{Id:int}/edit"
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode())
+
+<PageTitle>@(_isNew ? "New Client" : "Edit Client")</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+    <FluentBreadcrumb>
+        <FluentBreadcrumbItem Href="/clients">Clients</FluentBreadcrumbItem>
+        <FluentBreadcrumbItem>@(_isNew ? "New Client" : "Edit Client")</FluentBreadcrumbItem>
+    </FluentBreadcrumb>
+
+    <FluentLabel Typo="Typography.PageTitle">@(_isNew ? "New Client" : "Edit Client")</FluentLabel>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading client" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load client">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <EditForm Model="_form" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+                <div>
+                    <FluentTextField @bind-Value="_form.Name"
+                                     Label="Name"
+                                     Required="true"
+                                     Placeholder="Client name"
+                                     style="width: 100%; max-width: 400px;" />
+                    <ValidationMessage For="@(() => _form.Name)" />
+                </div>
+
+                <div>
+                    <FluentTextField @bind-Value="_form.Email"
+                                     Label="Email"
+                                     Placeholder="client@example.com"
+                                     style="width: 100%; max-width: 400px;" />
+                    <ValidationMessage For="@(() => _form.Email)" />
+                </div>
+
+                <div>
+                    <FluentNumberField @bind-Value="_form.HourlyRate"
+                                       Label="Hourly Rate"
+                                       Min="0.01"
+                                       style="width: 100%; max-width: 200px;" />
+                    <ValidationMessage For="@(() => _form.HourlyRate)" />
+                </div>
+
+                @if (_submitError is not null)
+                {
+                    <FluentMessageBar Intent="MessageIntent.Error" Title="Save failed">
+                        @_submitError
+                    </FluentMessageBar>
+                }
+
+                <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                    <FluentButton Type="ButtonType.Submit"
+                                  Appearance="Appearance.Accent"
+                                  Disabled="@_submitting">
+                        @(_submitting ? "Saving…" : "Save")
+                    </FluentButton>
+                    <FluentButton Appearance="Appearance.Outline"
+                                  OnClick="@Cancel"
+                                  Disabled="@_submitting">
+                        Cancel
+                    </FluentButton>
+                </FluentStack>
+            </FluentStack>
+        </EditForm>
+    }
+</FluentStack>

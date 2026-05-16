@@ -1,0 +1,67 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+
+<PageTitle>Dashboard</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="24">
+    <FluentLabel Typo="Typography.PageTitle">Dashboard</FluentLabel>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading dashboard" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load dashboard">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else if (_summary is not null)
+    {
+        <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="16" Wrap="true">
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Subject">Clients</FluentLabel>
+                    <FluentLabel Typo="Typography.H1">@_summary.TotalClients</FluentLabel>
+                </FluentStack>
+            </FluentCard>
+
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Subject">Projects</FluentLabel>
+                    <FluentLabel Typo="Typography.H1">@_summary.TotalProjects</FluentLabel>
+                </FluentStack>
+            </FluentCard>
+
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Subject">Time Entries</FluentLabel>
+                    <FluentLabel Typo="Typography.H1">@_summary.TotalTimeEntries</FluentLabel>
+                </FluentStack>
+            </FluentCard>
+
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Subject">Hours Logged</FluentLabel>
+                    <FluentLabel Typo="Typography.H1">@_summary.TotalHoursLogged.ToString("F1")</FluentLabel>
+                    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                        <FluentBadge Appearance="Appearance.Accent" aria-label="Billable hours">
+                            Billable: @_summary.BillableHours.ToString("F1")
+                        </FluentBadge>
+                        <FluentBadge Appearance="Appearance.Neutral" aria-label="Non-billable hours">
+                            Non-billable: @_summary.NonBillableHours.ToString("F1")
+                        </FluentBadge>
+                    </FluentStack>
+                </FluentStack>
+            </FluentCard>
+
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Subject">Invoices</FluentLabel>
+                    <FluentLabel Typo="Typography.H1">@_summary.TotalInvoices</FluentLabel>
+                    <FluentLabel>Outstanding: @_summary.OutstandingInvoiceTotal.ToString("C2")</FluentLabel>
+                </FluentStack>
+            </FluentCard>
+        </FluentStack>
+    }
+</FluentStack>
