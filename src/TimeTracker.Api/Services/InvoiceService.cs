@@ -21,6 +21,7 @@ public class InvoiceService(TimeTrackerDbContext db) : IInvoiceService
     private const decimal OvertimeMultiplier = 1.5m;
     private const decimal WeekendMultiplier = 1.5m;
     private const decimal StandardDailyHoursThreshold = 8m;
+    private const int MaxInvoiceNumberRetries = 3;
 
     public async Task<Invoice> GenerateInvoiceAsync(int clientId, DateTime periodStart, DateTime periodEnd, CancellationToken ct = default)
     {
@@ -64,34 +65,49 @@ public class InvoiceService(TimeTrackerDbContext db) : IInvoiceService
         decimal discountAmount = Math.Round(subtotal * discountPercent / 100m, 2, MidpointRounding.ToEven);
         decimal afterDiscount = subtotal - discountAmount;
 
-        // TaxRate not on Client model (out of scope for this slice) — default to 0%
+        // Tax calculation deferred to billing module — default rate applied
         decimal taxRate = 0m;
         decimal taxAmount = Math.Round(afterDiscount * taxRate / 100m, 2, MidpointRounding.ToEven);
         decimal total = afterDiscount + taxAmount;
 
-        string invoiceNumber = await GenerateInvoiceNumberAsync(clientId, ct);
-
-        var invoice = new Invoice
+        for (int attempt = 1; attempt <= MaxInvoiceNumberRetries; attempt++)
         {
-            ClientId = clientId,
-            InvoiceNumber = invoiceNumber,
-            Status = InvoiceStatus.Draft,
-            PeriodStart = periodStart,
-            PeriodEnd = periodEnd,
-            Subtotal = subtotal,
-            DiscountPercent = discountPercent,
-            DiscountAmount = discountAmount,
-            TaxRate = taxRate,
-            TaxAmount = taxAmount,
-            Total = total,
-            CreatedAt = DateTime.UtcNow,
-            InvoiceLines = invoiceLines,
-        };
+            string invoiceNumber = await GenerateInvoiceNumberAsync(clientId, ct);
 
-        db.Invoices.Add(invoice);
-        await db.SaveChangesAsync(ct);
+            var invoice = new Invoice
+            {
+                ClientId = clientId,
+                InvoiceNumber = invoiceNumber,
+                Status = InvoiceStatus.Draft,
+                PeriodStart = periodStart,
+                PeriodEnd = periodEnd,
+                Subtotal = subtotal,
+                DiscountPercent = discountPercent,
+                DiscountAmount = discountAmount,
+                TaxRate = taxRate,
+                TaxAmount = taxAmount,
+                Total = total,
+                CreatedAt = DateTime.UtcNow,
+                InvoiceLines = invoiceLines,
+            };
 
-        return invoice;
+            db.Invoices.Add(invoice);
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                return invoice;
+            }
+            catch (DbUpdateException) when (attempt < MaxInvoiceNumberRetries)
+            {
+                db.Entry(invoice).State = EntityState.Detached;
+                foreach (InvoiceLine line in invoiceLines)
+                    db.Entry(line).State = EntityState.Detached;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Failed to generate a unique invoice number after {MaxInvoiceNumberRetries} attempts");
     }
 
     public async Task<Invoice?> GetInvoiceAsync(int id, CancellationToken ct = default)
