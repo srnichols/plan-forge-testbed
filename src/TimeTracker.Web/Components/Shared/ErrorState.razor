@@ -1,5 +1,5 @@
-<FluentMessageBar Intent="MessageIntent.Error" Title="@Message">
-    @Detail
+<FluentMessageBar Intent="MessageIntent.Error" Title="@Title">
+    @Message
 </FluentMessageBar>
 @if (OnRetry.HasDelegate)
 {
@@ -7,7 +7,7 @@
 }
 
 @code {
+    [Parameter, EditorRequired] public string Title { get; set; } = default!;
     [Parameter, EditorRequired] public string Message { get; set; } = default!;
-    [Parameter] public string? Detail { get; set; }
     [Parameter] public EventCallback OnRetry { get; set; }
 }
