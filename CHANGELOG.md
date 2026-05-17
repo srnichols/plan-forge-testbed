@@ -5,6 +5,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.2.1] — 2026-05-17 — Encoding-Honesty Hotfix (Issue #196)
+
+> **One-liner**: On Windows, `pforge analyze`'s captured stdout was being permanently corrupted to `U+FFFD` because PowerShell emitted CP437-encoded box-drawing chars but Node decoded the stream as UTF-8. Audit trail data loss in `summary.json.analyze.output`.
+
+#### Fixed — Bug #196
+
+**`pforge.ps1` — startup encoding directive**
+- New top-of-script `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { ... }` block, before any `Write-Host`. Guarantees that all subsequent script output is UTF-8 bytes regardless of the parent console's active codepage.
+- Wrapped in `try/catch` so constrained PowerShell hosts (PSReadLine restricted mode) don't crash — they degrade to pre-fix behavior.
+
+**`pforge-mcp/orchestrator.mjs` — `runAutoAnalyze` defense-in-depth**
+- Windows spawn changed from `powershell.exe -File pforge.ps1 analyze "<plan>"` to `powershell.exe -Command "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; & .\pforge.ps1 analyze \"<plan>\""`. Protects callers that have an older `pforge.ps1` checkout (no script-side encoding fix).
+- Linux branch (`bash pforge.sh analyze`) unchanged — Linux Node child stdio defaults to UTF-8 already.
+
+#### Verification
+- 11 new tests in `pforge-mcp/tests/cli-capture-encoding-issue-196.test.mjs` lock both invariants (`pforge.ps1` early UTF-8 directive present; `runAutoAnalyze` wraps in encoding setter; round-trip proof that valid UTF-8 byte stream preserves `╔═╗║✓⚠`).
+- Live smoke test on Windows testbed: captured analyze output for Phase-3 plan, `contains U+FFFD: false`, `╔ ═ ╗ ✓` all preserved (was `��� ?` pre-fix).
+
+---
+
+## [3.2.0] — 2026-05-17
+
+### Phase-TEAM-ACTIVITY — Team Activity Feed (v3.2.0)
+
+First increment of v3.1 Team Mode. When multiple developers (or CI agents) run Plan Forge against the same repository, each completed or aborted run appends a summary to `.forge/team-activity.jsonl`. This shared file (check into version control or mount as a shared volume) provides cross-developer visibility into who ran what plan, when, and at what cost.
+
+**New:**
+- `pforge-mcp/team-activity.mjs` — core module (`recordActivity`, `loadActivity`, `getOperator`)
+- `forge_team_activity` MCP tool — query recent team activity from IDE chat
+- `GET /api/team-activity` REST endpoint — dashboard and `pforge` CLI consume this
+- `pforge-mcp/dashboard/team-activity.mjs` — dashboard panel (available via REST)
+- `pforge team activity [--limit N] [--since ISO]` — CLI command on both PowerShell and bash
+
+**Changed:**
+- `orchestrator.mjs` — records activity after every `run-completed` / `run-aborted` event
+
+---
+
+## [3.1.2] — 2026-05-18 — Cloud Agent Validation Stack (B4)
+
+> **One-liner**: Adds `cloudAgentValidation` to `.forge.json` — declare which GitHub scanning tools (CodeQL, secret scanning, dependency review, Copilot code review) are active. `forge_github_status` surfaces the full validation stack in one call.
+
+#### Added — B4: Validation Tools Complement
+
+- **`cloudAgentValidation` key in `.forge.json`** — optional object declaring which GitHub scanning tools are active for the project. All four keys (`codeql`, `secretScanning`, `dependencyReview`, `copilotCodeReview`) accept `true` / `false`; omit any key for undecided.
+- **`forge_github_status` / `pforge smith`** — new `cloud-agent-validation` check in `inspectGithubStack()` reads the config and shows `enabled: ...` / `disabled: ...` detail; returns `na` when the key is absent (field is optional, no fix required).
+- **`docs/COPILOT-VSCODE-GUIDE.md`** — "Declaring your validation stack in `.forge.json`" subsection added to the "How Plan Forge Gates Complement CodeQL and Secret Scanning" section, with example and explanatory notes. Comparison table expanded to include the Dependency Review layer.
+
+#### Tests
+
+- `pforge-mcp/tests/github-introspect-cloud-validation.test.mjs` — 9 tests (NEW): unconfigured (no file, no key), all-enabled, mixed enabled/disabled, empty-object, structural assertions (no-fail guarantee, default check list, label/id presence).
+- `pforge-mcp/tests/github-introspect.test.mjs` — updated count assertion (9 → 10 default, 11 → 12 with `extra: true`).
+
+---
+
 ## [3.1.1] — 2026-05-17 — Quorum Cost Aggregation Fix (Issue #194)
 
 > **One-liner**: `priceRun` was only counting executor-leg spend; quorum reviewer cost (up to 15× the executor cost on `power` runs) was silently dropped. Fixes dashboard under-reporting on all quorum-mode runs.
