@@ -12,16 +12,16 @@ public class DashboardService(TimeTrackerDbContext db) : IDashboardService
         int totalProjects = await db.Projects.CountAsync(p => p.IsActive, ct);
         int totalTimeEntries = await db.TimeEntries.CountAsync(ct);
 
-        decimal totalHoursLogged = await db.TimeEntries.SumAsync(t => t.Hours, ct);
+        decimal totalHoursLogged = await db.TimeEntries.SumAsync(t => (decimal?)t.Hours, ct) ?? 0m;
         decimal billableHours = await db.TimeEntries
             .Where(t => t.IsBillable)
-            .SumAsync(t => t.Hours, ct);
+            .SumAsync(t => (decimal?)t.Hours, ct) ?? 0m;
         decimal nonBillableHours = totalHoursLogged - billableHours;
 
         int totalInvoices = await db.Invoices.CountAsync(ct);
         decimal outstandingInvoiceTotal = await db.Invoices
             .Where(i => i.Status == InvoiceStatus.Draft || i.Status == InvoiceStatus.Issued)
-            .SumAsync(i => i.Total, ct);
+            .SumAsync(i => (decimal?)i.Total, ct) ?? 0m;
 
         return new DashboardSummary(
             totalClients,
