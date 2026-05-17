@@ -5,6 +5,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.0.1] — 2026-05-17 — Telemetry-Honesty Hotfix (Issue #193)
+
+> **One-liner**: Four small but compounding UX / observability honesty defects surfaced by the v3.0.0 testbed sweep — misleading `[model] resolved=` log, self-contradictory `✓ … unavailable` quorum rows, missing `phase` field in `summary.json`, and lingering hardcoded `apiDurationMs: 0` in the API-direct and dry-run paths. All four fixed in a single hotfix release.
+
+#### Fixed — Bug #193
+
+**A — `[model]` log honesty** (`pforge-mcp/orchestrator.mjs` ~L4167)
+Renamed `[model] resolved=` → `[model] configured=` and appended `(CLI workers may select their own model)`. CLI shims like `gh-copilot` ignore the configured model and pick their own default; the previous wording implied otherwise.
+
+**B — Quorum summary contradictions** (`pforge-mcp/orchestrator.mjs` ~L2308, `formatQuorumSummary`)
+When a row is `available: true` but has no `billing` string, the fallback no longer emits the literal `"unavailable"`. Available-without-billing rows now render as `"available (billing unspecified)"`. Unavailable rows still fall back to `r.reason || "unavailable"`.
+
+**C — `summary.json` `phase` field** (`pforge-mcp/orchestrator.mjs` ~L12333, `buildSummary`)
+Added top-level `phase: basename(runMeta.plan, ".md")` (e.g., `"Phase-2-PROJECTS-CRUD-PLAN"`) so dashboards / aggregators don't have to re-parse the absolute `plan` path.
+
+**D — Duration-field honesty** (`pforge-mcp/orchestrator.mjs` ~L1379, ~L4614)
+- `callApiWorker` (API-direct): now measures actual round-trip with `Date.now()` and reports the real value in both `apiDurationMs` and `sessionDurationMs` (single request = single call = same value). Was hardcoded `0`.
+- Dry-run worker synth: `apiDurationMs: null, sessionDurationMs: null` (was `0`). Matches the v2.96.4 contract: `null` = not measured, number = real value (including legitimate `0`).
+
+#### Tests
+- `pforge-mcp/tests/telemetry-honesty-issue-193.test.mjs` (15 tests, NEW) — covers all four defects with unit tests on `formatQuorumSummary`, source-grep assertions for the log + dry-run + API-direct measurement plumbing, and a `basename` smoke test for the new `phase` field.
+
+#### Full sweep
+- 5411 passed | 39 skipped | EXITCODE=0 (was 5396 on v3.0.0).
+
+#### Discovery
+- v3.0.0 testbed Phase-2 background run (2026-05-17T02:36 UTC); all four observed in a single `summary.json` + stderr capture.
+
+---
+
+## [3.0.0] — 2026-05-17 — Copilot Instructions Sync (forge_sync_instructions)
+
+> **One-liner**: Completes the Copilot integration trilogy by generating `.github/copilot-instructions.md` from forge project context — project profile, project principles, extra instruction files, and `.forge.json` config. GitHub Copilot reads this file automatically, giving every conversation project-specific guidance without manual setup.
+
+#### Added — `forge_sync_instructions` MCP tool
+- `pforge-mcp/sync-instructions.mjs` — core module with the following exports:
+  - `syncInstructions(opts)` — entry point; supports `dryRun`, `force`, `noPrinciples`, `noProfile`, `noExtras`, `output`
+  - `collectProjectProfile(root)` — reads `.github/instructions/project-profile.instructions.md`, strips YAML frontmatter
+  - `collectProjectPrinciples(root)` — reads `docs/plans/PROJECT-PRINCIPLES.md` (primary) or `.github/instructions/project-principles.instructions.md` (fallback)
+  - `collectForgeConfig(root)` — extracts model routing, quorum mode, parallelism, and philosophy from `.forge.json`
+  - `collectInstructionFiles(root, opts)` — reads project-specific `.instructions.md` files, excludes generic baseline files
+  - `renderInstructions(data)` — builds structured Markdown with up to 4+ sections
+  - `stripFrontmatter(text)` — strips YAML frontmatter from Markdown
+  - `sha256(text)` — SHA-256 digest for change detection
+  - `SyncInstructionsError` — typed error class
+- `forge_sync_instructions` MCP tool wired into `server.mjs` (tool definition, handler, `MCP_ONLY_TOOLS`)
+- `pforge sync-instructions` CLI in `pforge.ps1` and `pforge.sh`
+  - Flags: `--dry-run`, `--force`, `--no-principles`, `--no-profile`, `--no-extras`, `--output <path>`
+- `pforge-mcp/tests/sync-instructions.test.mjs` — 30 tests
+
+#### Added — Copilot integration trilogy complete
+- v2.98.0: `pforge sync-spaces` → Copilot Spaces
+- v2.99.x: `forge_sync_memories` → `.github/copilot-memory-hints.md`
+- v3.0.0: `forge_sync_instructions` → `.github/copilot-instructions.md`
+
+---
+
 ## [2.99.1] — 2026-05-17 — DEP0190 Spawn Hardening (Issue #192)
 
 > **One-liner**: Eliminates Node's DEP0190 DeprecationWarning emitted on every `pforge run-plan` invocation on Windows by replacing the legacy `shell:true + array args` pattern with explicit `cmd.exe` routing at all three spawn sites. The deprecated pattern is an OWASP-relevant argument-injection surface and will throw in a future Node major.
@@ -271,6 +328,7 @@ Resolves `.cmd` shims (original Bug #82 intent) without `shell:true` + array-arg
 #### Notes
 - Test suite: all passing (orchestrator-gate-dispatch + crucible-import + lattice-chunker pure-JS path). Tree-sitter tests are skipped on platforms without the grammar binary — the pure-JS fallback is the default and fully supported.
 - `forge_capabilities` now reports `version: "2.95.0"` with all new tools listed.
+- QA: end-to-end memory-upgrade test suite added (see `scripts/memory-qa-smoke.*`).
 
 ---
 
