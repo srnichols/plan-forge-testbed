@@ -26,6 +26,7 @@ import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createTraceContext, createTelemetryHandler, writeManifest, appendRunIndex, pruneRunHistory, addLogSummary } from "./telemetry.mjs";
+import { recordActivity } from "./team-activity.mjs";
 import { isOpenBrainConfigured, buildMemorySearchBlock, buildMemoryCaptureBlock, buildReflexionBlock, buildTrajectorySuffix, extractTrajectory, writeTrajectory, retrieveAutoSkills, buildAutoSkillContext, extractAutoSkill, writeAutoSkill, incrementAutoSkillReuse, buildRunSummaryThought, buildCostAnomalyThought, loadProjectContext, buildPlanBootContext, computeGateSuggestionKey, getGateSuggestionCounter } from "./memory.mjs";
 import { enforceCrucibleId, CrucibleEnforcementError } from "./crucible-enforce.mjs";
 // Phase FORGE-SHOP-07 Slice 07.2 — brain facade for unified recall
@@ -4688,6 +4689,22 @@ export async function runPlan(planPath, options = {}) {
   // Build summary in memory (needed for approval message content)
   const runId = basename(runDir);
   const summary = buildSummary(plan, results, runMeta, { sweepResult, analyzeResult });
+  const activitySummary = {
+    runId,
+    plan: summary.plan,
+    sliceCount: summary.sliceCount,
+    duration_ms: summary.totalDuration,
+    cost_usd: summary.cost?.total_cost_usd ?? null,
+    timestamp: summary.endTime,
+  };
+
+  if (abortSignal?.aborted) {
+    try {
+      recordActivity({ ...activitySummary, status: "aborted" }, { storeDir: join(cwd, ".forge") });
+    } catch {
+      // Never block the run on team activity write failure.
+    }
+  }
 
   // Approval gate (Phase 16) — pause and await human approval before finalising
   if (allPassed && bridge?.hasApprovalChannels) {
@@ -4753,6 +4770,13 @@ export async function runPlan(planPath, options = {}) {
 
   // Emit run-completed — telemetry handler writes trace.json during this emit
   eventBus.emit("run-completed", summary);
+  if (!abortSignal?.aborted) {
+    try {
+      recordActivity({ ...activitySummary, status: summary.status }, { storeDir: join(cwd, ".forge") });
+    } catch {
+      // Never block the run on team activity write failure.
+    }
+  }
 
   // v2.4: Write manifest + index + prune (AFTER trace.json is written by emit)
   const manifest = writeManifest(runDir, runId, { ...summary, traceId: trace.traceId });
@@ -12299,8 +12323,13 @@ export function parseAnalyzeScore(output) {
  */
 function runAutoAnalyze(cwd, planPath) {
   const IS_WINDOWS = process.platform === "win32";
+  // Issue #196: force PowerShell's host output encoding to UTF-8 BEFORE
+  // invoking pforge.ps1, so box-drawing chars (╔═╗║) + ✓/⚠ glyphs survive
+  // the execSync capture instead of collapsing to U+FFFD. Defense-in-depth
+  // alongside the same fix in pforge.ps1 itself — protects callers that
+  // checked out a pre-#196 wrapper script.
   const pforge = IS_WINDOWS
-    ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -File pforge.ps1 analyze "${planPath}"`
+    ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; & .\\pforge.ps1 analyze \\"${planPath}\\""`
     : `bash pforge.sh analyze "${planPath}"`;
   try {
     const output = execSync(pforge, { cwd, encoding: "utf-8", timeout: 30_000, env: { ...process.env, NO_COLOR: "1" } });
