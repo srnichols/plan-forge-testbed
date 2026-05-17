@@ -106,6 +106,8 @@ COMMANDS:
     --dry-run       Show what would happen without triage side effects
     --env=ENV       Set environment (dev, staging; production is forbidden)
   github <sub>      Inspect the GitHub-native AI surface (status | doctor | metrics)
+  sync-spaces       Push active plan, instructions, and tool catalog to a GitHub Copilot Space
+  sync-memories     Generate .github/copilot-memory-hints.md from forge decisions (trajectory notes, auto-skills, brain)
   version-bump <v>  Update VERSION, package.json, docs/README/ROADMAP version badges to v<version>
   migrate-memory    Merge legacy *-history.json ledgers into canonical .jsonl siblings (idempotent)
   drain-memory      Drain pending OpenBrain queue records to the configured OpenBrain server
@@ -5707,6 +5709,168 @@ EOF
     "
 }
 
+# ─── Command: sync-memories ───────────────────────────────────────────────────
+cmd_sync_memories() {
+    local dry_run=false
+    local force=false
+    local limit=""
+    local since=""
+    local output=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                cat <<'EOF'
+Usage: pforge sync-memories [flags]
+
+Generate .github/copilot-memory-hints.md from forge decisions so Copilot
+Memory can auto-discover project context.
+
+FLAGS:
+  --dry-run           Show rendered hints without writing the file
+  --force             Re-write even if content is unchanged
+  --limit N           Max entries per section (default: 10)
+  --since <iso>       Only include hints newer than this date
+  --output <path>     Override output path (default: .github/copilot-memory-hints.md)
+
+SOURCES:
+  .forge/trajectories/**/*.md   Worker trajectory notes from plan runs
+  .forge/skills-auto/*.md       Auto-skill patterns from passing slices
+  .forge/brain/**/*.json        Brain L2 decision entries
+
+OUTPUT:
+  .github/copilot-memory-hints.md   Copilot Memory auto-discovers this file
+
+EXAMPLES:
+  pforge sync-memories
+  pforge sync-memories --dry-run
+  pforge sync-memories --limit 20 --since 2026-01-01
+  pforge sync-memories --force --output docs/memory-hints.md
+EOF
+                return 0
+                ;;
+            --dry-run)  dry_run=true; shift ;;
+            --force)    force=true; shift ;;
+            --limit=*)  limit="${1#--limit=}"; shift ;;
+            --limit)    limit="$2"; shift 2 ;;
+            --since=*)  since="${1#--since=}"; shift ;;
+            --since)    since="$2"; shift 2 ;;
+            --output=*) output="${1#--output=}"; shift ;;
+            --output)   output="$2"; shift 2 ;;
+            *)          shift ;;
+        esac
+    done
+
+    local module_file="$REPO_ROOT/pforge-mcp/sync-memories.mjs"
+    if [ ! -f "$module_file" ]; then
+        echo "ERROR: sync-memories.mjs not found at $module_file" >&2
+        exit 1
+    fi
+
+    # Build JSON opts string
+    local opts_json
+    opts_json=$(node -e "
+      const opts = {
+        projectRoot: $(node -e "process.stdout.write(JSON.stringify('$REPO_ROOT'))"),
+        dryRun: $dry_run,
+        force: $force
+      };
+      if ('$limit') opts.limit = Number('$limit');
+      if ('$since') opts.since = '$since';
+      if ('$output') opts.output = '$output';
+      process.stdout.write(JSON.stringify(opts));
+    ")
+
+    echo ""
+    if [ "$dry_run" = true ]; then
+        echo "📋 Dry Run — pforge sync-memories"
+    else
+        echo "🧠 Syncing forge decisions to Copilot Memory hints..."
+    fi
+
+    node "$module_file" "$opts_json"
+}
+
+# ─── Command: sync-spaces ─────────────────────────────────────────────
+cmd_sync_spaces() {
+    local space_ref=""
+    local org_slug=""
+    local dry_run=false
+    local force=false
+    local no_instructions=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                cat <<'EOF'
+Usage: pforge sync-spaces [flags]
+
+Push Plan Forge artifacts to a GitHub Copilot Space.
+
+FLAGS:
+  --space <owner/name>  Target Copilot Space (overrides .forge.json)
+  --org <slug>          Broadcast to all org Spaces tagged 'plan-forge-sync'
+  --dry-run             Show what would be uploaded without calling the API
+  --force               Re-upload all files even if SHA is unchanged
+  --no-instructions     Skip .github/instructions files
+
+PAYLOAD:
+  plan-forge/active-plan.md           Active plan from .forge/active-plan
+  plan-forge/instructions/<name>.md   All .github/instructions/*.instructions.md
+  plan-forge/project-profile.md       project-profile.instructions.md
+  plan-forge/tool-catalog.md          MCP tool catalog from tools.json
+
+CONFIG:
+  .forge.json → github.spacesTarget   Default 'owner/name' when --space is omitted
+
+EXAMPLES:
+  pforge sync-spaces --space acme-org/plan-forge-hub
+  pforge sync-spaces --org acme-org --dry-run
+  pforge sync-spaces --force
+EOF
+                return 0
+                ;;
+            --space=*) space_ref="${1#--space=}"; shift ;;
+            --space)   space_ref="$2"; shift 2 ;;
+            --org=*)   org_slug="${1#--org=}"; shift ;;
+            --org)     org_slug="$2"; shift 2 ;;
+            --dry-run) dry_run=true; shift ;;
+            --force)   force=true; shift ;;
+            --no-instructions) no_instructions=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local module_file="$REPO_ROOT/pforge-mcp/spaces-sync.mjs"
+    if [ ! -f "$module_file" ]; then
+        echo "ERROR: spaces-sync.mjs not found at $module_file" >&2
+        exit 1
+    fi
+
+    # Build JSON opts string
+    local opts_json
+    opts_json=$(node -e "
+      const opts = {
+        projectRoot: $(node -e "process.stdout.write(JSON.stringify('$REPO_ROOT'))"),
+        dryRun: $dry_run,
+        force: $force,
+        noInstructions: $no_instructions
+      };
+      if ('$space_ref') opts.spaceRef = '$space_ref';
+      if ('$org_slug') opts.org = '$org_slug';
+      process.stdout.write(JSON.stringify(opts));
+    ")
+
+    echo ""
+    if [ "$dry_run" = true ]; then
+        echo "📋 Dry Run — pforge sync-spaces"
+    else
+        echo "🚀 Syncing to Copilot Space..."
+    fi
+
+    node "$module_file" "$opts_json"
+}
+
 # ─── Command: github ───────────────────────────────────────────────────
 cmd_github() {
     local sub="${1:-}"
@@ -5956,6 +6120,8 @@ case "$COMMAND" in
     graph)        cmd_graph "$@" ;;
     digest)       cmd_digest "$@" ;;
     plan-from-sarif) cmd_plan_from_sarif "$@" ;;
+    sync-spaces)  cmd_sync_spaces "$@" ;;
+    sync-memories) cmd_sync_memories "$@" ;;
     github)       cmd_github "$@" ;;
     crucible)     cmd_crucible "$@" ;;
     anvil)        cmd_anvil "$@" ;;

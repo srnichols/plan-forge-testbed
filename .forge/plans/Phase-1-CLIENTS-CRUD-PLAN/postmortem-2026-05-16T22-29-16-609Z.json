@@ -1,0 +1,19 @@
+{
+  "planBasename": "Phase-1-CLIENTS-CRUD-PLAN",
+  "createdAt": "2026-05-16T22:29:16.609Z",
+  "status": "completed",
+  "totalDurationMs": 1224772,
+  "retriesPerSlice": {},
+  "gateFlaps": 0,
+  "topFailureReason": null,
+  "costDelta": {
+    "before": null,
+    "after": 0.04,
+    "delta": null
+  },
+  "driftDelta": {
+    "before": null,
+    "after": 80,
+    "delta": null
+  }
+}

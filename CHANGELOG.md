@@ -5,6 +5,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.99.0] — 2026-05-16 — forge_sync_memories (Roadmap C3)
+
+> **One-liner**: New `forge_sync_memories` MCP tool + `pforge sync-memories` CLI generates `.github/copilot-memory-hints.md` from forge decisions — trajectory notes, auto-skills, and brain L2 entries — so Copilot Memory auto-discovers project context without requiring OpenBrain configuration.
+
+#### Added — Roadmap C3: `forge_sync_memories`
+- `pforge-mcp/sync-memories.mjs` — core module with soft-sync pipeline:
+  - `collectTrajectories(projectRoot, opts)` — reads all `.forge/trajectories/<plan>/<slice>.md` files, sorted newest-first with `since`/`limit` filters.
+  - `collectAutoSkills(projectRoot, opts)` — reads `.forge/skills-auto/*.md` records, sorted by `reuseCount` DESC.
+  - `collectBrainDecisions(projectRoot, opts)` — walks `.forge/brain/**/*.json`, extracts `content` / `value.content` / `value` string fields.
+  - `renderMemoryHints(data)` — builds structured Markdown with sections: Architecture Decisions, Conventions & Patterns, Lessons Learned. Empty-state message when no data.
+  - `syncMemories(opts)` — entry point; supports `--dry-run`, `--force`, `--limit`, `--since`, `--output`.
+  - `parseAutoSkillFrontmatter(text)` — self-contained frontmatter parser (no dependency on `memory.mjs`).
+  - Error class: `SyncMemoriesError`.
+- 27 tests in `pforge-mcp/tests/sync-memories.test.mjs` — all passing.
+- `forge_sync_memories` MCP tool wired into `server.mjs` (tool definition, handler, `MCP_ONLY_TOOLS` entry).
+- `pforge sync-memories` CLI command wired into `pforge.ps1` and `pforge.sh` with full flag parsing and help text.
+
+**Key behaviours:**
+- Reads all three forge decision stores locally — no OpenBrain API calls required (soft-sync approach).
+- Outputs to `.github/copilot-memory-hints.md` by default; Copilot Memory auto-discovers this path.
+- Skips write when content is unchanged (SHA-256 comparison); `--force` bypasses.
+- `--dry-run` returns `dryRunContent` without writing.
+- `--limit N` caps entries per section (default: 10).
+- `--since <iso>` filters all sources by modification/creation date.
+- `--output <path>` overrides the output path (relative to project root).
+- Returns `{ ok, outputPath, hintsCount, sections: { trajectories, autoSkills, decisions }, changed, message }`.
+
+---
+
+## [2.98.0] — 2026-05-19 — Phase GITHUB-E: pforge sync-spaces
+
+> **One-liner**: New `pforge sync-spaces` command pushes the active plan, all instruction files, the tool catalog, and the project profile into a GitHub Copilot Space, enabling Copilot to answer questions about your project's current state directly from the Space knowledge base.
+
+#### Added — Phase GITHUB-E: `pforge sync-spaces`
+- `pforge-mcp/spaces-sync.mjs` — core module with full sync pipeline:
+  - `buildPayload(projectRoot, opts)` — collects four artifact sources (active plan, instruction files, tool catalog, project profile) and computes SHA-256 digests for skip-unchanged optimization.
+  - `findSpace(spaceRef, opts)` — resolves `owner/name` to a Copilot Space ID via `gh api /user/copilot/spaces` with org fallback.
+  - `syncToSpace` pipeline — compares file SHAs, uploads changed files via `gh api PUT /user/copilot/spaces/{id}/files/{path}`.
+  - `syncSpaces(opts)` — entry point; supports `--space`, `--org` broadcast, `--dry-run`, `--force`, `--no-instructions`.
+  - Error classes: `SpacesSyncError`, `SpacesAuthError`, `SpacesNotFoundError`, `SpacesRateLimitError`.
+- 27 tests in `pforge-mcp/tests/spaces-sync.test.mjs` — all passing.
+- `pforge sync-spaces` CLI command wired into `pforge.ps1` and `pforge.sh` with full flag parsing and help text.
+
+**Key behaviours:**
+- Reads Space target from `.forge.json#github.spacesTarget`; overridable via `--space <owner/name>`.
+- `--org <slug>` broadcasts to all Spaces in the org tagged `plan-forge-sync`.
+- Skips unchanged files using SHA-256 comparison against the Space's existing file list.
+- `--force` bypasses SHA check and re-uploads everything.
+- `--no-instructions` omits `.github/instructions/` files (plan + tool-catalog still uploaded).
+- `--dry-run` prints what would be uploaded without making any API calls.
+- Auth errors include actionable hints (`gh auth refresh -s copilot_spaces:write`).
+
+---
+
+## [2.97.0] — 2026-05-18 — forge_export_plan (Roadmap C2)
+
+> **One-liner**: New `forge_export_plan` MCP tool converts loose Copilot cloud agent session plans (numbered/bulleted steps) into hardened Plan Forge `Phase-X-PLAN.md` files with scope contract, per-slice validation gates, forbidden actions, and acceptance criteria — without any manual reformatting.
+
+#### Added — Roadmap C2: `forge_export_plan`
+- `pforge-mcp/export-plan.mjs` — core module exposing `exportPlan(input, opts)` and `exportPlanFromFile(inputPath, opts)` (and lower-level helpers `parseTitle`, `parseSteps`, `extractPaths`, `derivePhaseSlug`, `buildGate`, `buildSlice`).
+- `forge_export_plan` MCP tool wired into `server.mjs` (tool definition, handler, `MCP_ONLY_TOOLS` entry).
+- 45 tests in `pforge-mcp/tests/export-plan.test.mjs` covering all exported functions and end-to-end plan generation including error paths and file I/O.
+
+**Key behaviours:**
+- Accepts any Markdown text; auto-detects numbered lists, `- [ ]` checkbox lists, bulleted lists, or `##` sub-headings as steps.
+- Derives a phase slug from the plan title by stripping stop words and uppercasing (e.g. "Add rate limiting to the API" → `RATE-LIMITING-API`); overridable via `phaseName` option.
+- Generates per-slice validation gates: `vitest run <test-file>` for test files, `test -f <file> && echo ok` for code files, a placeholder for steps with no recognized paths.
+- Writes output to `outputPath` when provided; otherwise returns plan text in the JSON response.
+- Returns `{ ok, plan, title, phaseSlug, sliceCount, files, message, outputPath? }`.
+
+---
+
 ## [2.96.4] — 2026-05-17 — Telemetry-Honesty Patch (Issue #190)
 
 > **One-liner**: `tokens.apiDurationMs` now reports `null` (not `0`) for CLI workers that don't surface a measurable API duration. Stops downstream consumers from interpreting "field absent" as "API call took zero milliseconds".
