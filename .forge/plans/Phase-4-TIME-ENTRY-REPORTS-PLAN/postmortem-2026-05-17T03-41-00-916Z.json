@@ -1,0 +1,19 @@
+{
+  "planBasename": "Phase-4-TIME-ENTRY-REPORTS-PLAN",
+  "createdAt": "2026-05-17T03:41:00.916Z",
+  "status": "completed",
+  "totalDurationMs": 712118,
+  "retriesPerSlice": {},
+  "gateFlaps": 0,
+  "topFailureReason": null,
+  "costDelta": {
+    "before": 0.04,
+    "after": 0.04,
+    "delta": 0
+  },
+  "driftDelta": {
+    "before": 75,
+    "after": 80,
+    "delta": 5
+  }
+}

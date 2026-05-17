@@ -1,0 +1,19 @@
+{
+  "planBasename": "Phase-2-PROJECTS-CRUD-PLAN",
+  "createdAt": "2026-05-17T03:16:51.603Z",
+  "status": "completed",
+  "totalDurationMs": 634804,
+  "retriesPerSlice": {},
+  "gateFlaps": 0,
+  "topFailureReason": null,
+  "costDelta": {
+    "before": 0.03,
+    "after": 0.03,
+    "delta": 0
+  },
+  "driftDelta": {
+    "before": 55,
+    "after": 55,
+    "delta": 0
+  }
+}
