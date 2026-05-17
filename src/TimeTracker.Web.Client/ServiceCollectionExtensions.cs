@@ -4,22 +4,17 @@ namespace TimeTracker.Web.Client;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddTimeTrackerClient(this IServiceCollection services, string baseUrl)
+    public static IServiceCollection AddTimeTrackerClient(
+        this IServiceCollection services, string baseUrl)
     {
-        services.AddHttpClient<IClientsApi, ClientsApi>(client =>
-            client.BaseAddress = new Uri(baseUrl));
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        var uri = new Uri(baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/");
 
-        services.AddHttpClient<IProjectsApi, ProjectsApi>(client =>
-            client.BaseAddress = new Uri(baseUrl));
-
-        services.AddHttpClient<ITimeEntriesApi, TimeEntriesApi>(client =>
-            client.BaseAddress = new Uri(baseUrl));
-
-        services.AddHttpClient<IInvoicesApi, InvoicesApi>(client =>
-            client.BaseAddress = new Uri(baseUrl));
-
-        services.AddHttpClient<IDashboardApi, DashboardApi>(client =>
-            client.BaseAddress = new Uri(baseUrl));
+        services.AddHttpClient<IClientsApi, ClientsApi>(c => c.BaseAddress = uri);
+        services.AddHttpClient<IProjectsApi, ProjectsApi>(c => c.BaseAddress = uri);
+        services.AddHttpClient<ITimeEntriesApi, TimeEntriesApi>(c => c.BaseAddress = uri);
+        services.AddHttpClient<IInvoicesApi, InvoicesApi>(c => c.BaseAddress = uri);
+        services.AddHttpClient<IDashboardApi, DashboardApi>(c => c.BaseAddress = uri);
 
         return services;
     }
