@@ -205,7 +205,8 @@ public class InvoiceServiceTests : IDisposable
     [Fact]
     public async Task GenerateInvoice_TaxExemptClient_TaxAmountIsZero()
     {
-        // TaxRate is hardcoded to 0% — Client model lacks TaxRate property (out of scope)
+        // SPEC DRIFT: TaxRate is hardcoded to 0% in InvoiceService — Client model lacks TaxRate property.
+        // Non-zero tax-rate test cannot be implemented in tests/** scope.
         var (client, project) = await SeedClientWithProjectAsync(hourlyRate: 100m);
         await AddEntryAsync(project.Id, BaseMonday, 8m);
 
@@ -231,7 +232,8 @@ public class InvoiceServiceTests : IDisposable
     [Fact]
     public async Task GenerateInvoice_InactiveClient_ThrowsKeyNotFoundException()
     {
-        // Slice says ValidationException, but service filters by IsActive — inactive → KeyNotFoundException
+        // SPEC DRIFT: Slice says ValidationException, but service filters by IsActive — inactive → KeyNotFoundException.
+        // Fix requires changing src/TimeTracker.Api/Services/InvoiceService.cs (out of tests/** scope).
         var (client, _) = await SeedClientWithProjectAsync(isActive: false);
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
@@ -291,7 +293,7 @@ public class InvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StatusTransition_DraftToPaid_ThrowsInvalidOperation()
+    public async Task StatusTransition_DraftToPaid_ThrowsInvalidOperationException()
     {
         var (client, project) = await SeedClientWithProjectAsync();
         await AddEntryAsync(project.Id, BaseMonday, 8m);
@@ -304,7 +306,7 @@ public class InvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StatusTransition_VoidToIssued_ThrowsInvalidOperation()
+    public async Task StatusTransition_VoidToIssued_ThrowsInvalidOperationException()
     {
         var (client, project) = await SeedClientWithProjectAsync();
         await AddEntryAsync(project.Id, BaseMonday, 8m);
