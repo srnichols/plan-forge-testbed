@@ -30,6 +30,10 @@ public sealed class InvoicesController(IInvoiceService invoiceService) : Control
         {
             return NotFound(new { error = ex.Message });
         }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     [HttpGet("{id:int}")]
