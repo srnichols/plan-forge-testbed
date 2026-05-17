@@ -16,6 +16,7 @@ public partial class ProjectEdit : ComponentBase, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly ProjectFormModel _model = new();
     private List<ClientOption> _clientOptions = [];
+    private bool _isActive = true;
     private bool _loading = true;
     private bool _saving;
     private string? _loadError;
@@ -49,6 +50,7 @@ public partial class ProjectEdit : ComponentBase, IDisposable
                 _model.Name = project.Name;
                 _model.Description = project.Description;
                 _model.ClientId = project.ClientId;
+                _isActive = project.IsActive;
             }
         }
         catch (OperationCanceledException)

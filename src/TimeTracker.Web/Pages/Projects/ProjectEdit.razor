@@ -49,6 +49,9 @@
                 </FluentSelect>
                 <ValidationMessage For="@(() => _model.ClientId)" />
 
+                <FluentCheckbox @bind-Value="_isActive"
+                                Label="Active" />
+
                 @if (_saveError is not null)
                 {
                     <FluentMessageBar Intent="MessageIntent.Error" Title="Save failed">
