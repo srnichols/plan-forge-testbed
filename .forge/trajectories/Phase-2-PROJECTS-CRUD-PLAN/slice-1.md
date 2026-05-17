@@ -1,0 +1,7 @@
+I approached Slice 1 as a conformance verification task. The quorum analysis from two independent models had already concluded the implementation exists on disk and passes baseline, so my job was to re-anchor against the current repo state and confirm.
+
+I inspected ProjectService.cs against the implementation contract point by point: interface signatures, DTO records, validation ordering in CreateAsync, the duplicate-name exclusion pattern in UpdateAsync, and the soft-delete in DeactivateAsync. Every item matched. The file co-locates interface, DTOs, and implementation in a single file, consistent with the ClientService precedent in this repo. I did not split it.
+
+The DI registration in Program.cs line 17 was already present, so the scope contradiction flagged by both models (slice says register in Program.cs but scope restricts to Services/) never became an issue. No edits were needed anywhere.
+
+Future slices should note: the duplicate-name check is application-level only with no backing unique index. A future migration slice should add a filtered unique index on (ClientId, Name) WHERE IsActive to guard against race conditions. Also, test files live at tests/TimeTracker.Tests/, not tests/TimeTracker.Api.Tests/. The existing ClientServiceTests.cs in that directory provides the pattern for writing ProjectServiceTests.
