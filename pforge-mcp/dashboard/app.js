@@ -4097,6 +4097,7 @@ const tabLoadHooks = {
   'settings-bridge': () => { loadBridgeStatus(); renderNotificationsSubtab(); },
   'settings-crucible': () => { loadCrucibleConfigUI(); },
   'settings-brain': () => { loadBrainSubtab(); },
+  'settings-copilot': () => { loadCopilotInstrStatus(); },
 };
 
 // ─── Theme Toggle ─────────────────────────────────────────────
@@ -7050,3 +7051,235 @@ async function loadGithubMetrics() {
   }
 }
 
+
+// ─── D5 — Chat Customizations Editor (Settings > Copilot, v3.1.0) ──────────
+
+async function loadCopilotInstrStatus() {
+  const badge   = document.getElementById('copilot-instr-exists-badge');
+  const sections = document.getElementById('copilot-instr-sections');
+  const modified = document.getElementById('copilot-instr-modified');
+  const pathEl   = document.getElementById('copilot-instr-path');
+  try {
+    const r = await fetch(`${API_BASE}/api/copilot-instructions`);
+    const d = await r.json();
+    if (d.exists) {
+      badge.textContent = '✓ File exists';
+      badge.className = 'text-xs font-semibold px-2 py-0.5 rounded-full bg-green-900/60 text-green-300';
+      sections.textContent = `${d.sectionCount} section${d.sectionCount === 1 ? '' : 's'}`;
+      modified.textContent = d.lastModified
+        ? `Updated ${new Date(d.lastModified).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+        : '';
+    } else {
+      badge.textContent = '✗ File not found';
+      badge.className = 'text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-700 text-gray-400';
+      sections.textContent = 'Run "Sync Now" to generate';
+      modified.textContent = '';
+    }
+    pathEl.textContent = d.filePath || '';
+
+    // Show current file content if it exists
+    if (d.content) {
+      const wrap  = document.getElementById('copilot-instr-preview-wrap');
+      const pre   = document.getElementById('copilot-instr-preview');
+      const label = document.getElementById('copilot-instr-preview-label');
+      label.textContent = 'Current file';
+      pre.textContent = d.content;
+      wrap.classList.remove('hidden');
+    }
+  } catch (e) {
+    if (badge) { badge.textContent = 'Error loading status'; badge.className = 'text-xs font-semibold px-2 py-0.5 rounded-full bg-red-900/60 text-red-300'; }
+  }
+}
+
+function _copilotInstrOpts() {
+  return {
+    noPrinciples: document.getElementById('opt-no-principles')?.checked ?? false,
+    noProfile:    document.getElementById('opt-no-profile')?.checked ?? false,
+    noExtras:     document.getElementById('opt-no-extras')?.checked ?? false,
+    force:        document.getElementById('opt-force')?.checked ?? false,
+  };
+}
+
+function _copilotInstrShowMsg(text, ok) {
+  const el = document.getElementById('copilot-instr-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.className = ok
+    ? 'mb-4 text-sm rounded-lg px-4 py-3 border bg-green-900/30 border-green-700/50 text-green-300'
+    : 'mb-4 text-sm rounded-lg px-4 py-3 border bg-red-900/30 border-red-700/50 text-red-300';
+  el.classList.remove('hidden');
+}
+
+async function copilotInstrPreview() {
+  const opts = _copilotInstrOpts();
+  try {
+    const r = await fetch(`${API_BASE}/api/copilot-instructions/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    const d = await r.json();
+    if (!d.ok) { _copilotInstrShowMsg(d.error || 'Preview failed', false); return; }
+    const wrap  = document.getElementById('copilot-instr-preview-wrap');
+    const pre   = document.getElementById('copilot-instr-preview');
+    const label = document.getElementById('copilot-instr-preview-label');
+    label.textContent = `Preview (${d.sectionsCount} section${d.sectionsCount === 1 ? '' : 's'})`;
+    pre.textContent = d.dryRunContent ?? '';
+    wrap.classList.remove('hidden');
+    _copilotInstrShowMsg(`Preview ready — ${d.sectionsCount} section${d.sectionsCount === 1 ? '' : 's'}`, true);
+  } catch (e) {
+    _copilotInstrShowMsg(`Preview error: ${e.message}`, false);
+  }
+}
+
+async function copilotInstrSync() {
+  const opts = _copilotInstrOpts();
+  try {
+    const r = await fetch(`${API_BASE}/api/copilot-instructions/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    const d = await r.json();
+    if (!d.ok) { _copilotInstrShowMsg(d.error || 'Sync failed', false); return; }
+    if (!d.changed && !opts.force) {
+      _copilotInstrShowMsg('File is already up to date — no changes written. Use "Force overwrite" to re-sync anyway.', true);
+    } else {
+      _copilotInstrShowMsg(`Synced! ${d.sectionsCount} section${d.sectionsCount === 1 ? '' : 's'} written to .github/copilot-instructions.md`, true);
+    }
+    loadCopilotInstrStatus();
+  } catch (e) {
+    _copilotInstrShowMsg(`Sync error: ${e.message}`, false);
+  }
+}
+
+function copilotInstrCopyPreview() {
+  const pre = document.getElementById('copilot-instr-preview');
+  if (!pre?.textContent) return;
+  navigator.clipboard?.writeText(pre.textContent).then(() => {
+    _copilotInstrShowMsg('Copied to clipboard!', true);
+  }).catch(() => {
+    _copilotInstrShowMsg('Copy failed — select text manually.', false);
+  });
+}
+
+window.loadCopilotInstrStatus = loadCopilotInstrStatus;
+window.copilotInstrPreview    = copilotInstrPreview;
+window.copilotInstrSync       = copilotInstrSync;
+window.copilotInstrCopyPreview = copilotInstrCopyPreview;
+
+// ─── Team Dashboard Tab (Phase-TEAM-DASHBOARD, v3.4.0) ──────────────────────
+
+function _tdRelTime(ts) {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
+  if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
+  return Math.floor(diff / 86400000) + "d ago";
+}
+
+async function loadTeamDashboard() {
+  const errEl = document.getElementById("td-error");
+  const emptyEl = document.getElementById("td-empty");
+  const summaryEl = document.getElementById("td-summary");
+  const riskEl = document.getElementById("td-risk");
+  const opsEl = document.getElementById("td-operators");
+
+  if (errEl) errEl.classList.add("hidden");
+  if (emptyEl) emptyEl.classList.add("hidden");
+
+  try {
+    const data = await fetch(`${API_BASE}/api/team-dashboard?limit=50`).then((r) => r.json());
+
+    if (!data.ok) throw new Error(data.error || "Unknown error");
+
+    if (!data.operators || data.operators.length === 0) {
+      if (summaryEl) summaryEl.innerHTML = "";
+      if (riskEl) riskEl.innerHTML = "";
+      if (opsEl) opsEl.innerHTML = "";
+      if (emptyEl) emptyEl.classList.remove("hidden");
+      return;
+    }
+
+    // Summary cards
+    const s = data.summary || {};
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="bg-gray-800 rounded p-3">
+            <p class="text-xs text-slate-500">Runs Today</p>
+            <p class="text-2xl font-bold text-blue-400">${s.total_runs_today ?? 0}</p>
+          </div>
+          <div class="bg-gray-800 rounded p-3">
+            <p class="text-xs text-slate-500">Active (24 h)</p>
+            <p class="text-2xl font-bold text-blue-400">${s.active_operators ?? 0}</p>
+          </div>
+          <div class="bg-gray-800 rounded p-3">
+            <p class="text-xs text-slate-500">Cost Today</p>
+            <p class="text-2xl font-bold text-amber-400">$${(s.total_cost_usd ?? 0).toFixed(2)}</p>
+          </div>
+          <div class="bg-gray-800 rounded p-3">
+            <p class="text-xs text-slate-500">Success Rate</p>
+            <p class="text-2xl font-bold text-green-400">${s.success_rate != null ? s.success_rate + "%" : "—"}</p>
+          </div>
+        </div>`;
+    }
+
+    // Conflict risk banner
+    const risk = data.conflict_risk || {};
+    const riskColors = { high: "text-red-400 bg-red-900/20 border-red-700", medium: "text-amber-400 bg-amber-900/20 border-amber-700", low: "text-green-400 bg-green-900/20 border-green-700", none: "text-slate-500 bg-gray-800 border-gray-700" };
+    const riskColor = riskColors[risk.level] || riskColors.none;
+    if (riskEl) {
+      riskEl.innerHTML = `
+        <div class="flex items-start gap-3 p-3 rounded border ${riskColor}">
+          <span class="text-xs font-semibold uppercase tracking-wider mt-0.5">${risk.level || "none"}</span>
+          <p class="text-xs">${risk.message || ""}</p>
+        </div>`;
+    }
+
+    // Operators table
+    if (opsEl) {
+      const rows = (data.operators || []).map((op) => {
+        const name = (op.operator || "unknown").split("<")[0].trim() || op.operator;
+        const ago = op.last_active ? _tdRelTime(op.last_active) : "—";
+        const successRate = op.runs_total > 0 ? Math.round((op.runs_completed / op.runs_total) * 100) : null;
+        const rateClass = successRate == null ? "text-slate-600" : successRate >= 80 ? "text-green-400" : successRate >= 60 ? "text-amber-400" : "text-red-400";
+        const plans = (op.recent_plans || []).slice(0, 2).map(
+          (p) => `<code class="text-xs text-slate-400 bg-gray-900 px-1 rounded">${p}</code>`
+        ).join(" ");
+        return `<tr class="border-b border-slate-700 hover:bg-gray-800/50">
+          <td class="py-2 pr-4 text-sm text-slate-200 font-medium whitespace-nowrap">${name}</td>
+          <td class="py-2 pr-4 text-xs text-slate-400 whitespace-nowrap">${ago}</td>
+          <td class="py-2 pr-4 text-xs text-slate-400">${op.runs_today} / ${op.runs_total}</td>
+          <td class="py-2 pr-4 text-xs ${rateClass}">${successRate != null ? successRate + "%" : "—"}</td>
+          <td class="py-2 pr-4 text-xs text-amber-400">${op.total_cost_usd > 0 ? "$" + op.total_cost_usd.toFixed(2) : "—"}</td>
+          <td class="py-2 text-xs text-slate-500">${plans}</td>
+        </tr>`;
+      }).join("");
+
+      opsEl.innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="w-full text-left">
+            <thead>
+              <tr class="text-xs text-slate-500 border-b border-slate-700">
+                <th class="pb-2 pr-4">Developer</th>
+                <th class="pb-2 pr-4">Last Active</th>
+                <th class="pb-2 pr-4">Runs (today / total)</th>
+                <th class="pb-2 pr-4">Success</th>
+                <th class="pb-2 pr-4">Cost</th>
+                <th class="pb-2">Recent Plans</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
+  } catch (err) {
+    if (errEl) {
+      errEl.textContent = `Error loading team dashboard: ${err.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+}
+
+window.loadTeamDashboard = loadTeamDashboard;

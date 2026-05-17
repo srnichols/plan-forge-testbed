@@ -106,8 +106,10 @@ COMMANDS:
     --dry-run       Show what would happen without triage side effects
     --env=ENV       Set environment (dev, staging; production is forbidden)
   github <sub>      Inspect the GitHub-native AI surface (status | doctor | metrics)
+  team activity     Show recent shared Plan Forge runs from .forge/team-activity.jsonl
   sync-spaces       Push active plan, instructions, and tool catalog to a GitHub Copilot Space
   sync-memories     Generate .github/copilot-memory-hints.md from forge decisions (trajectory notes, auto-skills, brain)
+  sync-instructions Generate .github/copilot-instructions.md from forge project context (profile, principles, config)
   version-bump <v>  Update VERSION, package.json, docs/README/ROADMAP version badges to v<version>
   migrate-memory    Merge legacy *-history.json ledgers into canonical .jsonl siblings (idempotent)
   drain-memory      Drain pending OpenBrain queue records to the configured OpenBrain server
@@ -5456,7 +5458,6 @@ cmd_hallmark() {
             ;;
     esac
 }
-}
 
 # ─── Command: graph ────────────────────────────────────────────────
 cmd_graph() {
@@ -5791,6 +5792,92 @@ EOF
     node "$module_file" "$opts_json"
 }
 
+# ─── Command: sync-instructions ───────────────────────────────────────────────
+cmd_sync_instructions() {
+    local dry_run=false
+    local force=false
+    local no_principles=false
+    local no_profile=false
+    local no_extras=false
+    local output=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                cat <<'EOF'
+Usage: pforge sync-instructions [flags]
+
+Generate .github/copilot-instructions.md from forge project context so GitHub
+Copilot receives project-specific custom instructions in every conversation.
+
+FLAGS:
+  --dry-run           Show rendered instructions without writing the file
+  --force             Re-write even if content is unchanged
+  --no-principles     Skip the Project Principles section
+  --no-profile        Skip the Project Profile section
+  --no-extras         Skip extra .github/instructions/*.instructions.md files
+  --output <path>     Override output path (default: .github/copilot-instructions.md)
+
+SOURCES:
+  .github/instructions/project-profile.instructions.md   Project profile
+  docs/plans/PROJECT-PRINCIPLES.md                       Project principles (primary)
+  .github/instructions/project-principles.instructions.md  Principles fallback
+  .github/instructions/*.instructions.md                 Extra project instructions
+  .forge.json                                            Forge configuration
+
+OUTPUT:
+  .github/copilot-instructions.md   GitHub Copilot reads this automatically
+
+EXAMPLES:
+  pforge sync-instructions
+  pforge sync-instructions --dry-run
+  pforge sync-instructions --force --no-extras
+  pforge sync-instructions --output docs/instructions-preview.md
+EOF
+                return 0
+                ;;
+            --dry-run)        dry_run=true; shift ;;
+            --force)          force=true; shift ;;
+            --no-principles)  no_principles=true; shift ;;
+            --no-profile)     no_profile=true; shift ;;
+            --no-extras)      no_extras=true; shift ;;
+            --output=*)       output="${1#--output=}"; shift ;;
+            --output)         output="$2"; shift 2 ;;
+            *)                shift ;;
+        esac
+    done
+
+    local module_file="$REPO_ROOT/pforge-mcp/sync-instructions.mjs"
+    if [ ! -f "$module_file" ]; then
+        echo "ERROR: sync-instructions.mjs not found at $module_file" >&2
+        exit 1
+    fi
+
+    # Build JSON opts string
+    local opts_json
+    opts_json=$(node -e "
+      const opts = {
+        projectRoot: $(node -e "process.stdout.write(JSON.stringify('$REPO_ROOT'))"),
+        dryRun: $dry_run,
+        force: $force,
+        noPrinciples: $no_principles,
+        noProfile: $no_profile,
+        noExtras: $no_extras
+      };
+      if ('$output') opts.output = '$output';
+      process.stdout.write(JSON.stringify(opts));
+    ")
+
+    echo ""
+    if [ "$dry_run" = true ]; then
+        echo "📋 Dry Run — pforge sync-instructions"
+    else
+        echo "📝 Syncing forge project context to Copilot Instructions..."
+    fi
+
+    node "$module_file" "$opts_json"
+}
+
 # ─── Command: sync-spaces ─────────────────────────────────────────────
 cmd_sync_spaces() {
     local space_ref=""
@@ -5871,6 +5958,76 @@ EOF
     node "$module_file" "$opts_json"
 }
 
+cmd_team() {
+    local sub="${1:-}"
+    shift 2>/dev/null || true
+    case "$sub" in
+        activity)
+            local limit=20 since=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --limit) limit="$2"; shift 2 ;;
+                    --since) since="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local url="http://localhost:3100/api/team-activity?limit=${limit}"
+            [[ -n "$since" ]] && url+="&since=${since}"
+            local result
+            result=$(curl -sf "$url") || { echo "Error connecting to forge server (is it running?)"; exit 1; }
+            local count
+            count=$(echo "$result" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); process.stdout.write(String(d.count))")
+            if [[ "$count" -eq 0 ]]; then
+                echo "No team activity recorded yet."
+            else
+                echo "$result" | node -e "
+const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+d.activities.forEach(a=>{
+  const s=a.status==='completed'?'✅':a.status==='aborted'?'⚠️':'❌';
+  console.log(s, a.timestamp, a.plan, '--', a.operator, '$'+Number(a.cost_usd||0).toFixed(2));
+});"
+            fi
+            ;;
+        dashboard)
+            local limit=50
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --limit) limit="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local url="http://localhost:3100/api/team-dashboard?limit=${limit}"
+            local result
+            result=$(curl -sf "$url") || { echo "Error connecting to forge server (is it running? pforge smith)"; exit 1; }
+            echo "$result" | node -e "
+const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+if(!d.ok){console.error('Error:',d.error);process.exit(1);}
+const s=d.summary||{};
+const risk=d.conflict_risk||{};
+const riskLabel=risk.level==='high'?'🔴':risk.level==='medium'?'🟡':risk.level==='low'?'🟢':'⚪';
+console.log('');
+console.log('👥 Team Dashboard');
+console.log('  Runs today:    ',s.total_runs_today??0);
+console.log('  Active (24 h): ',s.active_operators??0);
+console.log('  Cost today:   \$'+Number(s.total_cost_usd||0).toFixed(2));
+console.log('  Success rate:  ',s.success_rate!=null?s.success_rate+'%':'—');
+console.log('');
+console.log(riskLabel+' Risk ['+risk.level+']: '+risk.message);
+console.log('');
+console.log('Developers:');
+(d.operators||[]).forEach(op=>{
+  const name=(op.operator||'unknown').split('<')[0].trim();
+  const rate=op.runs_total>0?Math.round(op.runs_completed/op.runs_total*100)+'%':'—';
+  const cost=op.total_cost_usd>0?'\$'+Number(op.total_cost_usd).toFixed(2):'—';
+  console.log(' ',name,'runs:'+op.runs_total+'(today:'+op.runs_today+')','success:'+rate,'cost:'+cost);
+});"
+            ;;
+        *)
+            echo "Usage: pforge team activity [--limit N] [--since ISO]"
+            ;;
+    esac
+}
+
 # ─── Command: github ───────────────────────────────────────────────────
 cmd_github() {
     local sub="${1:-}"
@@ -5885,6 +6042,7 @@ SUBCOMMANDS:
   status            Print a checklist of GitHub-native primitives Plan-Forge integrates with
   doctor            Same as status, plus one-line fix hints for warn/fail rows
   metrics           Manage GitHub Copilot usage metrics (pull | --help)
+  review delegate   Delegate the current branch's PR review to the Copilot Coding Agent
 
 OPTIONS:
   --project <dir>   Project root to inspect (default: current directory)
@@ -6009,7 +6167,81 @@ try {
         exit $node_exit
     fi
 
-    if [[ "$sub" != "status" && "$sub" != "doctor" ]]; then
+    if [[ "$sub" == "review" ]]; then
+        local review_sub="${1:-}"
+        shift 2>/dev/null || true
+
+        if [[ "$review_sub" != "delegate" ]]; then
+            cat <<'EOF'
+
+pforge github review — Agentic code review delegation
+
+SUBCOMMANDS:
+  delegate          Delegate current branch's PR review to the Copilot Coding Agent
+
+EXAMPLES:
+  pforge github review delegate
+
+EOF
+            return 0
+        fi
+
+        # ── review delegate ───────────────────────────────────────────────
+        local criteria_json="null"
+        local criteria_list=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --criteria) criteria_list+=("$2"); shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        if [[ ${#criteria_list[@]} -gt 0 ]]; then
+            criteria_json=$(printf '%s\n' "${criteria_list[@]}" | node -e "
+const lines=[];process.stdin.on('data',d=>lines.push(d.toString()));
+process.stdin.on('end',()=>console.log(JSON.stringify(lines.join('').split('\n').filter(Boolean))));")
+        fi
+
+        local delegate_inline
+        delegate_inline=$(cat <<JSEOF
+import { delegateReview, ReviewDelegateNoPrError, ReviewDelegateAuthError } from './pforge-mcp/github-review-delegate.mjs';
+const criteria = $criteria_json;
+try {
+  const result = delegateReview({ criteria: criteria || undefined });
+  console.log(JSON.stringify(result));
+} catch (e) {
+  const code = e instanceof ReviewDelegateNoPrError ? 'NO_PR' : e instanceof ReviewDelegateAuthError ? 'AUTH_ERROR' : 'ERROR';
+  process.stderr.write(JSON.stringify({ ok: false, error: e.message, code }) + '\n');
+  process.exit(1);
+}
+JSEOF
+)
+        local raw_out node_exit
+        pushd "$REPO_ROOT" >/dev/null || true
+        raw_out=$(node --input-type=module -e "$delegate_inline" 2>&1)
+        node_exit=$?
+        popd >/dev/null || true
+
+        local last_line
+        last_line=$(printf '%s\n' "$raw_out" | grep -v '^$' | tail -1)
+
+        echo "$last_line" | node -e "
+try {
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8').trim());
+  if (d.ok) {
+    console.log('\u2705 ' + d.message);
+  } else {
+    const emoji = d.code === 'NO_PR' ? '\u26a0\ufe0f' : '\u274c';
+    process.stderr.write(emoji + ' ' + (d.error || 'unknown error') + '\n');
+    process.exit(1);
+  }
+} catch (err) {
+  process.stderr.write('ERROR: Unexpected output from delegateReview\n');
+  process.exit(1);
+}"
+        exit $node_exit
+    fi
+
+
         echo "ERROR: unknown subcommand 'pforge github $sub'. Try 'pforge github --help'." >&2
         exit 1
     fi
@@ -6122,7 +6354,9 @@ case "$COMMAND" in
     plan-from-sarif) cmd_plan_from_sarif "$@" ;;
     sync-spaces)  cmd_sync_spaces "$@" ;;
     sync-memories) cmd_sync_memories "$@" ;;
+    sync-instructions) cmd_sync_instructions "$@" ;;
     github)       cmd_github "$@" ;;
+    team)         cmd_team "$@" ;;
     crucible)     cmd_crucible "$@" ;;
     anvil)        cmd_anvil "$@" ;;
     hallmark)     cmd_hallmark "$@" ;;

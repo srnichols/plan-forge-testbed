@@ -326,6 +326,8 @@
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400" data-tab="timeline" data-testid="timeline-tab-btn" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg><span>Timeline</span></button>
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400" data-tab="innerloop" data-testid="innerloop-tab-btn" role="tab" title="Inner Loop — self-deterministic feedback subsystems"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.55"/><path d="M21 3v6h-6"/><circle cx="12" cy="12" r="2"/></svg><span>Inner Loop</span></button>
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400" data-tab="github-metrics" data-testid="github-metrics-tab-btn" role="tab" title="GitHub × Plan-Forge — Copilot adoption and orchestration leaderboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>GH Metrics</span></button>
+      <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400" data-tab="team-dashboard" data-testid="team-dashboard-tab-btn" role="tab" title="Team Dashboard — multi-developer plan coordination and conflict-risk overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg><span>Team</span></button>
+
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400" data-tab="anvil-lattice" data-testid="anvil-lattice-tab-btn" role="tab" title="Anvil &amp; Lattice — memoization cache and code-graph index stats" onclick="window.loadAnvilLattice?.()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg><span>Anvil &amp; Lattice</span></button>
     </div>
     <!-- Sub tabs: Forge-Master (top-level group — not owned by the Forge) -->
@@ -344,6 +346,7 @@
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400 hover:text-purple-400" data-tab="settings-crucible" data-testid="settings-crucible-tab-btn" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 17c1.38 0 2.5-1 2.5-2.5 0-1-.5-2-1-2.5-.5-.5-1-1-1-2s.5-1.5 1-2c-2-.5-5 2-5 5 0 .5 0 1 .5 1.5-.33-.33-.5-.83-.5-1.5zM12 2s5 5 5 10a5 5 0 0 1-10 0c0-3 1-5 2.5-7L12 2z"/></svg><span>Crucible</span></button>
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400 hover:text-purple-400" data-tab="settings-brain" data-testid="settings-brain-tab-btn" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4.5 17.5a2.5 2.5 0 0 1-.44-4.96A2.5 2.5 0 0 1 4.5 10 2.5 2.5 0 0 1 7 7.5a2.5 2.5 0 0 1 .44-4.96A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 19.5 17.5a2.5 2.5 0 0 0 .44-4.96A2.5 2.5 0 0 0 19.5 10 2.5 2.5 0 0 0 17 7.5a2.5 2.5 0 0 0-.44-4.96A2.5 2.5 0 0 0 14.5 2z"/></svg><span>Brain</span></button>
       <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400 hover:text-purple-400" data-tab="extensions" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h4v3a2 2 0 1 0 4 0V4h4a2 2 0 0 1 2 2v4h-3a2 2 0 1 0 0 4h3v4a2 2 0 0 1-2 2h-4v-3a2 2 0 1 0-4 0v3H6a2 2 0 0 1-2-2v-4h3a2 2 0 1 0 0-4H4V6z"/></svg><span>Extensions</span></button>
+      <button class="tab-btn px-3 py-1.5 whitespace-nowrap text-xs font-medium text-gray-400 hover:text-purple-400" data-tab="settings-copilot" data-testid="settings-copilot-tab-btn" role="tab" title="Chat Customizations — edit .github/copilot-instructions.md (D5 / v3.1.0)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 10h8M8 14h5"/></svg><span>Copilot</span></button>
     </div>
     <!-- Sub tabs: LiveGuard -->
     <div id="subtabs-liveguard" class="hidden flex flex-wrap gap-x-0.5 gap-y-1 pt-1 pb-1" role="tablist" aria-label="LiveGuard sections">
@@ -1262,6 +1265,73 @@
       </div>
     </section>
 
+    <!-- D5 — Chat Customizations Editor (Settings > Copilot, v3.1.0) -->
+    <section id="tab-settings-copilot" class="tab-content hidden">
+      <div class="bg-gray-800 rounded-lg p-6 max-w-2xl">
+        <h2 class="text-lg font-semibold mb-1">🤖 Chat Customizations</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          Manage <code class="text-blue-300">.github/copilot-instructions.md</code> — the file GitHub Copilot reads automatically to apply project-specific guidance in every chat session.
+          Generated by <code class="text-blue-300">pforge sync-instructions</code>.
+        </p>
+
+        <!-- Status card -->
+        <div id="copilot-instr-status" class="bg-gray-900/60 border border-gray-700 rounded-lg p-4 mb-5 text-sm">
+          <div class="flex items-center gap-2 mb-2">
+            <span id="copilot-instr-exists-badge" class="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-700 text-gray-400">Checking…</span>
+            <span id="copilot-instr-sections" class="text-xs text-gray-500"></span>
+            <span id="copilot-instr-modified" class="text-xs text-gray-500 ml-auto"></span>
+          </div>
+          <div id="copilot-instr-path" class="text-xs text-gray-500 font-mono truncate"></div>
+        </div>
+
+        <!-- Sync options -->
+        <div class="mb-5 space-y-3">
+          <h3 class="text-sm font-semibold text-gray-300">Sync options</h3>
+          <label class="flex items-center gap-3 text-sm text-gray-300 cursor-pointer select-none">
+            <input type="checkbox" id="opt-no-principles" class="w-4 h-4 accent-purple-500 cursor-pointer">
+            <span>Skip <strong>Project Principles</strong> section</span>
+          </label>
+          <label class="flex items-center gap-3 text-sm text-gray-300 cursor-pointer select-none">
+            <input type="checkbox" id="opt-no-profile" class="w-4 h-4 accent-purple-500 cursor-pointer">
+            <span>Skip <strong>Project Profile</strong> section</span>
+          </label>
+          <label class="flex items-center gap-3 text-sm text-gray-300 cursor-pointer select-none">
+            <input type="checkbox" id="opt-no-extras" class="w-4 h-4 accent-purple-500 cursor-pointer">
+            <span>Skip <strong>extra instruction files</strong></span>
+          </label>
+          <label class="flex items-center gap-3 text-sm text-gray-300 cursor-pointer select-none">
+            <input type="checkbox" id="opt-force" class="w-4 h-4 accent-purple-500 cursor-pointer">
+            <span>Force overwrite even when content is unchanged</span>
+          </label>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-wrap gap-3 mb-5">
+          <button onclick="copilotInstrPreview()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition font-medium">
+            Preview
+          </button>
+          <button onclick="copilotInstrSync()" class="px-4 py-2 bg-purple-700 hover:bg-purple-600 text-white text-sm rounded-lg transition font-medium">
+            Sync Now
+          </button>
+          <button onclick="loadCopilotInstrStatus()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition">
+            Refresh
+          </button>
+        </div>
+
+        <!-- Result / feedback -->
+        <div id="copilot-instr-msg" class="hidden mb-4 text-sm rounded-lg px-4 py-3 border"></div>
+
+        <!-- Preview / current-file content viewer -->
+        <div id="copilot-instr-preview-wrap" class="hidden">
+          <div class="flex items-center justify-between mb-2">
+            <h3 id="copilot-instr-preview-label" class="text-sm font-semibold text-gray-300">Preview</h3>
+            <button onclick="copilotInstrCopyPreview()" class="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-300 transition">Copy</button>
+          </div>
+          <pre id="copilot-instr-preview" class="bg-gray-900 text-gray-300 text-xs rounded-lg p-4 overflow-x-auto whitespace-pre-wrap max-h-96 overflow-y-auto font-mono border border-gray-700"></pre>
+        </div>
+      </div>
+    </section>
+
     <!-- Traces Tab  -->
     <section id="tab-traces" class="tab-content hidden">
       <div class="flex gap-4 mb-4 flex-wrap">
@@ -1762,6 +1832,25 @@
       <div id="gm-per-team-panel" class="mb-4"></div>
       <div id="gm-error" class="hidden text-red-400 text-xs text-center mt-2"></div>
     </section>
+    <!-- Team Dashboard Tab (Phase-TEAM-DASHBOARD, v3.4.0) -->
+    <section id="tab-team-dashboard" class="tab-content hidden">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-cyan-400">👥 Team Dashboard</h2>
+          <p class="text-xs text-gray-500">Multi-developer plan coordination — per-operator stats and conflict-risk overview.</p>
+        </div>
+        <button onclick="loadTeamDashboard()" class="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded">Refresh</button>
+      </div>
+      <div id="td-summary" class="mb-4"></div>
+      <div id="td-risk" class="mb-4"></div>
+      <div id="td-operators" class="mb-4"></div>
+      <div id="td-empty" class="hidden text-slate-500 text-sm p-6 text-center">
+        No team activity yet. Activity is recorded after the first plan run.<br/>
+        <code class="text-amber-400 text-xs">pforge run-plan &lt;plan-file&gt;</code>
+      </div>
+      <div id="td-error" class="hidden text-red-400 text-xs text-center mt-2"></div>
+    </section>
+
 
     <!-- Anvil & Lattice Tab (Phase-LATTICE Slice 9) -->
     <section id="tab-anvil-lattice" class="tab-content hidden">
@@ -2106,4 +2195,6 @@
   <script src="anvil-lattice.mjs" type="module"></script>
 </body>
 </html>
+
+
 

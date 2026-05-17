@@ -146,6 +146,7 @@ function Show-Help {
     Write-Host "  sync-instructions Generate .github/copilot-instructions.md from forge project context (profile, principles, config)"
     Write-Host "  github <sub>      Inspect the GitHub-native AI surface (status | doctor | metrics)"
     Write-Host "  team activity     Show recent shared Plan Forge runs from .forge/team-activity.jsonl"
+    Write-Host "  team dashboard    Show multi-developer coordination stats and conflict-risk summary"
     Write-Host "  help              Show this help message"
     Write-Host ""
     Write-Host "OPTIONS:" -ForegroundColor Yellow
@@ -4220,24 +4221,31 @@ function Invoke-RunPlan {
             Write-Host "Starting full auto execution (background): $planPath" -ForegroundColor Cyan
         }
         Write-Host ""
-        # Issue #188 (v2.96.3): Always redirect stdout+stderr to files so a
-        # silent crash of the orchestrator leaves a diagnostic trail. Prior
-        # to this fix, Start-Process -NoNewWindow inherited the parent
-        # console's stdio handles; when the wrapper exited 0 immediately
-        # after spawning, the child's next write to stdout could EPIPE and
-        # crash node with zero captured output and zero events past
-        # slice-started.
+        # Issue #197 (v3.3.3): spawn a hidden pwsh host instead of node directly.
+        # Start-Process node -WindowStyle Hidden loses the console handle on Windows;
+        # gh copilot CLI then silently dies on startup because it requires an attached
+        # console (TTY). A hidden pwsh process allocates its own console, which node
+        # and gh copilot inherit, so the worker survives and events flow normally.
+        # Output (stdout + stderr merged via *>&1) is captured by Tee-Object.
+        # Prior approach (Issue #188 / v2.96.3): separate -RedirectStandardOutput /
+        # -RedirectStandardError on a bare node process — that fixed EPIPE crashes
+        # but did not restore the console handle that gh copilot requires.
         $pidDir = Join-Path (Get-Location) '.forge'
         if (-not (Test-Path $pidDir)) { New-Item -ItemType Directory -Path $pidDir -Force | Out-Null }
         $orchLogsDir = Join-Path $pidDir 'orchestrator-logs'
         if (-not (Test-Path $orchLogsDir)) { New-Item -ItemType Directory -Path $orchLogsDir -Force | Out-Null }
         $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss')
-        $stdoutLog = Join-Path $orchLogsDir "orch-$stamp.stdout.log"
-        $stderrLog = Join-Path $orchLogsDir "orch-$stamp.stderr.log"
-        $proc = Start-Process -FilePath 'node' -ArgumentList $nodeArgs -PassThru `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $stdoutLog `
-            -RedirectStandardError  $stderrLog
+        $orchLog = Join-Path $orchLogsDir "orch-$stamp.log"  # combined stdout+stderr
+
+        # Build a PowerShell command string that runs node with the same args in
+        # foreground mode inside the hidden pwsh host. Single-quote each arg so
+        # paths with spaces are handled correctly.
+        $quotedNodeArgs = ($nodeArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
+        $orchLogPs     = "'" + ($orchLog -replace "'", "''") + "'"
+        $innerCmd      = "& node $quotedNodeArgs *>&1 | Tee-Object -FilePath $orchLogPs"
+
+        $proc = Start-Process -FilePath 'pwsh' -PassThru -WindowStyle Hidden `
+            -ArgumentList '-NoProfile', '-NoLogo', '-NonInteractive', '-Command', $innerCmd
         # Record PID to .forge/last-orch.pid so chain runners and external tooling
         # can attach without scraping Write-Host output (which bypasses stdout).
         try {
@@ -4246,8 +4254,7 @@ function Invoke-RunPlan {
         Write-Host "Orchestrator running in background  PID: $($proc.Id)" -ForegroundColor Green
         Write-Host "Monitor : pforge status" -ForegroundColor DarkGray
         Write-Host "Logs    : .forge/runs/ (latest sub-directory)" -ForegroundColor DarkGray
-        Write-Host "Stdout  : $stdoutLog" -ForegroundColor DarkGray
-        Write-Host "Stderr  : $stderrLog" -ForegroundColor DarkGray
+        Write-Host "Log     : $orchLog" -ForegroundColor DarkGray
         Write-Host "Stop    : Stop-Process -Id $($proc.Id)" -ForegroundColor DarkGray
     }
 }
@@ -6785,8 +6792,48 @@ function Invoke-Team {
             Write-Host "Error: $_"
             exit 1
         }
+    } elseif ($sub -eq 'dashboard') {
+        $limit = 50
+        for ($i = 0; $i -lt $rest.Count; $i++) {
+            if ($rest[$i] -eq '--limit' -and $i + 1 -lt $rest.Count) { $limit = [int]$rest[$i + 1]; $i++; continue }
+        }
+        $url = "http://localhost:3100/api/team-dashboard?limit=$limit"
+        try {
+            $d = Invoke-RestMethod -Uri $url -Method GET
+            if (-not $d.ok) { Write-Host "Error: $($d.error)"; exit 1 }
+
+            $s = $d.summary
+            $risk = $d.conflict_risk
+            $riskColor = switch ($risk.level) {
+                'high'   { 'Red' }
+                'medium' { 'Yellow' }
+                'low'    { 'Green' }
+                default  { 'Gray' }
+            }
+
+            Write-Host ""
+            Write-Host "👥 Team Dashboard" -ForegroundColor Cyan
+            Write-Host "  Runs today:      $($s.total_runs_today)"
+            Write-Host "  Active (24 h):   $($s.active_operators)"
+            Write-Host "  Cost today:      `$$($s.total_cost_usd.ToString('0.00'))"
+            Write-Host "  Success rate:    $(if ($null -ne $s.success_rate) { "$($s.success_rate)%" } else { '—' })"
+            Write-Host ""
+            Write-Host "Risk: [$($risk.level.ToUpper())] $($risk.message)" -ForegroundColor $riskColor
+            Write-Host ""
+            Write-Host "Developers:" -ForegroundColor Yellow
+            $d.operators | ForEach-Object {
+                $name = ($_.operator -split '<')[0].Trim()
+                $rate = if ($_.runs_total -gt 0) { "$([Math]::Round($_.runs_completed / $_.runs_total * 100))%" } else { '—' }
+                $cost = if ($_.total_cost_usd -gt 0) { "`$$($_.total_cost_usd.ToString('0.00'))" } else { '—' }
+                Write-Host "  $name  runs:$($_.runs_total)(today:$($_.runs_today))  success:$rate  cost:$cost"
+            }
+        } catch {
+            Write-Host "Error: $_  (is the forge server running? pforge smith)"
+            exit 1
+        }
     } else {
         Write-Host "Usage: pforge team activity [--limit N] [--since ISO]"
+        Write-Host "       pforge team dashboard [--limit N]"
     }
 }
 
@@ -6804,6 +6851,7 @@ function Invoke-Github {
         Write-Host "  status            Print a checklist of GitHub-native primitives Plan-Forge integrates with"
         Write-Host "  doctor            Same as status, plus one-line fix hints for warn/fail rows"
         Write-Host "  metrics           Manage GitHub Copilot usage metrics (pull | --help)"
+        Write-Host "  review delegate   Delegate the current branch's PR review to the Copilot Coding Agent"
         Write-Host ""
         Write-Host "OPTIONS:" -ForegroundColor Yellow
         Write-Host "  --project <dir>   Project root to inspect (default: current directory)"
@@ -6817,6 +6865,75 @@ function Invoke-Github {
         Write-Host "  pforge github metrics pull --org myorg"
         Write-Host ""
         return
+    }
+
+    if ($sub -eq 'review') {
+        $reviewSub = if ($rest.Count -gt 0) { $rest[0] } else { '' }
+        [string[]]$reviewRest = if ($rest.Count -gt 1) { @($rest[1..($rest.Count - 1)]) } else { @() }
+
+        if ($reviewSub -ne 'delegate') {
+            Write-Host "pforge github review — Agentic code review delegation" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "SUBCOMMANDS:" -ForegroundColor Yellow
+            Write-Host "  delegate          Delegate current branch's PR review to the Copilot Coding Agent"
+            Write-Host ""
+            Write-Host "EXAMPLES:" -ForegroundColor Yellow
+            Write-Host "  pforge github review delegate"
+            Write-Host ""
+            return
+        }
+
+        # ── review delegate ───────────────────────────────────────────────
+        $criteriaJson = 'null'
+        $i = 0
+        $criteriaList = @()
+        while ($i -lt $reviewRest.Count) {
+            if ($reviewRest[$i] -eq '--criteria' -and $i + 1 -lt $reviewRest.Count) {
+                $criteriaList += $reviewRest[$i + 1]
+                $i += 2
+            } else {
+                $i++
+            }
+        }
+        if ($criteriaList.Count -gt 0) {
+            $criteriaJson = ($criteriaList | ConvertTo-Json -Compress)
+        }
+
+        $delegateInline = @"
+import { delegateReview, ReviewDelegateNoPrError, ReviewDelegateAuthError } from './pforge-mcp/github-review-delegate.mjs';
+const criteria = $criteriaJson;
+try {
+  const result = delegateReview({ criteria: criteria || undefined });
+  console.log(JSON.stringify(result));
+} catch (e) {
+  const code = e instanceof ReviewDelegateNoPrError ? 'NO_PR' : e instanceof ReviewDelegateAuthError ? 'AUTH_ERROR' : 'ERROR';
+  process.stderr.write(JSON.stringify({ ok: false, error: e.message, code }) + '\n');
+  process.exit(1);
+}
+"@
+        Push-Location $RepoRoot
+        try {
+            $rawOut = & node --input-type=module -e $delegateInline 2>&1
+        } finally {
+            Pop-Location
+        }
+        $nodeExit = $LASTEXITCODE
+
+        $lastLine = ($rawOut | Where-Object { $_ }) | Select-Object -Last 1
+        try { $parsed = $lastLine | ConvertFrom-Json } catch { $parsed = $null }
+
+        if ($parsed -and $parsed.ok) {
+            Write-Host "✅ $($parsed.message)" -ForegroundColor Green
+        } elseif ($parsed -and -not $parsed.ok) {
+            $emoji = if ($parsed.code -eq 'NO_PR') { '⚠️' } else { '❌' }
+            Write-Host "$emoji $($parsed.error)" -ForegroundColor Red
+            exit 1
+        } else {
+            Write-Host "ERROR: Unexpected output from delegateReview" -ForegroundColor Red
+            $rawOut | ForEach-Object { Write-Host $_ }
+            exit 1
+        }
+        exit $nodeExit
     }
 
     if ($sub -eq 'metrics') {

@@ -82,6 +82,57 @@
     }
   },
   {
+    "name": "forge_delegate_review",
+    "description": "Delegate code review for the current branch's PR to the Copilot Coding Agent. Finds the open PR, creates a GitHub issue assigned to @copilot with structured review criteria, and returns the issue URL. The agent reviews the diff and posts findings. USE FOR: trigger AI code review, delegate PR review to Copilot, agentic review. DO NOT USE FOR: viewing review status (check the created issue), creating PRs (use gh pr create).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "criteria": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Custom review criteria checklist items. Defaults to standard Plan Forge security, testing, and architecture checks."
+        },
+        "path": {
+          "type": "string",
+          "description": "Project root to detect git branch and PR (default: current)"
+        }
+      }
+    }
+  },
+  {
+    "name": "forge_team_dashboard",
+    "description": "Show the multi-developer plan coordination dashboard — aggregates team-activity.jsonl by operator and returns per-developer stats (runs, success rate, cost) plus a conflict-risk assessment for teams where multiple developers are active concurrently. USE FOR: team coordination view, who is running what plan, concurrent developer risk. DO NOT USE FOR: individual run details (use forge_plan_status), raw activity feed (use forge_team_activity), cost breakdown (use forge_cost_report).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "number", "description": "Max activity entries to aggregate (default 50, max 200)" },
+        "since": { "type": "string", "description": "ISO date string — only aggregate entries after this date" },
+        "path": { "type": "string", "description": "Project root (default: current)" }
+      }
+    }
+  },
+  {
+    "name": "forge_team_activity",
+    "description": "Read recent Plan Forge run summaries from the team activity feed (.forge/team-activity.jsonl). Shows who ran what plan, when, and at what cost — across all developers sharing the same repo. USE FOR: see recent team plan runs, check what plans are in flight, review team plan cost. DO NOT USE FOR: individual slice details (use forge_plan_status), cost breakdown (use forge_cost_report).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "number",
+          "description": "Max entries to return (default 20, max 100)"
+        },
+        "since": {
+          "type": "string",
+          "description": "ISO date string to filter entries after this date"
+        },
+        "path": {
+          "type": "string",
+          "description": "Project root (default: current)"
+        }
+      }
+    }
+  },
+  {
     "name": "forge_validate",
     "description": "Validate Plan Forge setup — check that all required files exist, file counts match preset expectations, and no unresolved placeholders remain.",
     "inputSchema": {
@@ -2609,6 +2660,79 @@
           "severity": "medium"
         },
         "confidence": "high"
+      }
+    }
+  },
+  {
+    "name": "forge_classifier_issue",
+    "description": "File a GitHub issue proposing a classifier rule update when a tempering finding routes to the 'classifier' lane (infra noise). Deduplicates by finding class + reason hash — repeated occurrences comment on the existing issue instead of creating a duplicate. USE FOR: closing the audit loop when routeFinding returns lane='classifier', tracking recurring noise patterns in GitHub. DO NOT USE FOR: product bugs (use forge_bug_register), spec gaps (submit to Crucible), self-repair defects (use forge_meta_bug_file).",
+    "inputSchema": {
+      "type": "object",
+      "required": ["payload"],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "description": "Classifier-lane payload from forge_triage_route: { findingClass, route, currentClassification, reason, rule, proposedAction, evidence }",
+          "properties": {
+            "findingClass": { "type": "string" },
+            "route": { "type": "string" },
+            "currentClassification": { "type": "string" },
+            "reason": { "type": "string" },
+            "rule": { "type": "string" },
+            "proposedAction": { "type": "string" },
+            "evidence": { "type": "object" }
+          },
+          "required": ["findingClass"]
+        },
+        "path": { "type": "string", "description": "Project directory (default: current)" }
+      }
+    },
+    "intent": ["tempering", "triage", "classifier", "github", "issue"],
+    "aliases": ["classifier-issue", "file-classifier-issue"],
+    "cost": "low",
+    "maxConcurrent": 5,
+    "addedIn": "3.5.0",
+    "prerequisites": ["gh CLI authenticated OR GITHUB_TOKEN"],
+    "produces": ["GitHub issue (or comment on existing issue)"],
+    "consumes": [".forge.json"],
+    "sideEffects": ["creates or comments on GitHub issue with label classifier-noise"],
+    "writesFiles": false,
+    "network": true,
+    "risk": "low",
+    "errors": {
+      "NO_TOKEN": {
+        "message": "No GitHub token available",
+        "recovery": "Set GITHUB_TOKEN env var, add to .forge/secrets.json, or authenticate with gh CLI"
+      },
+      "NO_REPO": {
+        "message": "Could not resolve target repository",
+        "recovery": "Set bugRegistry.githubRepo in .forge.json (e.g. 'owner/repo')"
+      },
+      "CREATE_FAILED": {
+        "message": "GitHub issue creation failed",
+        "recovery": "Check token permissions and repository access"
+      },
+      "MISSING_PAYLOAD": {
+        "message": "payload object is required",
+        "recovery": "Pass the classifier-lane payload from forge_triage_route"
+      }
+    },
+    "example": {
+      "input": {
+        "payload": {
+          "findingClass": "missing-alt-text",
+          "route": "/about",
+          "currentClassification": "infra",
+          "reason": "All images on /about are decorative; alt is intentionally empty",
+          "proposedAction": "Add rule: skip alt-text check for role=presentation images"
+        }
+      },
+      "output": {
+        "ok": true,
+        "issueNumber": 53,
+        "url": "https://github.com/owner/repo/issues/53",
+        "deduped": false,
+        "message": "Classifier-noise issue #53 created."
       }
     }
   },
@@ -6098,5 +6222,51 @@
       "input": { "name": "handleAuth", "direction": "callees", "depth": 2 },
       "output": { "nodes": [], "edges": [], "unresolvedNames": [], "total": 0, "truncated": false, "message": "No chunk found for \"handleAuth\"." }
     }
+  },
+  {
+    "name": "forge_sync_instructions",
+    "description": "Generate .github/copilot-instructions.md from forge project context (project profile, project principles, .forge.json config). GitHub Copilot reads this file automatically. Completes the Copilot integration trilogy: sync-memories → sync-instructions. USE FOR: populate Copilot with project-specific instructions, regenerate instructions after adding project profile or principles, export project context to Copilot. DO NOT USE FOR: uploading to Copilot Spaces (use forge_sync_spaces), reading memory hints (use forge_sync_memories).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dryRun":       { "type": "boolean", "description": "Return rendered Markdown without writing the file (default: false)" },
+        "force":        { "type": "boolean", "description": "Re-write even if content is unchanged (default: false)" },
+        "noPrinciples": { "type": "boolean", "description": "Skip the Project Principles section (default: false)" },
+        "noProfile":    { "type": "boolean", "description": "Skip the Project Profile section (default: false)" },
+        "noExtras":     { "type": "boolean", "description": "Skip extra .github/instructions/*.instructions.md files (default: false)" },
+        "output":       { "type": "string",  "description": "Override output path (default: .github/copilot-instructions.md, relative to project root)" },
+        "path":         { "type": "string",  "description": "Project directory (default: current)" }
+      },
+      "required": []
+    },
+    "intent": ["sync", "copilot", "instructions", "generate", "project-context"],
+    "aliases": ["sync-instructions", "copilot-instructions"],
+    "cost": "low",
+    "addedIn": "3.0.0",
+    "produces": [".github/copilot-instructions.md"],
+    "consumes": [
+      ".github/instructions/project-profile.instructions.md",
+      "docs/plans/PROJECT-PRINCIPLES.md",
+      ".forge.json",
+      ".github/instructions/*.instructions.md"
+    ],
+    "sideEffects": ["Writes .github/copilot-instructions.md (skipped when content unchanged, unless --force)"],
+    "errors": {
+      "SYNC_INSTRUCTIONS_ERROR": { "message": "Failed to write output file", "recovery": "Check file permissions on .github/" }
+    },
+    "example": {
+      "input": {},
+      "output": {
+        "ok": true,
+        "outputPath": ".github/copilot-instructions.md",
+        "sectionsCount": 3,
+        "sections": { "profile": true, "principles": true, "forgeConfig": true, "extraCount": 0 },
+        "changed": true,
+        "dryRunMode": false,
+        "message": "Wrote 3 section(s) to .github/copilot-instructions.md."
+      }
+    }
   }
 ]
+
+

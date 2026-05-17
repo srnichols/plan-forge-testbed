@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Plan Forge — Project Setup Wizard
 
@@ -8,7 +8,7 @@
 
 .PARAMETER Preset
     One or more tech stack presets. Accepts a single value or a comma-separated list.
-    Valid values: dotnet, typescript, python, java, go, azure-iac, custom
+    Valid values: dotnet, typescript, python, java, go, swift, rust, php, azure-iac, custom
     Example: -Preset azure-iac                  (IaC-only repo)
     Example: -Preset dotnet,azure-iac           (app with infra folder)
 
@@ -20,6 +20,10 @@
 
 .PARAMETER Force
     Overwrite existing files without prompting.
+
+.PARAMETER GenericDir
+    Output directory (relative to ProjectPath) for the generic AI adapter.
+    Defaults to '.ai'. Used when -Agent includes 'generic'.
 
 .EXAMPLE
     .\setup.ps1 -Preset dotnet -ProjectPath "C:\Projects\MyApp" -ProjectName "MyApp"
@@ -38,8 +42,10 @@ param(
 
     [string]$ProjectName,
 
-    [ValidateSet('copilot', 'claude', 'cursor', 'codex', 'all')]
+    [ValidateSet('copilot', 'claude', 'cursor', 'windsurf', 'codex', 'gemini', 'generic', 'all')]
     [string[]]$Agent = @('copilot'),
+
+    [string]$GenericDir = '.ai',
 
     [switch]$Force,
 
@@ -157,7 +163,7 @@ function Install-ClaudeAgent([string]$TargetPath) {
                 $domain = $_.BaseName -replace '\.instructions$', ''
                 $instrContent = Get-Content $_.FullName -Raw
                 # Strip YAML frontmatter for cleaner embedding
-                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n(.*)') {
+                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
                     $instrContent = $Matches[1].Trim()
                 }
                 [void]$sb.AppendLine("### $domain")
@@ -285,7 +291,7 @@ function Install-CursorAgent([string]$TargetPath) {
             Get-ChildItem -Path $instrDir -Filter "*.instructions.md" -File | Sort-Object Name | ForEach-Object {
                 $domain = $_.BaseName -replace '\.instructions$', ''
                 $instrContent = Get-Content $_.FullName -Raw
-                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n(.*)') {
+                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
                     $instrContent = $Matches[1].Trim()
                 }
                 [void]$sb.AppendLine("### $domain")
@@ -356,6 +362,123 @@ $srcContent
 "@
                 Set-Content -Path $cmdFile -Value $cmdContent
                 Write-Host "  CREATE .cursor/commands/planforge.$name.md" -ForegroundColor Green
+            }
+        }
+    }
+}
+
+# ─── Agent Adapter: Windsurf ───────────────────────────────────────────
+function Install-WindsurfAgent([string]$TargetPath) {
+    Write-Host "  Installing Windsurf files..." -ForegroundColor DarkCyan
+
+    # Generate .windsurf/rules/planforge.md — copilot-instructions + all guardrails
+    $copilotInstr = Join-Path $TargetPath ".github/copilot-instructions.md"
+    $windsurfDir  = Join-Path $TargetPath ".windsurf"
+    $rulesDir     = Join-Path $windsurfDir "rules"
+    $rulesFile    = Join-Path $rulesDir "planforge.md"
+    if ((Test-Path $copilotInstr) -and -not (Test-Path $rulesFile)) {
+        if (-not (Test-Path $rulesDir)) {
+            New-Item -ItemType Directory -Path $rulesDir -Force | Out-Null
+        }
+
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine((Get-Content $copilotInstr -Raw))
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("---")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("## Plan Forge Agent Guidelines")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("When editing code, apply the guardrail section that matches the file type:")
+        [void]$sb.AppendLine("- Database/SQL/ORM → **database** section | Auth/JWT → **auth** section")
+        [void]$sb.AppendLine("- API routes → **api-patterns** section | Tests → **testing** section")
+        [void]$sb.AppendLine("- Always follow **architecture-principles** and **security**")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("After every file edit: scan for TODO/FIXME/HACK/stub markers. Warn immediately.")
+        [void]$sb.AppendLine("Before editing: check the active plan's Forbidden Actions — do not touch listed files.")
+        [void]$sb.AppendLine("")
+
+        # Embed all instruction files
+        $instrDir = Join-Path $TargetPath ".github/instructions"
+        if (Test-Path $instrDir) {
+            [void]$sb.AppendLine("---")
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("## Guardrail Files (from Plan Forge)")
+            [void]$sb.AppendLine("")
+
+            Get-ChildItem -Path $instrDir -Filter "*.instructions.md" -File | Sort-Object Name | ForEach-Object {
+                $domain = $_.BaseName -replace '\.instructions$', ''
+                $instrContent = Get-Content $_.FullName -Raw
+                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
+                    $instrContent = $Matches[1].Trim()
+                }
+                [void]$sb.AppendLine("### $domain")
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine($instrContent)
+                [void]$sb.AppendLine("")
+            }
+        }
+
+        Set-Content -Path $rulesFile -Value $sb.ToString()
+        Write-Host "  CREATE .windsurf/rules/planforge.md (project context + guardrails)" -ForegroundColor Green
+    }
+
+    # Convert ALL prompts → Windsurf workflows
+    $promptsDir   = Join-Path $TargetPath ".github/prompts"
+    $workflowsDir = Join-Path $windsurfDir "workflows"
+    if (Test-Path $promptsDir) {
+        if (-not (Test-Path $workflowsDir)) {
+            New-Item -ItemType Directory -Path $workflowsDir -Force | Out-Null
+        }
+        Get-ChildItem -Path $promptsDir -Filter "*.prompt.md" -File | ForEach-Object {
+            $name    = $_.BaseName -replace '\.prompt$', ''
+            $wfFile  = Join-Path $workflowsDir "planforge.$name.md"
+
+            if (-not (Test-Path $wfFile)) {
+                $srcContent = Get-Content $_.FullName -Raw
+                $desc = "Plan Forge prompt"
+                if ($srcContent -match 'description:\s*"?([^"\n]+)"?') {
+                    $desc = $Matches[1].Trim()
+                }
+
+                $wfContent = @"
+---
+description: $desc
+---
+
+$srcContent
+"@
+                Set-Content -Path $wfFile -Value $wfContent
+                Write-Host "  CREATE .windsurf/workflows/planforge.$name.md" -ForegroundColor Green
+            }
+        }
+    }
+
+    # Convert reviewer agents → Windsurf workflows
+    $agentsDir = Join-Path $TargetPath ".github/agents"
+    if (Test-Path $agentsDir) {
+        if (-not (Test-Path $workflowsDir)) {
+            New-Item -ItemType Directory -Path $workflowsDir -Force | Out-Null
+        }
+        Get-ChildItem -Path $agentsDir -Filter "*.agent.md" -File | ForEach-Object {
+            $name   = $_.BaseName -replace '\.agent$', ''
+            $wfFile = Join-Path $workflowsDir "planforge.$name.md"
+
+            if (-not (Test-Path $wfFile)) {
+                $srcContent = Get-Content $_.FullName -Raw
+                $desc = "Plan Forge reviewer"
+                if ($srcContent -match 'description:\s*"?([^"\n]+)"?') {
+                    $desc = $Matches[1].Trim()
+                }
+
+                $wfContent = @"
+---
+description: $desc
+---
+
+$srcContent
+"@
+                Set-Content -Path $wfFile -Value $wfContent
+                Write-Host "  CREATE .windsurf/workflows/planforge.$name.md" -ForegroundColor Green
             }
         }
     }
@@ -435,6 +558,275 @@ $srcContent
     }
 }
 
+# ─── Agent Adapter: Gemini CLI ─────────────────────────────────────────
+function Install-GeminiAgent([string]$TargetPath) {
+    Write-Host "  Installing Gemini CLI files..." -ForegroundColor DarkCyan
+
+    # Generate GEMINI.md — uses @import syntax to pull in instruction files
+    $copilotInstr = Join-Path $TargetPath ".github/copilot-instructions.md"
+    $geminiCtx = Join-Path $TargetPath "GEMINI.md"
+    if ((Test-Path $copilotInstr) -and -not (Test-Path $geminiCtx)) {
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine("# Project Context for Gemini CLI")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("> Auto-generated by Plan Forge. Includes project instructions + guardrail imports.")
+        [void]$sb.AppendLine("> Regenerate with: re-run setup with -Agent gemini")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("## How to Use These Guardrails")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("This file contains domain-specific guardrails organized by section. When editing code:")
+        [void]$sb.AppendLine("- Editing database/SQL/repository code → follow the **database** section")
+        [void]$sb.AppendLine("- Editing auth/JWT/OIDC code → follow the **auth** section")
+        [void]$sb.AppendLine("- Editing API controllers/routes → follow the **api-patterns** section")
+        [void]$sb.AppendLine("- Editing tests → follow the **testing** section")
+        [void]$sb.AppendLine("- Editing Docker/deploy files → follow the **deploy** section")
+        [void]$sb.AppendLine("- Always follow **architecture-principles** and **security** sections")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**After every file edit**: Scan for TODO, FIXME, HACK, stub, placeholder markers. Warn immediately if found.")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**Before editing any file**: If a hardened plan exists in ``docs/plans/``, check its Forbidden Actions section. Do not edit files listed there.")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**Pipeline flow**: After completing a step, tell the user what to invoke next:")
+        [void]$sb.AppendLine("- After Step 0 (Specify) → ``/planforge:step1-preflight-check``")
+        [void]$sb.AppendLine("- After Step 2 (Harden) → ``/planforge:step3-execute-slice``")
+        [void]$sb.AppendLine("- After Step 4 (Sweep) → Start a NEW session for Step 5 (Review)")
+        [void]$sb.AppendLine("- After Step 5 (Review) → ``/planforge:step6-ship``")
+        [void]$sb.AppendLine("")
+
+        # Project instructions
+        [void]$sb.AppendLine("## Project Instructions")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine((Get-Content $copilotInstr -Raw))
+        [void]$sb.AppendLine("")
+
+        # Import guardrail files using Gemini's @import syntax
+        $instrDir = Join-Path $TargetPath ".github/instructions"
+        if (Test-Path $instrDir) {
+            [void]$sb.AppendLine("---")
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("## Guardrail Files")
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("The following guardrails are imported from Plan Forge instruction files. Gemini CLI auto-loads these via ``@`` imports.")
+            [void]$sb.AppendLine("")
+
+            Get-ChildItem -Path $instrDir -Filter "*.instructions.md" -File | Sort-Object Name | ForEach-Object {
+                $domain = $_.BaseName -replace '\.instructions$', ''
+                $relativePath = ".github/instructions/$($_.Name)"
+                [void]$sb.AppendLine("### $domain")
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine("@$relativePath")
+                [void]$sb.AppendLine("")
+            }
+        }
+
+        Set-Content -Path $geminiCtx -Value $sb.ToString()
+        Write-Host "  CREATE GEMINI.md (project context + guardrail imports)" -ForegroundColor Green
+    }
+
+    # Convert ALL prompts → Gemini CLI commands (.toml)
+    $promptsDir = Join-Path $TargetPath ".github/prompts"
+    $geminiDir = Join-Path $TargetPath ".gemini"
+    $commandsDir = Join-Path $geminiDir "commands/planforge"
+    if (Test-Path $promptsDir) {
+        if (-not (Test-Path $commandsDir)) {
+            New-Item -ItemType Directory -Path $commandsDir -Force | Out-Null
+        }
+        Get-ChildItem -Path $promptsDir -Filter "*.prompt.md" -File | ForEach-Object {
+            $name = $_.BaseName -replace '\.prompt$', ''
+            $tomlFile = Join-Path $commandsDir "$name.toml"
+
+            if (-not (Test-Path $tomlFile)) {
+                $srcContent = Get-Content $_.FullName -Raw
+                $desc = "Plan Forge prompt"
+                if ($srcContent -match 'description:\s*"?([^"\n]+)"?') {
+                    $desc = $Matches[1].Trim()
+                }
+                # Strip YAML frontmatter for TOML prompt
+                $promptBody = $srcContent
+                if ($promptBody -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
+                    $promptBody = $Matches[1].Trim()
+                }
+                # Escape TOML triple-quote edge cases
+                $promptBody = $promptBody -replace '"""', '\"\"\"'
+
+                $tomlLines = @(
+                    "# Invoked via: /planforge:$name"
+                    "description = `"$($desc -replace '"', '\"')`""
+                    ""
+                    'prompt = """'
+                )
+                $tomlLines += $promptBody -split "`n"
+                $tomlLines += '"""'
+                Set-Content -Path $tomlFile -Value ($tomlLines -join "`n")
+                Write-Host "  CREATE .gemini/commands/planforge/$name.toml" -ForegroundColor Green
+            }
+        }
+    }
+
+    # Convert reviewer agents → Gemini CLI commands (.toml)
+    $agentsDir = Join-Path $TargetPath ".github/agents"
+    if (Test-Path $agentsDir) {
+        if (-not (Test-Path $commandsDir)) {
+            New-Item -ItemType Directory -Path $commandsDir -Force | Out-Null
+        }
+        Get-ChildItem -Path $agentsDir -Filter "*.agent.md" -File | ForEach-Object {
+            $name = $_.BaseName -replace '\.agent$', ''
+            $tomlFile = Join-Path $commandsDir "$name.toml"
+
+            if (-not (Test-Path $tomlFile)) {
+                $srcContent = Get-Content $_.FullName -Raw
+                $desc = "Plan Forge reviewer"
+                if ($srcContent -match 'description:\s*"?([^"\n]+)"?') {
+                    $desc = $Matches[1].Trim()
+                }
+                # Strip YAML frontmatter
+                $promptBody = $srcContent
+                if ($promptBody -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
+                    $promptBody = $Matches[1].Trim()
+                }
+                $promptBody = $promptBody -replace '"""', '\"\"\"'
+
+                $tomlLines = @(
+                    "# Invoked via: /planforge:$name"
+                    "description = `"$($desc -replace '"', '\"')`""
+                    ""
+                    'prompt = """'
+                )
+                $tomlLines += $promptBody -split "`n"
+                $tomlLines += '"""'
+                Set-Content -Path $tomlFile -Value ($tomlLines -join "`n")
+                Write-Host "  CREATE .gemini/commands/planforge/$name.toml" -ForegroundColor Green
+            }
+        }
+    }
+
+    # Generate .gemini/settings.json with MCP server config (if applicable)
+    $settingsFile = Join-Path $geminiDir "settings.json"
+    if (-not (Test-Path $settingsFile)) {
+        if (-not (Test-Path $geminiDir)) {
+            New-Item -ItemType Directory -Path $geminiDir -Force | Out-Null
+        }
+        $settings = @{
+            theme = "Default"
+            mcpServers = @{
+                "plan-forge" = @{
+                    command = "node"
+                    args = @("pforge-mcp/server.mjs")
+                    cwd = $TargetPath
+                }
+            }
+        } | ConvertTo-Json -Depth 4
+        Set-Content -Path $settingsFile -Value $settings
+        Write-Host "  CREATE .gemini/settings.json (MCP server config)" -ForegroundColor Green
+    }
+}
+
+# ─── Agent Adapter: Generic (any AI coding assistant) ──────────────────
+function Install-GenericAgent([string]$TargetPath, [string]$GenericDir = '.ai') {
+    Write-Host "  Installing Generic AI adapter files (dir: $GenericDir)..." -ForegroundColor DarkCyan
+
+    $outputDir = Join-Path $TargetPath $GenericDir
+    if (-not (Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    }
+
+    # Generate AI_INSTRUCTIONS.md — full context + all guardrails embedded inline
+    $copilotInstr = Join-Path $TargetPath ".github/copilot-instructions.md"
+    $aiCtx = Join-Path $outputDir "AI_INSTRUCTIONS.md"
+    if ((Test-Path $copilotInstr) -and -not (Test-Path $aiCtx)) {
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine("# Project Context for AI Coding Assistants")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("> Auto-generated by Plan Forge. Load this file into your AI assistant's context.")
+        [void]$sb.AppendLine("> Regenerate with: re-run setup with -Agent generic")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("## How to Use These Guardrails")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("This file contains domain-specific guardrails organized by section. When editing code:")
+        [void]$sb.AppendLine("- Editing database/SQL/repository code → follow the **database** section")
+        [void]$sb.AppendLine("- Editing auth/JWT/OIDC code → follow the **auth** section")
+        [void]$sb.AppendLine("- Editing API controllers/routes → follow the **api-patterns** section")
+        [void]$sb.AppendLine("- Editing tests → follow the **testing** section")
+        [void]$sb.AppendLine("- Editing Docker/deploy files → follow the **deploy** section")
+        [void]$sb.AppendLine("- Always follow **architecture-principles** and **security** sections")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**After every file edit**: Scan for TODO, FIXME, HACK, stub, placeholder markers. Warn immediately if found.")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**Before editing any file**: If a hardened plan exists in ``docs/plans/``, check its Forbidden Actions section. Do not edit files listed there.")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("**Pipeline flow**: After completing a step, tell the user what to invoke next:")
+        [void]$sb.AppendLine("- After Step 0 (Specify) → run step1-preflight-check")
+        [void]$sb.AppendLine("- After Step 2 (Harden) → run step3-execute-slice")
+        [void]$sb.AppendLine("- After Step 4 (Sweep) → Start a NEW session for Step 5 (Review)")
+        [void]$sb.AppendLine("- After Step 5 (Review) → run step6-ship")
+        [void]$sb.AppendLine("")
+
+        # Project instructions
+        [void]$sb.AppendLine("## Project Instructions")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine((Get-Content $copilotInstr -Raw))
+        [void]$sb.AppendLine("")
+
+        # Embed all instruction files inline
+        $instrDir = Join-Path $TargetPath ".github/instructions"
+        if (Test-Path $instrDir) {
+            [void]$sb.AppendLine("---")
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("## Guardrail Files")
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("The following guardrails are embedded from Plan Forge instruction files.")
+            [void]$sb.AppendLine("")
+
+            Get-ChildItem -Path $instrDir -Filter "*.instructions.md" -File | Sort-Object Name | ForEach-Object {
+                $domain = $_.BaseName -replace '\.instructions$', ''
+                $instrContent = Get-Content $_.FullName -Raw
+                if ($instrContent -match '^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)') {
+                    $instrContent = $Matches[1].Trim()
+                }
+                [void]$sb.AppendLine("### $domain")
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine($instrContent)
+                [void]$sb.AppendLine("")
+            }
+        }
+
+        Set-Content -Path $aiCtx -Value $sb.ToString()
+        Write-Host "  CREATE $GenericDir/AI_INSTRUCTIONS.md (project context + guardrails)" -ForegroundColor Green
+    }
+
+    # Copy prompts as plain markdown files
+    $promptsDir = Join-Path $TargetPath ".github/prompts"
+    $promptsDst = Join-Path $outputDir "prompts"
+    if (Test-Path $promptsDir) {
+        if (-not (Test-Path $promptsDst)) {
+            New-Item -ItemType Directory -Path $promptsDst -Force | Out-Null
+        }
+        Get-ChildItem -Path $promptsDir -Filter "*.prompt.md" -File | ForEach-Object {
+            $dst = Join-Path $promptsDst $_.Name
+            if (-not (Test-Path $dst)) {
+                Copy-Item -Path $_.FullName -Destination $dst
+                Write-Host "  COPY  $GenericDir/prompts/$($_.Name)" -ForegroundColor Green
+            }
+        }
+    }
+
+    # Copy agent definition files as plain markdown files
+    $agentsDir = Join-Path $TargetPath ".github/agents"
+    $agentsDst = Join-Path $outputDir "agents"
+    if (Test-Path $agentsDir) {
+        if (-not (Test-Path $agentsDst)) {
+            New-Item -ItemType Directory -Path $agentsDst -Force | Out-Null
+        }
+        Get-ChildItem -Path $agentsDir -Filter "*.agent.md" -File | ForEach-Object {
+            $dst = Join-Path $agentsDst $_.Name
+            if (-not (Test-Path $dst)) {
+                Copy-Item -Path $_.FullName -Destination $dst
+                Write-Host "  COPY  $GenericDir/agents/$($_.Name)" -ForegroundColor Green
+            }
+        }
+    }
+}
+
 function Find-Preset([string]$TargetPath) {
     # .NET markers
     $hasCsproj = $null -ne (Get-ChildItem -Path $TargetPath -Filter "*.csproj" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1)
@@ -455,6 +847,18 @@ function Find-Preset([string]$TargetPath) {
     # Go markers
     $hasGoMod = Test-Path (Join-Path $TargetPath "go.mod")
 
+    # Swift markers
+    $hasPackageSwift = Test-Path (Join-Path $TargetPath "Package.swift")
+    $hasXcodeproj   = $null -ne (Get-ChildItem -Path $TargetPath -Filter "*.xcodeproj" -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $hasXcworkspace = $null -ne (Get-ChildItem -Path $TargetPath -Filter "*.xcworkspace" -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1)
+
+    # Rust markers
+    $hasCargoToml = Test-Path (Join-Path $TargetPath "Cargo.toml")
+
+    # PHP markers
+    $hasComposerJson = Test-Path (Join-Path $TargetPath "composer.json")
+    $hasArtisan      = Test-Path (Join-Path $TargetPath "artisan")
+
     # Node/TypeScript markers
     $hasPackageJson = Test-Path (Join-Path $TargetPath "package.json")
     $hasTsConfig    = Test-Path (Join-Path $TargetPath "tsconfig.json")
@@ -473,6 +877,14 @@ function Find-Preset([string]$TargetPath) {
         Write-Host "  AUTO-DETECT  Found Go project markers" -ForegroundColor Magenta
         return 'go'
     }
+    if ($hasPackageSwift -or $hasXcodeproj -or $hasXcworkspace) {
+        Write-Host "  AUTO-DETECT  Found Swift project markers" -ForegroundColor Magenta
+        return 'swift'
+    }
+    if ($hasCargoToml) {
+        Write-Host "  AUTO-DETECT  Found Rust project markers" -ForegroundColor Magenta
+        return 'rust'
+    }
     if ($hasPom -or $hasBuildGradle -or $hasBuildGradleKts) {
         Write-Host "  AUTO-DETECT  Found Java project markers" -ForegroundColor Magenta
         return 'java'
@@ -484,6 +896,10 @@ function Find-Preset([string]$TargetPath) {
     if ($hasPackageJson -or $hasTsConfig) {
         Write-Host "  AUTO-DETECT  Found TypeScript/Node project markers" -ForegroundColor Magenta
         return 'typescript'
+    }
+    if ($hasComposerJson -or $hasArtisan) {
+        Write-Host "  AUTO-DETECT  Found PHP/Laravel project markers" -ForegroundColor Magenta
+        return 'php'
     }
     if ($hasBicep -or $hasAzureYaml -or $hasBicepConfig -or $hasTf) {
         Write-Host "  AUTO-DETECT  Found Azure IaC project markers" -ForegroundColor Magenta
@@ -507,6 +923,40 @@ if (-not (Test-Path $ProjectPath)) {
     New-Item -ItemType Directory -Path $ProjectPath -Force | Out-Null
 }
 
+# ─── Spec Kit Detection ───────────────────────────────────────────────
+$specKitLines = @()
+$specsDir = Join-Path $ProjectPath "specs"
+if (Test-Path $specsDir) {
+    foreach ($sf in (Get-ChildItem -Path $specsDir -Recurse -Filter "spec.md" -File -ErrorAction SilentlyContinue | Select-Object -First 5)) {
+        $specKitLines += "  • $($sf.FullName.Substring($ProjectPath.Length + 1)) — feature specification"
+    }
+    foreach ($pf in (Get-ChildItem -Path $specsDir -Recurse -Filter "plan.md" -File -ErrorAction SilentlyContinue | Select-Object -First 5)) {
+        $specKitLines += "  • $($pf.FullName.Substring($ProjectPath.Length + 1)) — implementation plan"
+    }
+    foreach ($tf in (Get-ChildItem -Path $specsDir -Recurse -Filter "tasks.md" -File -ErrorAction SilentlyContinue | Select-Object -First 5)) {
+        $specKitLines += "  • $($tf.FullName.Substring($ProjectPath.Length + 1)) — task breakdown"
+    }
+}
+$constitutionPath = Join-Path $ProjectPath "memory/constitution.md"
+if (Test-Path $constitutionPath) {
+    $specKitLines += "  • memory/constitution.md — project constitution"
+}
+if ($specKitLines.Count -gt 0) {
+    Write-Host ""
+    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+    Write-Host "║       Spec Kit Artifacts Detected                          ║" -ForegroundColor Magenta
+    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "Found Spec Kit artifacts in this project:" -ForegroundColor Magenta
+    $specKitLines | ForEach-Object { Write-Host $_ -ForegroundColor Magenta }
+    Write-Host ""
+    Write-Host "Plan Forge will complement your Spec Kit workflow:" -ForegroundColor Cyan
+    Write-Host "  - Spec Kit defines WHAT to build"
+    Write-Host "  - Plan Forge hardens specs into execution contracts with validation gates"
+    Write-Host "  - To import a spec: open docs/plans/AI-Plan-Hardening-Runbook-Instructions.md after setup"
+    Write-Host ""
+}
+
 if (-not $ProjectName) {
     $defaultName = Split-Path $ProjectPath -Leaf
     $ProjectName = Get-PromptValue "Project name" $defaultName
@@ -517,7 +967,7 @@ if ($Preset.Count -eq 1 -and $Preset[0] -match ',') {
     $Preset = $Preset[0] -split ',' | ForEach-Object { $_.Trim() }
 }
 
-$validPresets = @('dotnet','typescript','python','java','go','azure-iac','custom')
+$validPresets = @('dotnet','typescript','python','java','go','swift','rust','php','azure-iac','custom')
 foreach ($p in $Preset) {
     if ($p -notin $validPresets) {
         Write-Host "  ERROR  Unknown preset '$p'. Valid values: $($validPresets -join ', ')" -ForegroundColor Red
@@ -540,18 +990,20 @@ if (-not $Preset) {
                 Write-Host "  3) python      — Python / FastAPI / SQLAlchemy"
                 Write-Host "  4) java        — Java / Spring Boot / Gradle / Maven"
                 Write-Host "  5) go          — Go / Chi / Gin / Standard Library"
-                Write-Host "  6) azure-iac   — Azure Bicep / Terraform / PowerShell / azd"
-                Write-Host "  7) custom      — Shared files only (add your own instructions)"
+                Write-Host "  6) swift       — Swift / SwiftUI / iOS / Vapor"
+                Write-Host "  7) azure-iac   — Azure Bicep / Terraform / PowerShell / azd"
+                Write-Host "  8) custom      — Shared files only (add your own instructions)"
                 Write-Host ""
-                $choice = Get-PromptValue "Select preset (1-7 or name)" "1"
+                $choice = Get-PromptValue "Select preset (1-8 or name)" "1"
                 $Preset = switch ($choice) {
                     '1' { 'dotnet' }
                     '2' { 'typescript' }
                     '3' { 'python' }
                     '4' { 'java' }
                     '5' { 'go' }
-                    '6' { 'azure-iac' }
-                    '7' { 'custom' }
+                    '6' { 'swift' }
+                    '7' { 'azure-iac' }
+                    '8' { 'custom' }
                     default { $choice }
                 }
             }
@@ -565,18 +1017,20 @@ if (-not $Preset) {
         Write-Host "  3) python      — Python / FastAPI / SQLAlchemy"
         Write-Host "  4) java        — Java / Spring Boot / Gradle / Maven"
         Write-Host "  5) go          — Go / Chi / Gin / Standard Library"
-        Write-Host "  6) azure-iac   — Azure Bicep / Terraform / PowerShell / azd"
-        Write-Host "  7) custom      — Shared files only (add your own instructions)"
+        Write-Host "  6) swift       — Swift / SwiftUI / iOS / Vapor"
+        Write-Host "  7) azure-iac   — Azure Bicep / Terraform / PowerShell / azd"
+        Write-Host "  8) custom      — Shared files only (add your own instructions)"
         Write-Host ""
-        $choice = Get-PromptValue "Select preset (1-7 or name)" "1"
+        $choice = Get-PromptValue "Select preset (1-8 or name)" "1"
         $Preset = switch ($choice) {
             '1' { 'dotnet' }
             '2' { 'typescript' }
             '3' { 'python' }
             '4' { 'java' }
             '5' { 'go' }
-            '6' { 'azure-iac' }
-            '7' { 'custom' }
+            '6' { 'swift' }
+            '7' { 'azure-iac' }
+            '8' { 'custom' }
             default { $choice }
         }
     }
@@ -590,6 +1044,7 @@ $stackLabel = if ($Preset.Count -gt 1) {
             'python'     { 'Python' }
             'java'       { 'Java' }
             'go'         { 'Go' }
+            'swift'      { 'Swift' }
             'azure-iac'  { 'Azure IaC' }
             'custom'     { 'Custom' }
         }
@@ -601,6 +1056,7 @@ $stackLabel = if ($Preset.Count -gt 1) {
         'python'     { 'Python / FastAPI' }
         'java'       { 'Java / Spring Boot' }
         'go'         { 'Go / Standard Library' }
+        'swift'      { 'Swift / SwiftUI / iOS / Vapor' }
         'azure-iac'  { 'Azure Bicep / Terraform / PowerShell / azd' }
         'custom'     { 'Custom (configure manually)' }
     }
@@ -616,6 +1072,7 @@ $defaultBuild = switch ($primaryPreset) {
     'python'     { 'python -m build' }
     'java'       { './gradlew build' }
     'go'         { 'go build ./...' }
+    'swift'      { 'swift build' }
     'azure-iac'  { 'az bicep build --file infra/main.bicep' }
     'custom'     { '' }
 }
@@ -625,6 +1082,7 @@ $defaultTest = switch ($primaryPreset) {
     'python'     { 'pytest' }
     'java'       { './gradlew test' }
     'go'         { 'go test ./...' }
+    'swift'      { 'swift test' }
     'azure-iac'  { 'Invoke-Pester -Path ./tests -Output Detailed' }
     'custom'     { '' }
 }
@@ -634,6 +1092,7 @@ $defaultLint = switch ($primaryPreset) {
     'python'     { 'ruff check .' }
     'java'       { './gradlew spotlessCheck' }
     'go'         { 'golangci-lint run' }
+    'swift'      { 'swift package plugin --allow-writing-to-package-directory swiftlint' }
     'azure-iac'  { 'az bicep lint --file infra/main.bicep' }
     'custom'     { '' }
 }
@@ -701,7 +1160,10 @@ Write-Host "Step 2: Shared instruction files" -ForegroundColor Cyan
 $sharedFiles = @(
     @{ Src = ".github/instructions/ai-plan-hardening-runbook.instructions.md"; Dst = ".github/instructions/ai-plan-hardening-runbook.instructions.md" }
     @{ Src = ".github/instructions/architecture-principles.instructions.md";   Dst = ".github/instructions/architecture-principles.instructions.md" }
+    @{ Src = ".github/instructions/context-fuel.instructions.md";              Dst = ".github/instructions/context-fuel.instructions.md" }
     @{ Src = ".github/instructions/git-workflow.instructions.md";              Dst = ".github/instructions/git-workflow.instructions.md" }
+    @{ Src = ".github/instructions/self-repair-reporting.instructions.md";     Dst = ".github/instructions/self-repair-reporting.instructions.md" }
+    @{ Src = ".github/instructions/status-reporting.instructions.md";          Dst = ".github/instructions/status-reporting.instructions.md" }
     @{ Src = "templates/.github/instructions/project-principles.instructions.md"; Dst = ".github/instructions/project-principles.instructions.md" }
 )
 
@@ -787,6 +1249,20 @@ if (-not $isCustomOnly) {
             Copy-WithCreate $_.FullName $dst $Force.IsPresent
         }
     }
+
+    # Shared skills (health-check, forge-execute, security-audit — stack-independent fallbacks)
+    # Note: Never force-overwrite — preset skills take priority over shared versions
+    $sharedSkillsDir = Join-Path $templateRoot "presets/shared/skills"
+    if (Test-Path $sharedSkillsDir) {
+        Get-ChildItem -Path $sharedSkillsDir -Directory | ForEach-Object {
+            $skillName = $_.Name
+            $skillSrc  = Join-Path $_.FullName "SKILL.md"
+            $skillDst  = Join-Path $ProjectPath ".github/skills/$skillName/SKILL.md"
+            if (Test-Path $skillSrc) {
+                Copy-WithCreate $skillSrc $skillDst $false
+            }
+        }
+    }
 }
 
 # ─── Step 3c: Copy Project Principles Prompt + Extension Templates + Hooks ─────
@@ -799,6 +1275,17 @@ if (-not $isCustomOnly) {
     $ppPromptDst = Join-Path $ProjectPath ".github/prompts/project-principles.prompt.md"
     if (Test-Path $ppPromptSrc) {
         Copy-WithCreate $ppPromptSrc $ppPromptDst $Force.IsPresent
+    }
+
+    # Pipeline prompts (step0-step6 + project-profile) from repo .github/prompts/
+    $pipelinePromptsSrc = Join-Path $templateRoot ".github/prompts"
+    if (Test-Path $pipelinePromptsSrc) {
+        Get-ChildItem -Path $pipelinePromptsSrc -Filter "*.prompt.md" -File | ForEach-Object {
+            # Skip project-principles.prompt.md — already handled from templates/ above
+            if ($_.Name -eq 'project-principles.prompt.md') { return }
+            $dst = Join-Path $ProjectPath ".github/prompts/$($_.Name)"
+            Copy-WithCreate $_.FullName $dst $Force.IsPresent
+        }
     }
 
     # Extension template directory
@@ -901,17 +1388,72 @@ Write-Host "Step 5: Generating .forge.json" -ForegroundColor Cyan
 $configPath = Join-Path $ProjectPath ".forge.json"
 $versionFile = Join-Path $templateRoot "VERSION"
 $templateVersion = if (Test-Path $versionFile) { (Get-Content $versionFile -Raw).Trim() } else { "1.0.0" }
-$config = @{
-    projectName  = $ProjectName
-    preset       = if ($Preset.Count -eq 1) { $Preset[0] } else { $Preset }
-    agents       = if ($agents.Count -eq 1) { $agents[0] } else { $agents }
-    stack        = $stackLabel
-    setupDate    = (Get-Date -Format 'yyyy-MM-dd')
-    templateVersion = $templateVersion
-} | ConvertTo-Json -Depth 3
 
-Set-Content -Path $configPath -Value $config
-Write-Host "  CREATED  .forge.json" -ForegroundColor Green
+# Phase-26 Slice 14 — best-defaults preset writer.
+# We only write when `.forge.json` is absent so upgrades never clobber a
+# user-customized config. The preset intentionally keeps every Phase-26
+# inner-loop subsystem in an ADVISORY posture: detection runs, but no action
+# is taken without an explicit opt-in.
+function Write-BestDefaultsPreset {
+    param(
+        [string]$Path,
+        [string]$ProjectName,
+        [object]$Preset,
+        [object]$Agents,
+        [string]$StackLabel,
+        [string]$TemplateVersion
+    )
+    $cfg = @{
+        projectName     = $ProjectName
+        preset          = if ($Preset.Count -eq 1) { $Preset[0] } else { $Preset }
+        agents          = if ($Agents.Count -eq 1) { $Agents[0] } else { $Agents }
+        stack           = $StackLabel
+        setupDate       = (Get-Date -Format 'yyyy-MM-dd')
+        templateVersion = $TemplateVersion
+        modelRouting    = @{ default = "claude-opus-4.6" }
+        hooks           = @{
+            preDeploy        = @{ blockOnSecrets = $true; warnOnEnvGaps = $true; scanSince = "HEAD~1" }
+            postSlice        = @{ silentDeltaThreshold = 5; warnDeltaThreshold = 10; scoreFloor = 70 }
+            preAgentHandoff  = @{ injectContext = $true; runRegressionGuard = $true; cacheMaxAgeMinutes = 30; minAlertSeverity = "medium" }
+        }
+        # Phase-26 defaults — all advisory, zero destructive action by default.
+        innerLoop       = @{
+            competitive  = @{ enabled = $false }  # worktree races are opt-in; off by default
+            autoFix      = @{ enabled = $true; applyWithoutReview = $false }  # detect & draft patches, never auto-apply
+            costAnomaly  = @{ enabled = $true; ratio = 2.0; medianWindow = 20 }  # advisory only
+        }
+        brain           = @{
+            federation = @{ enabled = $false; repos = @() }  # off by default; opt-in per repo
+        }
+    } | ConvertTo-Json -Depth 5
+    Set-Content -Path $Path -Value $cfg
+}
+
+if (Test-Path $configPath) {
+    Write-Host "  SKIPPED  .forge.json already exists (preserving user config)" -ForegroundColor Yellow
+} else {
+    Write-BestDefaultsPreset -Path $configPath `
+        -ProjectName $ProjectName -Preset $Preset -Agents $agents `
+        -StackLabel $stackLabel -TemplateVersion $templateVersion
+    Write-Host "  CREATED  .forge.json (best-defaults preset)" -ForegroundColor Green
+}
+
+# ─── Step 5a: Create docs/plans/auto/ for LiveGuard fix proposals ────
+$autoPlansDir = Join-Path $ProjectPath "docs/plans/auto"
+if (-not (Test-Path $autoPlansDir)) {
+    New-Item -ItemType Directory -Path $autoPlansDir -Force | Out-Null
+}
+$autoReadme = Join-Path $autoPlansDir "README.md"
+if (-not (Test-Path $autoReadme)) {
+    Set-Content -Path $autoReadme -Value @"
+# Auto-Generated Plans
+
+This directory contains plans auto-generated by LiveGuard tools (e.g. ``forge_fix_proposal``).
+
+Files in this directory (except this README) are gitignored — they are runtime artifacts, not source-controlled plans.
+"@
+}
+Write-Host "  CREATED  docs/plans/auto/" -ForegroundColor Green
 
 # ─── Step 5b: Generate capabilities.json (machine-readable discovery) ────
 $capabilitiesPath = Join-Path $ProjectPath ".forge/capabilities.json"
@@ -968,7 +1510,7 @@ if (Test-Path $vscodeSrc) {
 # ─── Step 6b: Install Agent Adapters ───────────────────────────────────
 $agents = $Agent
 if ($agents -contains 'all') {
-    $agents = @('copilot', 'claude', 'cursor', 'codex')
+    $agents = @('copilot', 'claude', 'cursor', 'windsurf', 'codex', 'gemini', 'generic')
 }
 # Copilot files are already installed (the default). Only run adapters for others.
 $extraAgents = $agents | Where-Object { $_ -ne 'copilot' }
@@ -979,9 +1521,12 @@ if ($extraAgents.Count -gt 0) {
 
     foreach ($ag in $extraAgents) {
         switch ($ag) {
-            'claude' { Install-ClaudeAgent $ProjectPath }
-            'cursor' { Install-CursorAgent $ProjectPath }
-            'codex'  { Install-CodexAgent $ProjectPath }
+            'claude'    { Install-ClaudeAgent $ProjectPath }
+            'cursor'    { Install-CursorAgent $ProjectPath }
+            'windsurf'  { Install-WindsurfAgent $ProjectPath }
+            'codex'     { Install-CodexAgent $ProjectPath }
+            'gemini'    { Install-GeminiAgent $ProjectPath }
+            'generic'   { Install-GenericAgent $ProjectPath $GenericDir }
         }
     }
 }
@@ -1003,9 +1548,20 @@ if (Test-Path $mcpSrcDir) {
     if (-not (Test-Path $mcpDstDir)) {
         New-Item -ItemType Directory -Path $mcpDstDir -Force | Out-Null
     }
-    Copy-Item -Path (Join-Path $mcpSrcDir "server.mjs") -Destination (Join-Path $mcpDstDir "server.mjs") -Force
-    Copy-Item -Path (Join-Path $mcpSrcDir "package.json") -Destination (Join-Path $mcpDstDir "package.json") -Force
-    Write-Host "  COPY  pforge-mcp/server.mjs + package.json" -ForegroundColor Green
+
+    # Copy all MCP runtime files (not node_modules or .forge)
+    $mcpFileCount = 0
+    Get-ChildItem -Path $mcpSrcDir -File -Recurse |
+        Where-Object { $_.FullName -notmatch '(node_modules|\.forge|coverage)' } |
+        ForEach-Object {
+            $relPath = $_.FullName.Substring($mcpSrcDir.Length + 1)
+            $dstFile = Join-Path $mcpDstDir $relPath
+            $dstParent = Split-Path $dstFile -Parent
+            if (-not (Test-Path $dstParent)) { New-Item -ItemType Directory -Path $dstParent -Force | Out-Null }
+            Copy-Item -Path $_.FullName -Destination $dstFile -Force
+            $mcpFileCount++
+        }
+    Write-Host "  COPY  pforge-mcp/ ($mcpFileCount files: server, orchestrator, capabilities, dashboard, tests)" -ForegroundColor Green
 
     # Generate .vscode/mcp.json for Copilot MCP integration
     $vscodeMcp = Join-Path $ProjectPath ".vscode/mcp.json"
@@ -1030,6 +1586,20 @@ if (Test-Path $mcpSrcDir) {
         else {
             Write-Host "  SKIP  .vscode/mcp.json → 'plan-forge' already exists" -ForegroundColor Yellow
         }
+        # Add forge-master-chat server entry if pforge-master/server.mjs exists
+        $fmServer = Join-Path $ProjectPath "pforge-master/server.mjs"
+        if ((Test-Path $fmServer) -and -not $existing.servers.PSObject.Properties["forge-master-chat"]) {
+            $fmEntry = @{
+                type    = "stdio"
+                command = "node"
+                args    = @("pforge-master/server.mjs")
+                cwd     = '${workspaceFolder}'
+            }
+            $existing2 = Get-Content $vscodeMcp -Raw | ConvertFrom-Json
+            $existing2.servers | Add-Member -NotePropertyName "forge-master-chat" -NotePropertyValue $fmEntry -Force
+            $existing2 | ConvertTo-Json -Depth 10 | Set-Content $vscodeMcp
+            Write-Host "  MERGE .vscode/mcp.json → added 'forge-master-chat' server" -ForegroundColor Green
+        }
     }
     else {
         $vscodeDir = Join-Path $ProjectPath ".vscode"
@@ -1049,7 +1619,30 @@ if (Test-Path $mcpSrcDir) {
         }
     }
 
-    Write-Host "  Run 'cd pforge-mcp && npm install' to install MCP dependencies" -ForegroundColor DarkGray
+    # Auto-install MCP dependencies
+    $mcpPkgJson = Join-Path $mcpDstDir "package.json"
+    if (Test-Path $mcpPkgJson) {
+        Write-Host "  Installing MCP dependencies..." -ForegroundColor DarkCyan
+        try {
+            $npmOutput = & npm install --prefix $mcpDstDir 2>&1
+            Write-Host "  ✅ npm install complete" -ForegroundColor Green
+        } catch {
+            Write-Host "  ⚠️  npm install failed — run manually: cd pforge-mcp && npm install" -ForegroundColor Yellow
+        }
+    }
+}
+
+# ─── Step 7c: Copy CLI Scripts + VERSION ──────────────────────────────
+Write-Host ""
+Write-Host "Step 7c: CLI scripts" -ForegroundColor Cyan
+
+foreach ($cliFile in @("pforge.ps1", "pforge.sh", "VERSION")) {
+    $cliSrc = Join-Path $templateRoot $cliFile
+    $cliDst = Join-Path $ProjectPath $cliFile
+    if (Test-Path $cliSrc) {
+        Copy-Item -Path $cliSrc -Destination $cliDst -Force
+        Write-Host "  COPY  $cliFile" -ForegroundColor Green
+    }
 }
 
 # ─── Done ──────────────────────────────────────────────────────────────
@@ -1075,6 +1668,8 @@ Write-Host "Optional (recommended):" -ForegroundColor Yellow
 Write-Host "  - Run .github/prompts/project-profile.prompt.md to generate project-specific guardrails"
 Write-Host "  - Run .github/prompts/project-principles.prompt.md to define project principles"
 Write-Host "  - Use .github/prompts/step0-specify-feature.prompt.md to define your first feature"
+Write-Host "  - Start your first plan the Crucible way: call forge_crucible_submit (MCP) — every plan ships with a crucibleId for full traceability" -ForegroundColor DarkCyan
+Write-Host "  - On GitHub? Run 'pforge github status' for a GitHub-native readiness check, or read /manual/plan-forge-on-the-github-stack.html" -ForegroundColor DarkCyan
 Write-Host ""
 
 # ─── Step 8: Auto-validate ─────────────────────────────────────────────

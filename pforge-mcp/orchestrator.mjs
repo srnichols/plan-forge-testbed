@@ -355,6 +355,7 @@ class OrchestratorEventBus extends EventEmitter {
       "slice-model-routed", "self-repair-missed",
       "tool-call", "bridge-edit-blocked", "bridge-edit-approved",
       "pforge.foundry.quota",
+      "snapshot-janitor",
     ];
     for (const evt of events) {
       this.on(evt, (data) => this.handler.handle({ type: evt, data, timestamp: new Date().toISOString() }));
@@ -401,6 +402,38 @@ export function appendEvent(type, data, logDir) {
     }
   }
   return stamped;
+}
+
+/**
+ * Issue #197 — Write a slice-failed record when the process exits while a
+ * slice is still in-progress (silent-death guard). Exported for tests.
+ *
+ * Returns `true` if a record was written, `false` when sliceId is falsy
+ * (no slice was active, nothing to write).
+ *
+ * @param {string|null} sliceId  - Active slice ID, or null if none.
+ * @param {string}      title    - Slice title (may be "").
+ * @param {string|null} runDir   - Run directory for events.log; null = skip.
+ * @returns {boolean}
+ */
+export function writeSilentExitRecord(sliceId, title, runDir) {
+  if (!sliceId) return false;
+  appendEvent(
+    "slice-failed",
+    {
+      sliceId,
+      title: title || "",
+      status: "error",
+      error:
+        "orchestrator-silent-exit: process exited while slice was in-progress. " +
+        "Possible cause: gh copilot CLI requires an attached console on Windows " +
+        "and the background launcher did not allocate one (Issue #197). " +
+        "Re-run with --foreground to diagnose.",
+      reason: "worker-exited-without-output",
+    },
+    runDir,
+  );
+  return true;
 }
 
 // ─── Plan Parser ──────────────────────────────────────────────────────
@@ -1040,6 +1073,12 @@ let _ghCopilotProbe = () => {
 let _ghCopilotCache = null;
 let _secretsLoader = null;
 
+// Cache for CLI worker probes (excludes API-provider checks, which are env-var-dependent).
+// 60-second TTL — workers don't change during a single pforge run; re-probing on every
+// model in assessQuorumViability multiplied detectWorkers() latency into minutes of I/O.
+let _cliWorkersCache = null;
+let _cliWorkersCacheExpiry = 0;
+
 /**
  * Inject a gh-copilot availability probe for testing. Pass `null` to restore
  * the default real-filesystem probe.
@@ -1047,6 +1086,8 @@ let _secretsLoader = null;
  */
 export function setGhCopilotProbe(probe) {
   _ghCopilotCache = null;
+  _cliWorkersCache = null;
+  _cliWorkersCacheExpiry = 0;
   _ghCopilotProbe = probe || (() => {
     try {
       const workers = loadWorkerCapabilities();
@@ -1883,13 +1924,25 @@ function attemptProbe(name, spec, probe, result) {
  * @returns {{ name: string, available: boolean, capable: boolean, version: string|null, reason: string|null, type: "cli"|"api", installHint?: string|null }[]}
  */
 export function detectWorkers(_projectDir) {
-  const matrix = loadWorkerCapabilities();
-  const results = [];
-  for (const [name, spec] of Object.entries(matrix.workers || {})) {
-    results.push(probeWorker(name, spec));
+  // CLI probe results are cached for 60 s — probeWorker spawns child processes
+  // (execSync, 10 s timeout each), so repeated calls inside assessQuorumViability
+  // (one per model per preset) would otherwise block for minutes.
+  const now = Date.now();
+  let cliWorkers;
+  if (_cliWorkersCache && now < _cliWorkersCacheExpiry) {
+    cliWorkers = _cliWorkersCache;
+  } else {
+    const matrix = loadWorkerCapabilities();
+    cliWorkers = [];
+    for (const [name, spec] of Object.entries(matrix.workers || {})) {
+      cliWorkers.push(probeWorker(name, spec));
+    }
+    _cliWorkersCache = cliWorkers;
+    _cliWorkersCacheExpiry = now + 60_000;
   }
 
-  // Detect API providers (check env var + .forge/secrets.json fallback)
+  // API providers are NOT cached — env vars can change between calls (e.g. in tests).
+  const results = [...cliWorkers];
   for (const [name, provider] of Object.entries(API_PROVIDERS)) {
     const apiKey = process.env[provider.envKey] || loadSecretFromForge(provider.envKey);
     results.push({
@@ -2670,6 +2723,15 @@ export function spawnWorker(prompt, options = {}) {
 
       // Clean up temp prompt file
       try { unlinkSync(promptFile); } catch { /* ignore */ }
+
+      // Issue #197: if the worker produced zero output (both stdout and stderr empty)
+      // and exited non-zero, it most likely failed to start due to a missing console
+      // (TTY). Annotate stderr so the diagnostic log and detectSilentWorkerFailure
+      // callers receive a human-readable reason rather than an empty string.
+      if (!stdout && !stderr && code !== 0 && !timedOut) {
+        stderr = `[pforge] worker '${chosen.name}' exited ${code} with no stdout or stderr — ` +
+          `likely failed to start (console/TTY required). Run with --foreground for debugging.`;
+      }
 
       const jsonlEvents = parseJSONL(stdout);
       let tokens = extractTokens(jsonlEvents);
@@ -4396,6 +4458,32 @@ export async function runPlan(planPath, options = {}) {
   };
   const eventBus = new OrchestratorEventBus(combinedHandler);
 
+  // Issue #197 — Silent-death guard.
+  // When Node is launched in background mode on Windows without an attached
+  // console (Start-Process -FilePath 'node' -WindowStyle Hidden), the gh
+  // copilot CLI worker needs a console to initialize its progress reporter.
+  // Without one, it exits immediately with no output, the worker promise
+  // resolves with an empty result, and the orchestrator's event loop drains
+  // cleanly — leaving the run log with slice-started but no slice-failed.
+  //
+  // This guard registers a synchronous `process.on('exit')` listener that
+  // writes a slice-failed event whenever the process exits while a slice is
+  // still in-progress, making the silent death detectable and retriable.
+  let _guardSliceId = null;
+  let _guardSliceTitle = null;
+  const _silentDeathGuard = () => {
+    writeSilentExitRecord(_guardSliceId, _guardSliceTitle, runDir);
+  };
+  process.once("exit", _silentDeathGuard);
+  eventBus.on("slice-started", (d) => {
+    _guardSliceId = d.sliceId ?? null;
+    _guardSliceTitle = d.title || "";
+  });
+  eventBus.on("slice-completed", () => { _guardSliceId = null; _guardSliceTitle = null; });
+  eventBus.on("slice-failed",    () => { _guardSliceId = null; _guardSliceTitle = null; });
+  eventBus.on("run-completed",   () => { _guardSliceId = null; process.off("exit", _silentDeathGuard); });
+  eventBus.on("run-aborted",     () => { _guardSliceId = null; process.off("exit", _silentDeathGuard); });
+
   // Write run.json metadata
   const runMeta = {
     plan: planPath,
@@ -4531,6 +4619,20 @@ export async function runPlan(planPath, options = {}) {
   }
 
   eventBus.emit("run-started", { ...runMeta, quorum: quorumConfig ? { enabled: quorumConfig.enabled, auto: quorumConfig.auto, threshold: quorumConfig.threshold } : null });
+
+  // Issue #201 — janitor pass: drop any pforge-slice-N-snapshot stashes older
+  // than 7 days. Prevents accumulation of orphaned snapshots from conflicted
+  // pops in prior runs (testbed observed 60+ orphans). Best-effort.
+  try {
+    const cleanup = cleanupStaleSnapshots({ cwd });
+    if (cleanup.dropped.length > 0) {
+      eventBus.emit("snapshot-janitor", {
+        scanned: cleanup.scanned,
+        dropped: cleanup.dropped.length,
+        errors: cleanup.errors.length,
+      });
+    }
+  } catch { /* best-effort — never break run start */ }
 
   // GX.2 (v2.36): L3 → L1 preload. Emit a `memory-preload` event right after
   // run-started carrying the deterministic search-hints derived from the plan.
@@ -7637,9 +7739,16 @@ export function snapshotPreSliceState({ cwd = process.cwd() } = {}) {
 }
 
 /**
- * Issue #178 — stash any pre-slice working-tree changes before the worker
- * runs, so a buggy worker (or a destructive teardown) can't trample operator
- * WIP. Pair with `popSliceSnapshot` at slice end.
+ * Issue #178 / #202 — stash any pre-slice working-tree changes before the
+ * worker runs, so a buggy worker (or a destructive teardown) can't trample
+ * operator WIP. Pair with `popSliceSnapshot` at slice end.
+ *
+ * #202: `git stash push` without `-u` silently SKIPS untracked files even
+ * when `git status --porcelain` shows them as dirty. That caused
+ * `pushSliceSnapshot` to return `pushed:true` when no stash was actually
+ * created (untracked-only working trees), surfacing at pop time as a
+ * misleading "snapshot stash not found" error. Add `-u` so untracked
+ * files are protected too and push/pop status is honest.
  *
  * @param {{ cwd?: string, sliceNumber: string|number, _execSync?: Function }} params
  * @returns {{ pushed: boolean, stashRef: string|null, reason?: string }}
@@ -7649,7 +7758,9 @@ export function pushSliceSnapshot({ cwd = process.cwd(), sliceNumber, _execSync 
   try {
     const status = _execSync("git status --porcelain", { cwd, encoding: "utf-8", timeout: 5_000 }).toString().trim();
     if (!status) return { pushed: false, stashRef: null, reason: "clean-tree" };
-    _execSync(`git stash push -m "${stashRef}"`, { cwd, encoding: "utf-8", timeout: 10_000 });
+    // #202: `-u` (--include-untracked) — without it, an untracked-only tree
+    // is silently skipped and the caller is misled into thinking we stashed.
+    _execSync(`git stash push -u -m "${stashRef}"`, { cwd, encoding: "utf-8", timeout: 10_000 });
     return { pushed: true, stashRef };
   } catch (err) {
     return { pushed: false, stashRef: null, reason: (err?.message || "git-failed").slice(0, 200) };
@@ -7657,23 +7768,182 @@ export function pushSliceSnapshot({ cwd = process.cwd(), sliceNumber, _execSync 
 }
 
 /**
- * Issue #178 — restore the snapshot stashed by `pushSliceSnapshot`. Always
- * called at slice end (success OR failure) so operator WIP is never silently
- * captured in `git stash list`. Conflicts surface as a non-fatal warning;
- * the operator can recover via `git stash list` + `git stash apply`.
+ * Issue #178 / #201 — restore the snapshot stashed by `pushSliceSnapshot`.
+ * Always called at slice end (success OR failure) so operator WIP is never
+ * silently captured in `git stash list`.
+ *
+ * Strategy (Issue #201):
+ *   1. Look up the stash ref BY MESSAGE (`pforge-slice-N-snapshot`), not by
+ *      blind `git stash pop` of the top of the stack — the top may be an
+ *      unrelated operator stash if anything stashed during the slice run.
+ *   2. Use `git stash apply <ref>` (non-destructive). If it succeeds, drop
+ *      the stash explicitly. If it fails with conflict OR "would be
+ *      overwritten" (the dirty-tree case caused by orchestrator runtime
+ *      writes between push and pop), leave the stash in place and return a
+ *      structured error so the operator can recover via
+ *      `git stash list` + `git stash show -p <ref>`.
+ *
+ * Conflict trigger (Issue #201): the orchestrator self-modifies runtime
+ * files between push and pop (`.forge/watch-history.jsonl`,
+ * `liveguard-broadcast.log`, `server-ports.json`, `model-performance.json`,
+ * `quorum-history.jsonl`). Old behavior: blind `pop` failed with "would be
+ * overwritten by merge", but git actually leaves the stash intact in that
+ * case — the snapshot then accumulates in `git stash list` forever.
  *
  * @param {{ cwd?: string, sliceNumber: string|number, _execSync?: Function }} params
- * @returns {{ restored: boolean, conflict?: boolean, error?: string }}
+ * @returns {{ restored: boolean, conflict?: boolean, dirtyTree?: boolean, error?: string, stashRef?: string }}
  */
-export function popSliceSnapshot({ cwd = process.cwd(), sliceNumber: _sliceNumber, _execSync = execSync } = {}) {
+export function popSliceSnapshot({ cwd = process.cwd(), sliceNumber, _execSync = execSync } = {}) {
+  const message = `pforge-slice-${sliceNumber}-snapshot`;
+  // Step 1: find the stash ref by message (more reliable than top-of-stack).
+  let stashRef = null;
   try {
-    _execSync(`git stash pop`, { cwd, encoding: "utf-8", timeout: 15_000, stdio: "pipe" });
-    return { restored: true };
+    const list = _execSync("git stash list", { cwd, encoding: "utf-8", timeout: 5_000 }).toString();
+    for (const line of list.split(/\r?\n/)) {
+      // Match e.g. "stash@{2}: On master: pforge-slice-3-snapshot"
+      const m = line.match(/^(stash@\{\d+\}):\s*[^:]*:\s*(.+)$/);
+      if (m && m[2].trim() === message) { stashRef = m[1]; break; }
+    }
+  } catch (err) {
+    return { restored: false, error: `git stash list failed: ${(err?.message || "").slice(0, 200)}` };
+  }
+  if (!stashRef) {
+    // Nothing to restore (push reported `clean-tree`, or someone else dropped it).
+    return { restored: false, error: "snapshot stash not found in git stash list" };
+  }
+  // Step 2: apply (non-destructive). On success, drop. On failure, leave intact.
+  try {
+    _execSync(`git stash apply ${stashRef}`, { cwd, encoding: "utf-8", timeout: 15_000, stdio: "pipe" });
   } catch (err) {
     const stderr = (err?.stderr?.toString?.() || err?.message || "").toString().trim();
-    const conflict = /conflict|merge|CONFLICT/i.test(stderr);
-    return { restored: false, conflict, error: stderr.slice(0, 500) || "git stash pop failed" };
+    const conflict = /conflict|CONFLICT/i.test(stderr);
+    const dirtyTree = /would be overwritten/i.test(stderr);
+    return {
+      restored: false,
+      conflict,
+      dirtyTree,
+      stashRef,
+      error: (stderr.slice(0, 400) || "git stash apply failed") +
+        ` — recover with: git stash show -p ${stashRef} ; git stash apply ${stashRef}`,
+    };
   }
+  // Step 3: drop only after successful apply.
+  try {
+    _execSync(`git stash drop ${stashRef}`, { cwd, encoding: "utf-8", timeout: 10_000, stdio: "pipe" });
+  } catch {
+    // Apply succeeded but drop failed — non-fatal, operator can clean up.
+  }
+  return { restored: true, stashRef };
+}
+
+/**
+ * Attach snapshot restore metadata to a slice result and restore the snapshot
+ * exactly once when `snapshotStash` is true.
+ *
+ * This centralizes snapshot finalize behavior so every executeSlice return path
+ * (success, failure, early-return) reports consistent snapshot fields.
+ *
+ * @param {{
+ *   sliceResult: Record<string, any>,
+ *   snapshotStash: boolean,
+ *   cwd?: string,
+ *   sliceNumber: string|number,
+ *   eventBus?: { emit?: Function }|null,
+ *   _popSliceSnapshot?: Function,
+ * }} params
+ * @returns {Record<string, any>}
+ */
+export function attachSliceSnapshotRestore({
+  sliceResult,
+  snapshotStash,
+  cwd = process.cwd(),
+  sliceNumber,
+  eventBus = null,
+  _popSliceSnapshot = popSliceSnapshot,
+} = {}) {
+  const base = { ...(sliceResult || {}) };
+
+  if (!snapshotStash) {
+    return { ...base, snapshotStashed: false };
+  }
+
+  const restore = _popSliceSnapshot({ cwd, sliceNumber });
+  const withSnapshot = {
+    ...base,
+    snapshotStashed: true,
+    snapshotRestored: !!restore?.restored,
+  };
+
+  if (!restore?.restored) {
+    withSnapshot.snapshotRestoreError = restore?.error || "snapshot restore failed";
+    if (eventBus) {
+      eventBus.emit("snapshot-restore-failed", {
+        sliceNumber,
+        stashRef: `pforge-slice-${sliceNumber}-snapshot`,
+        conflict: !!restore?.conflict,
+        error: withSnapshot.snapshotRestoreError,
+        recovery: "Run `git stash list` and `git stash apply stash@{0}` to recover your WIP.",
+      });
+    }
+  }
+
+  return withSnapshot;
+}
+
+/**
+ * Issue #201 — janitor pass that drops `pforge-slice-N-snapshot` stashes
+ * older than a threshold (default 7 days). Prevents long-term accumulation
+ * of orphaned snapshots from conflicted pops in prior runs.
+ *
+ * Called at run-start from `runPlan` (best-effort, errors swallowed).
+ *
+ * @param {{ cwd?: string, maxAgeDays?: number, _execSync?: Function, _now?: () => Date }} params
+ * @returns {{ scanned: number, dropped: string[], errors: string[] }}
+ */
+export function cleanupStaleSnapshots({
+  cwd = process.cwd(),
+  maxAgeDays = 7,
+  _execSync = execSync,
+  _now = () => new Date(),
+} = {}) {
+  const result = { scanned: 0, dropped: [], errors: [] };
+  let list;
+  try {
+    // `%gd %ct %s` → stash ref, committer Unix timestamp, subject.
+    list = _execSync(
+      'git stash list --format="%gd|%ct|%s"',
+      { cwd, encoding: "utf-8", timeout: 5_000 },
+    ).toString();
+  } catch (err) {
+    result.errors.push(`git stash list failed: ${(err?.message || "").slice(0, 200)}`);
+    return result;
+  }
+  const cutoffSec = Math.floor(_now().getTime() / 1000) - maxAgeDays * 24 * 60 * 60;
+  // Iterate oldest→newest by collecting first, then dropping in reverse order
+  // so refs remain valid (dropping stash@{0} shifts the others down).
+  const toDrop = [];
+  for (const line of list.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const parts = line.split("|");
+    if (parts.length < 3) continue;
+    const [ref, tsStr, subject] = parts;
+    result.scanned++;
+    const ts = parseInt(tsStr, 10);
+    if (!Number.isFinite(ts) || ts >= cutoffSec) continue;
+    // Only target our own snapshot stashes — leave operator stashes alone.
+    if (!/pforge-slice-\d+-snapshot/.test(subject)) continue;
+    toDrop.push(ref);
+  }
+  // Drop in reverse so earlier refs stay stable (stash@{N} indexes shift down).
+  for (const ref of toDrop.reverse()) {
+    try {
+      _execSync(`git stash drop ${ref}`, { cwd, encoding: "utf-8", timeout: 5_000, stdio: "pipe" });
+      result.dropped.push(ref);
+    } catch (err) {
+      result.errors.push(`drop ${ref}: ${(err?.message || "").slice(0, 100)}`);
+    }
+  }
+  return result;
 }
 
 /**
@@ -8632,6 +8902,13 @@ async function executeSlice(slice, options) {
   // never popped, silently capturing operator WIP into `git stash list`.
   const snapshot = pushSliceSnapshot({ cwd, sliceNumber: slice.number });
   const snapshotStash = snapshot.pushed;
+  const finalizeSliceResult = (result) => attachSliceSnapshotRestore({
+    sliceResult: result,
+    snapshotStash,
+    cwd,
+    sliceNumber: slice.number,
+    eventBus,
+  });
 
   // ─── Teardown Safety Guard: capture git baseline ────────────────────
   let teardownBaseline = null;
@@ -8918,23 +9195,23 @@ async function executeSlice(slice, options) {
             : "",
         };
       } catch (err) {
-        return {
+        return finalizeSliceResult({
           status: "failed",
           duration: Date.now() - startTime,
           error: err.message,
           attempts: attempt + 1,
-        };
+        });
       }
     } else {
       try {
         workerResult = await spawnWorker(sliceInstructions, { model: currentModel, cwd, runPlanActive: true, timeout: resolveWorkerTimeoutMs({ sliceOverride: slice.workerTimeoutMs }), eventBus });
       } catch (err) {
-        return {
+        return finalizeSliceResult({
           status: "failed",
           duration: Date.now() - startTime,
           error: err.message,
           attempts: attempt + 1,
-        };
+        });
       }
     }
 
@@ -9080,12 +9357,12 @@ async function executeSlice(slice, options) {
       }
 
       if (teardownGuardConfig.blockOnBranchLoss) {
-        return {
+        return finalizeSliceResult({
           ok: false,
           sliceNumber: slice.number,
           reason: "teardown-branch-loss",
           incident,
-        };
+        });
       }
     }
   }
@@ -9350,29 +9627,7 @@ async function executeSlice(slice, options) {
     } catch { /* non-fatal */ }
   }
 
-  // Issue #178: restore the pre-slice working-tree snapshot. Before this fix
-  // we `git stash push`-ed any uncommitted operator work at slice start
-  // but never popped it — so operator edits silently vanished into
-  // `git stash list` after each run. Always pop, even on failure, so
-  // the operator can decide what to do with their WIP.
-  if (snapshotStash) {
-    const restore = popSliceSnapshot({ cwd, sliceNumber: slice.number });
-    sliceResult.snapshotRestored = restore.restored;
-    if (!restore.restored) {
-      sliceResult.snapshotRestoreError = restore.error;
-      if (eventBus) {
-        eventBus.emit("snapshot-restore-failed", {
-          sliceNumber: slice.number,
-          stashRef: `pforge-slice-${slice.number}-snapshot`,
-          conflict: !!restore.conflict,
-          error: restore.error,
-          recovery: "Run `git stash list` and `git stash apply stash@{0}` to recover your WIP.",
-        });
-      }
-    }
-  }
-
-  return sliceResult;
+  return finalizeSliceResult(sliceResult);
 }
 
 function buildSlicePrompt(slice) {

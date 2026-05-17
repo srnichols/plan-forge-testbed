@@ -120,6 +120,7 @@ import { dispatch as dispatchBugAdapter } from "./tempering/bug-adapters/contrac
 // Phase-39 Slice 4 — Audit loop MCP tools
 import { runTemperingDrain } from "./tempering/drain.mjs";
 import { routeFinding } from "./tempering/triage.mjs";
+import { fileClassifierIssue } from "./tempering/classifier-issue.mjs";
 // Phase-39 Slice 7 — audit-loop activation surface
 import { loadAuditConfig, saveAuditConfig, shouldAutoDrain } from "./tempering/auto-activate.mjs";
 import { checkForUpdate, detectCorruptInstall, resolveFrameworkVersion } from "./update-check.mjs";
@@ -127,6 +128,10 @@ import { checkForUpdate, detectCorruptInstall, resolveFrameworkVersion } from ".
 import { inspectGithubStack } from "./github-introspect.mjs";
 // Phase GITHUB-D Slice 5 — Copilot Metrics REST endpoint
 import { loadMetrics } from "./github-metrics.mjs";
+import { loadActivity } from "./team-activity.mjs";
+import { buildTeamDashboard } from "./dashboard/team-dashboard.mjs";
+// D6 — Agentic code review delegation
+import { delegateReview, ReviewDelegateNoPrError, ReviewDelegateAuthError } from "./github-review-delegate.mjs";
 // Phase FORGE-SHOP-04 Slice 04.1 — Global search
 import { search as forgeSearch } from "./search/core.mjs";
 // Phase FORGE-SHOP-05 Slice 05.1 — Unified timeline
@@ -139,6 +144,8 @@ import { latticeIndex, latticeStat, latticeQuery, latticeCallers, latticeBlast }
 import { exportPlan, exportPlanFromFile } from "./export-plan.mjs";
 // Roadmap C3 — forge_sync_memories: generate .github/copilot-memory-hints.md from forge decisions
 import { syncMemories } from "./sync-memories.mjs";
+// v3.0.0 — forge_sync_instructions: generate .github/copilot-instructions.md from forge project context
+import { syncInstructions } from "./sync-instructions.mjs";
 import express from "express";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -709,6 +716,45 @@ const TOOLS = [
     },
   },
   {
+    name: "forge_delegate_review",
+    description: "Delegate code review for the current branch's PR to the Copilot Coding Agent. Finds the open PR, creates a GitHub issue assigned to @copilot with structured review criteria, and returns the issue URL. The agent reviews the diff and posts findings. USE FOR: trigger AI code review, delegate PR review to Copilot, agentic review. DO NOT USE FOR: viewing review status (check the created issue), creating PRs (use gh pr create).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        criteria: {
+          type: "array",
+          items: { type: "string" },
+          description: "Custom review criteria checklist items. Defaults to standard Plan Forge security, testing, and architecture checks.",
+        },
+        path: { type: "string", description: "Project root to detect git branch and PR (default: current)" },
+      },
+    },
+  },
+  {
+    name: "forge_team_dashboard",
+    description: "Show the multi-developer plan coordination dashboard — aggregates team-activity.jsonl by operator and returns per-developer stats (runs, success rate, cost) plus a conflict-risk assessment for teams where multiple developers are active concurrently. USE FOR: team coordination view, who is running what plan, concurrent developer risk. DO NOT USE FOR: individual run details (use forge_plan_status), raw activity feed (use forge_team_activity), cost breakdown (use forge_cost_report).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max activity entries to aggregate (default 50, max 200)" },
+        since: { type: "string", description: "ISO date string — only aggregate entries after this date" },
+        path: { type: "string", description: "Project root (default: current)" },
+      },
+    },
+  },
+  {
+    name: "forge_team_activity",
+    description: "Read recent Plan Forge run summaries from the team activity feed (.forge/team-activity.jsonl). Shows who ran what plan, when, and at what cost — across all developers sharing the same repo. USE FOR: see recent team plan runs, check what plans are in flight, review team plan cost. DO NOT USE FOR: individual slice details (use forge_plan_status), cost breakdown (use forge_cost_report).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max entries to return (default 20, max 100)" },
+        since: { type: "string", description: "ISO date string to filter entries after this date" },
+        path: { type: "string", description: "Project root (default: current)" },
+      },
+    },
+  },
+  {
     name: "forge_validate",
     description: "Validate Plan Forge setup — check that all required files exist, file counts match preset expectations, and no unresolved placeholders remain.",
     inputSchema: {
@@ -1193,6 +1239,32 @@ const TOOLS = [
             source: { type: "string" },
           },
         },
+      },
+    },
+  },
+  // Phase CLASSIFIER-ISSUE — GitHub issue creation for classifier-lane findings
+  {
+    name: "forge_classifier_issue",
+    description: "File a GitHub issue proposing a classifier rule update when a tempering finding routes to the 'classifier' lane (infra noise). Deduplicates by finding class + reason hash — repeated occurrences comment on the existing issue instead of creating a duplicate. USE FOR: closing the audit loop when routeFinding returns lane='classifier', tracking recurring noise patterns in GitHub. DO NOT USE FOR: product bugs (use forge_bug_register), spec gaps (submit to Crucible), self-repair defects (use forge_meta_bug_file).",
+    inputSchema: {
+      type: "object",
+      required: ["payload"],
+      properties: {
+        payload: {
+          type: "object",
+          description: "Classifier-lane payload from forge_triage_route (lane must be 'classifier'): { findingClass, route, currentClassification, reason, rule, proposedAction, evidence }",
+          properties: {
+            findingClass: { type: "string" },
+            route: { type: "string" },
+            currentClassification: { type: "string" },
+            reason: { type: "string" },
+            rule: { type: "string" },
+            proposedAction: { type: "string" },
+            evidence: { type: "object" },
+          },
+          required: ["findingClass"],
+        },
+        path: { type: "string", description: "Project directory (default: current)" },
       },
     },
   },
@@ -1718,6 +1790,24 @@ const TOOLS = [
     },
   },
   {
+    // v3.0.0 — forge_sync_instructions
+    name: "forge_sync_instructions",
+    description: "Generate .github/copilot-instructions.md from forge project context (project profile, project principles, .forge.json config). GitHub Copilot reads this file automatically. Completes the Copilot integration trilogy: sync-memories → sync-instructions. USE FOR: populate Copilot with project-specific instructions, regenerate instructions after adding project profile or principles, export project context to Copilot. DO NOT USE FOR: uploading to Copilot Spaces (use forge_sync_spaces), reading memory hints (use forge_sync_memories).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dryRun:        { type: "boolean", description: "Return rendered Markdown without writing the file (default: false)" },
+        force:         { type: "boolean", description: "Re-write even if content is unchanged (default: false)" },
+        noPrinciples:  { type: "boolean", description: "Skip the Project Principles section (default: false)" },
+        noProfile:     { type: "boolean", description: "Skip the Project Profile section (default: false)" },
+        noExtras:      { type: "boolean", description: "Skip extra .github/instructions/*.instructions.md files (default: false)" },
+        output:        { type: "string",  description: "Override output path (default: .github/copilot-instructions.md, relative to project root)" },
+        path:          { type: "string",  description: "Project directory (default: current)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "forge_testbed_happypath",
     description: "Run all happy-path testbed scenarios sequentially. Returns aggregated pass/fail results with per-scenario details. Use dryRun to validate without executing.",
     inputSchema: {
@@ -2157,6 +2247,7 @@ function executeTool(name, args) {
     case "forge_graph_query":
     case "forge_patterns_list":
     case "forge_github_metrics":
+    case "forge_team_activity":
     case "forge_anvil_stat":
     case "forge_anvil_clear":
     case "forge_anvil_rebuild":
@@ -3269,6 +3360,27 @@ server.setRequestHandler(CallToolRequestSchema, _wrapWithToolSpan(async (request
       return { content: [{ type: "text", text: JSON.stringify({ ok: true, ...result }, null, 2) }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Triage route error: ${err.message}` }], isError: true };
+    }
+  }
+
+  // ─── Classifier-lane GitHub issue filer (Phase CLASSIFIER-ISSUE) ──
+  if (name === "forge_classifier_issue") {
+    const t0 = Date.now();
+    try {
+      const cwd = args.path ? findProjectRoot(resolve(args.path)) : findProjectRoot(PROJECT_DIR);
+      if (!args.payload || typeof args.payload !== "object") {
+        const result = { ok: false, error: "MISSING_PAYLOAD", message: "payload object is required" };
+        emitToolTelemetry("forge_classifier_issue", args, result, Date.now() - t0, "ERROR", cwd);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: true };
+      }
+      let config = {};
+      try { config = JSON.parse(readFileSync(resolve(cwd, ".forge.json"), "utf-8")); } catch { /* proceed without config */ }
+      const result = await fileClassifierIssue(args.payload, config, { execSync, cwd, fetch: globalThis.fetch });
+      emitToolTelemetry("forge_classifier_issue", args, result, Date.now() - t0, result.ok ? "OK" : "ERROR", cwd);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      emitToolTelemetry("forge_classifier_issue", args, { error: err.message }, Date.now() - t0, "ERROR", findProjectRoot(PROJECT_DIR));
+      return { content: [{ type: "text", text: `Classifier issue error: ${err.message}` }], isError: true };
     }
   }
 
@@ -5651,6 +5763,28 @@ server.setRequestHandler(CallToolRequestSchema, _wrapWithToolSpan(async (request
     }
   }
 
+  // ─── forge_sync_instructions — generate .github/copilot-instructions.md (v3.0.0) ──────
+  if (name === "forge_sync_instructions") {
+    const t0 = Date.now();
+    try {
+      const cwd = args.path ? resolve(args.path) : findProjectRoot(PROJECT_DIR);
+      const result = syncInstructions({
+        projectRoot:   cwd,
+        dryRun:        args.dryRun        ?? false,
+        force:         args.force         ?? false,
+        noPrinciples:  args.noPrinciples  ?? false,
+        noProfile:     args.noProfile     ?? false,
+        noExtras:      args.noExtras      ?? false,
+        output:        args.output,
+      });
+      emitToolTelemetry("forge_sync_instructions", args, result, Date.now() - t0, result.ok ? "OK" : "ERROR", cwd);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      emitToolTelemetry("forge_sync_instructions", args, { error: err.message }, Date.now() - t0, "ERROR", findProjectRoot(PROJECT_DIR));
+      return { content: [{ type: "text", text: `Tool error: ${err.message}` }], isError: true };
+    }
+  }
+
 
   if (name === "forge_testbed_happypath") {
     const t0 = Date.now();
@@ -5900,6 +6034,57 @@ server.setRequestHandler(CallToolRequestSchema, _wrapWithToolSpan(async (request
       const durationMs = Date.now() - t0;
       emitToolTelemetry("forge_patterns_list", args, { error: err.message }, durationMs, "ERROR", findProjectRoot(PROJECT_DIR));
       return { content: [{ type: "text", text: `Pattern list error: ${err.message}` }], isError: true };
+    }
+  }
+
+  if (name === "forge_delegate_review") {
+    const t0 = Date.now();
+    try {
+      const cwd = args.path ? resolve(args.path) : findProjectRoot(PROJECT_DIR);
+      const result = delegateReview({ criteria: args.criteria, cwd });
+      emitToolTelemetry("forge_delegate_review", args, result, Date.now() - t0, "OK", cwd);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      const isNoPr = err instanceof ReviewDelegateNoPrError;
+      const isAuth = err instanceof ReviewDelegateAuthError;
+      const code = isNoPr ? "NO_PR" : isAuth ? "AUTH_ERROR" : "DELEGATE_ERROR";
+      const response = { ok: false, error: err.message, code };
+      emitToolTelemetry("forge_delegate_review", args, response, Date.now() - t0, "ERROR", "");
+      return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+    }
+  }
+
+  if (name === "forge_team_dashboard") {
+    const t0 = Date.now();
+    try {
+      const cwd = args.path ? resolve(args.path) : findProjectRoot(PROJECT_DIR);
+      const limit = Math.min(args.limit ?? 50, 200);
+      const result = buildTeamDashboard({ storeDir: join(cwd, ".forge"), limit, since: args.since });
+      emitToolTelemetry("forge_team_dashboard", args, result, Date.now() - t0, "OK", cwd);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: err.message }) }] };
+    }
+  }
+
+  if (name === "forge_team_activity") {
+    const t0 = Date.now();
+    try {
+      const cwd = args.path ? resolve(args.path) : findProjectRoot(PROJECT_DIR);
+      const limit = Math.min(args.limit ?? 20, 100);
+      const activities = loadActivity({ storeDir: join(cwd, ".forge"), limit, since: args.since });
+      const result = {
+        ok: true,
+        count: activities.length,
+        activities,
+        message: activities.length > 0
+          ? `${activities.length} recent team activity entries`
+          : "No team activity recorded yet. Team activity is recorded after each plan run.",
+      };
+      emitToolTelemetry("forge_team_activity", args, result, Date.now() - t0, "OK", cwd);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: err.message }) }] };
     }
   }
 
@@ -7129,6 +7314,30 @@ export function createExpressApp() {
   // Query params:
   //   cwd       — project root to inspect (defaults to PROJECT_DIR)
   //   gh-token  — "true" to enable the network-backed assignable probe (opt-in)
+  app.get("/api/team-activity", (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit ?? "20", 10), 100);
+      const since = req.query.since || undefined;
+      const cwd = findProjectRoot(PROJECT_DIR);
+      const activities = loadActivity({ storeDir: join(cwd, ".forge"), limit, since });
+      res.json({ ok: true, count: activities.length, activities });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.get("/api/team-dashboard", (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit ?? "50", 10), 200);
+      const since = req.query.since || undefined;
+      const cwd = findProjectRoot(PROJECT_DIR);
+      const result = buildTeamDashboard({ storeDir: join(cwd, ".forge"), limit, since });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   app.get("/api/github-readiness", (req, res) => {
     try {
       const cwd = req.query.cwd ? resolve(req.query.cwd) : findProjectRoot(PROJECT_DIR);
@@ -7883,6 +8092,14 @@ export function createExpressApp() {
     "forge_patterns_list",
     // Phase GITHUB-D — GitHub metrics is MCP-native.
     "forge_github_metrics",
+    // Phase-TEAM-ACTIVITY — Team activity feed is MCP-native.
+    // Phase-TEAM-DASHBOARD — Team coordination dashboard is MCP-native.
+    "forge_team_dashboard",
+    "forge_team_activity",
+    // Phase CLASSIFIER-ISSUE — Classifier-lane GitHub issue filer is MCP-native.
+    "forge_classifier_issue",
+    // D6 — Agentic code review delegation is MCP-native.
+    "forge_delegate_review",
     // Phase-ANVIL Slice 6 — Anvil + Hallmark + Pipelines tools are MCP-native.
     "forge_anvil_stat",
     "forge_anvil_clear",
@@ -7914,6 +8131,8 @@ export function createExpressApp() {
     "forge_export_plan",
     // Roadmap C3 — forge_sync_memories is MCP-native (CLI also available via pforge sync-memories).
     "forge_sync_memories",
+    // v3.0.0 — forge_sync_instructions is MCP-native (CLI also available via pforge sync-instructions).
+    "forge_sync_instructions",
   ]);
   app.post("/api/tool/:name", async (req, res) => {
     try {
@@ -8817,6 +9036,61 @@ export function createExpressApp() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // D5 — Chat Customizations editor: /api/copilot-instructions (v3.1.0)
+  // GET  — returns current file status + content
+  // POST /preview — dry-run: returns rendered Markdown without writing
+  // POST /sync    — writes .github/copilot-instructions.md
+  app.get("/api/copilot-instructions", (_req, res) => {
+    try {
+      const root = findProjectRoot(PROJECT_DIR);
+      const filePath = join(root, ".github", "copilot-instructions.md");
+      const exists = existsSync(filePath);
+      let content = null, lastModified = null, byteSize = 0;
+      if (exists) {
+        try {
+          content = readFileSync(filePath, "utf-8");
+          const st = statSync(filePath);
+          lastModified = st.mtimeMs;
+          byteSize = st.size;
+        } catch { /* non-fatal */ }
+      }
+      // Count sections (lines starting with "##")
+      const sectionCount = content ? (content.match(/^##\s/gm) || []).length : 0;
+      res.json({ ok: true, exists, filePath, content, lastModified, byteSize, sectionCount });
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  });
+
+  app.post("/api/copilot-instructions/preview", (req, res) => {
+    try {
+      const root = findProjectRoot(PROJECT_DIR);
+      const { noPrinciples = false, noProfile = false, noExtras = false } = req.body || {};
+      const result = syncInstructions({
+        projectRoot: root,
+        dryRun: true,
+        noPrinciples: Boolean(noPrinciples),
+        noProfile:    Boolean(noProfile),
+        noExtras:     Boolean(noExtras),
+      });
+      res.json(result);
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  });
+
+  app.post("/api/copilot-instructions/sync", (req, res) => {
+    try {
+      const root = findProjectRoot(PROJECT_DIR);
+      const { noPrinciples = false, noProfile = false, noExtras = false, force = false } = req.body || {};
+      const result = syncInstructions({
+        projectRoot: root,
+        dryRun:       false,
+        force:        Boolean(force),
+        noPrinciples: Boolean(noPrinciples),
+        noProfile:    Boolean(noProfile),
+        noExtras:     Boolean(noExtras),
+      });
+      res.json(result);
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  });
+
   // Phase-29 — Forge-Master Studio API routes (async, registered on demand)
   import("./forge-master-routes.mjs").then(({ registerForgeMasterRoutes }) => {
     registerForgeMasterRoutes(app, invokeForgeTool);
@@ -9029,4 +9303,5 @@ if (isDirectRun) {
     process.exit(1);
   });
 }
+
 
