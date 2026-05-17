@@ -718,5 +718,17 @@
     "attempts": 1,
     "duration_ms": 74505,
     "cost_usd": 0.01
+  },
+  {
+    "date": "2026-05-17T15:45:19.180Z",
+    "plan": "Phase-6-WEB-UI-PLAN",
+    "sliceId": "3",
+    "sliceTitle": "Dashboard page",
+    "sliceType": "migration",
+    "model": "claude-sonnet-4.6",
+    "status": "passed",
+    "attempts": 1,
+    "duration_ms": 55774,
+    "cost_usd": 0.01
   }
 ]
