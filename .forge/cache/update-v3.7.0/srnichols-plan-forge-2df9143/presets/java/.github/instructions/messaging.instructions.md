@@ -1,0 +1,228 @@
+---
+description: Messaging patterns for Java — Spring AMQP, Spring Kafka, @RabbitListener, event-driven architecture
+applyTo: '**/*Listener*.java,**/*Event*.java,**/*Message*.java,**/*Consumer*.java,**/*Producer*.java'
+---
+
+# Java Messaging & Pub/Sub Patterns
+
+## Messaging Strategy
+
+### Spring AMQP / RabbitMQ (Recommended)
+```java
+// Configuration
+@Configuration
+public class RabbitConfig {
+
+    @Bean
+    public TopicExchange eventsExchange() {
+        return new TopicExchange("events");
+    }
+
+    @Bean
+    public Queue orderQueue() {
+        return QueueBuilder.durable("order-processing")
+            .withArgument("x-dead-letter-exchange", "events.dlx")
+            .withArgument("x-dead-letter-routing-key", "order.failed")
+            .build();
+    }
+
+    @Bean
+    public Binding orderBinding(Queue orderQueue, TopicExchange eventsExchange) {
+        return BindingBuilder.bind(orderQueue).to(eventsExchange).with("order.*");
+    }
+}
+
+// Publishing
+@Service
+public class OrderService {
+    private final RabbitTemplate rabbitTemplate;
+
+    public void placeOrder(Order order) {
+        orderRepository.save(order);
+        rabbitTemplate.convertAndSend("events", "order.placed",
+            new OrderPlacedEvent(order.getId(), order.getTenantId(), Instant.now()));
+    }
+}
+
+// Consuming
+@Component
+public class OrderEventListener {
+
+    @RabbitListener(queues = "order-processing")
+    public void handleOrderPlaced(OrderPlacedEvent event) {
+        // Process event
+    }
+}
+```
+
+### Spring Kafka
+```java
+// Publishing
+@Service
+public class EventPublisher {
+    private final KafkaTemplate<String, Object> kafka;
+
+    public void publish(String topic, String key, Object event) {
+        kafka.send(topic, key, event);
+    }
+}
+
+// Consuming
+@Component
+public class OrderKafkaListener {
+
+    @KafkaListener(topics = "order-events", groupId = "order-processor")
+    public void handle(OrderPlacedEvent event, Acknowledgment ack) {
+        processOrder(event);
+        ack.acknowledge();
+    }
+}
+```
+
+### Spring Events (In-Process — Same JVM)
+```java
+// Publishing
+@Service
+public class OrderService {
+    private final ApplicationEventPublisher eventPublisher;
+
+    @Transactional
+    public Order createOrder(OrderRequest request) {
+        Order order = orderRepository.save(new Order(request));
+        eventPublisher.publishEvent(new OrderPlacedEvent(this, order));
+        return order;
+    }
+}
+
+// Consuming (async)
+@Component
+public class OrderAnalyticsListener {
+
+    @Async
+    @EventListener
+    public void onOrderPlaced(OrderPlacedEvent event) {
+        analyticsService.trackOrder(event.getOrder());
+    }
+}
+```
+
+## Event Schema
+```java
+// Always use records for immutable event payloads
+public record OrderPlacedEvent(
+    String orderId,
+    String tenantId,
+    Instant occurredAt
+) {}
+
+// Include tenantId in ALL events
+```
+
+## Scheduled Tasks
+```java
+@Component
+public class ScheduledTasks {
+
+    @Scheduled(cron = "0 0 8 * * *")  // 8 AM daily
+    public void generateDailyReport() { ... }
+
+    @Scheduled(fixedRate = 30_000)  // Every 30 seconds
+    public void processRetryQueue() { ... }
+}
+```
+
+## Dead Letter & Retry Strategy
+```java
+// RabbitMQ retry with Spring Retry
+@Bean
+public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+        ConnectionFactory cf) {
+    SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+    factory.setConnectionFactory(cf);
+    factory.setAdviceChain(RetryInterceptorBuilder.stateless()
+        .maxAttempts(3)
+        .backOffOptions(1000, 2.0, 30000)
+        .build());
+    return factory;
+}
+```
+
+## Anti-Patterns
+
+```
+❌ @Transactional on listener methods (transaction already committed by publisher)
+❌ Sending full JPA entities in events (serialize DTOs/records only)
+❌ Missing tenantId in event payload (breaks multi-tenant isolation)
+❌ Synchronous @EventListener for slow operations (use @Async)
+❌ No dead letter queue (failed messages lost forever)
+❌ No idempotency check (duplicate messages cause duplicate processing)
+```
+
+## Idempotency
+
+Guard consumers against duplicate message delivery using a persistent store:
+
+```java
+@Component
+public class IdempotentConsumer {
+    private final JdbcTemplate jdbc;
+
+    /** Returns true if this is the first time processing this event. */
+    public boolean tryAcquire(String eventId) {
+        try {
+            jdbc.update("INSERT INTO processed_events (event_id, processed_at) VALUES (?, now())", eventId);
+            return true;
+        } catch (DuplicateKeyException e) {
+            return false; // Already processed
+        }
+    }
+}
+
+// Usage in a RabbitMQ listener
+@RabbitListener(queues = "order-processing")
+public void handleOrderPlaced(OrderPlacedEvent event, Message message) {
+    String eventId = message.getMessageProperties().getMessageId();
+    if (!idempotentConsumer.tryAcquire(eventId)) return;
+    orderService.process(event);
+}
+```
+
+Alternatives: Redis `SETNX` with TTL, or Spring Integration's `IdempotentReceiverInterceptor`.
+
+## Graceful Shutdown
+```java
+// Spring Boot handles listener container shutdown automatically with:
+// application.yml
+server:
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+// RabbitMQ listeners finish in-flight messages before shutdown
+// Kafka listeners commit offsets and close consumers
+```
+
+```java
+@Component
+public class MessagingCleanup {
+
+    @PreDestroy
+    public void onShutdown() {
+        log.info("Messaging shutdown — draining in-flight messages...");
+        // Custom cleanup for non-Spring-managed consumers
+    }
+}
+```
+
+- **ALWAYS** set `server.shutdown=graceful` in production
+- **ALWAYS** use Spring-managed listener containers (auto-shutdown on SIGTERM)
+- For Kafka: set `spring.kafka.listener.ack-mode=manual` to control offset commits
+
+## See Also
+
+- `dapr.instructions.md` — Dapr building blocks, sidecar config, state, workflows, secrets
+- `observability.instructions.md` — Distributed tracing, event logging
+- `errorhandling.instructions.md` — Dead letter queues, retry logic
+- `database.instructions.md` — Idempotency stores, transactional outbox

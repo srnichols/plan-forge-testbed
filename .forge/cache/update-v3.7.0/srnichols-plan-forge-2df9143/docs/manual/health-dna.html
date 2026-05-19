@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chapter 25: Health DNA — Plan Forge Manual</title>
+  <meta name="description" content="A composite fingerprint of project health — drift, incidents, tests, model success, cost-per-slice. Persisted across sessions. Detects slow decay." />
+  <link rel="icon" type="image/svg+xml" href="../assets/plan-forge-logo.svg" />
+  <link rel="stylesheet" href="../assets/tailwind.built.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../assets/shared.css" />
+  <link rel="stylesheet" href="assets/manual.css" />
+</head>
+<body class="bg-slate-950 text-slate-300 min-h-screen">
+
+  <button id="mobile-sidebar-btn" class="mobile-sidebar-btn fixed top-4 left-4 z-[101] lg:hidden p-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-400 hover:text-slate-100 transition-colors" aria-label="Open navigation">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+  <div class="manual-layout">
+    <aside id="manual-sidebar" class="manual-sidebar"><nav id="sidebar-nav"></nav></aside>
+
+    <main>
+      <img src="assets/chapter-heroes/ch23-hero.webp" alt="Glowing golden DNA double-helix made of forge-glyphs (gauges, hammers, shields, gears) inside a translucent crystal vial, the Health DNA composite fingerprint" loading="lazy" decoding="async" class="chapter-hero" />
+
+      <img src="../assets/dashboard/lg-health.png" alt="LiveGuard Health tab, composite health gauge, 30-day drift trend, MTTBF, and per-component metrics from forge_health_trend" class="rounded-xl border border-slate-700/40 my-6" loading="lazy" />
+
+      <div class="chapter-content">
+
+        <div class="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-2">Act IV, Learn · Chapter 25</div>
+        <h1>Health DNA</h1>
+        <p class="text-lg text-slate-400 mb-8">A single fingerprint for "how healthy is this project today?", persisted, trended, compared.</p>
+
+        <div class="callout callout-info">
+          <strong>New here? Plain-English version.</strong> A project can look fine on the surface and still be slowly rotting underneath. Tests are passing, but every plan run costs a little more. No incidents this week, but architectural drift is creeping up. Health DNA is a daily checkup that combines five different health signals into one score (0–100) so you can spot the slow decay before it becomes a crisis.
+          <ul class="mt-2 mb-0">
+            <li><strong>What it measures</strong>, drift, incidents, test pass rate, AI model success rate, and cost per slice. Five numbers, one composite score.</li>
+            <li><strong>Why one number?</strong> Any single metric can lie (100% green tests + drowning in drift). The composite catches the lie.</li>
+            <li><strong>What you do with it</strong>, the LiveGuard dashboard plots the score over time. A 7-day downward trend is the early warning to slow down and clean up before shipping more features.</li>
+          </ul>
+        </div>
+
+        <div class="callout callout-tip">
+          <strong>Tool:</strong> <code>forge_health_trend</code> (LiveGuard), writes <code>.forge/health-dna.jsonl</code>. Intent: <code>health-dna</code>. Aliases: <code>health-analysis</code>, <code>system-health</code>, <code>health-report</code>.
+        </div>
+
+        <h2 id="why">Why a Fingerprint?</h2>
+        <p>Any single metric can lie. A project with 100% green tests can still be drowning in drift. A low drift score can mask a CVE backlog. The Health DNA combines five independent signals into one daily fingerprint so slow decay, the kind where everything looks fine but tomorrow's plan costs 2× yesterday's, becomes visible.</p>
+
+        <h2 id="signals">The Five Signals</h2>
+
+        <figure class="manual-figure" id="fig-25-1"><img src="assets/diagrams/liveguard-composite-health.svg" alt="Health DNA composite scoring: five signals (drift, incident rate, test pass rate, model success rate, cost per slice) feed into forge_health_trend which computes a weighted composite score 0-100. 7-day rolling delta detects decay; sustained drops trigger alerts and auto-incidents. Score persists to .forge/health-dna.jsonl and renders on the LiveGuard Health tab as a gauge with trend arrow." class="diagram-img diagram-img-md my-4" /><figcaption class="manual-figcaption"><!--fignum--><span class="manual-fignum">Figure 25-1.</span><!--/fignum--> <!--cap:auto-->Health DNA composite scoring<!--/cap--></figcaption></figure>
+        <table class="manual-table">
+          <thead><tr><th>Signal</th><th>Source</th><th>What it catches</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Drift score</strong></td><td><code>forge_drift_report</code></td><td>Architecture diverging from plan baseline</td></tr>
+            <tr><td><strong>Incident rate</strong></td><td><code>forge_incident_capture</code></td><td>Production failures over trailing window</td></tr>
+            <tr><td><strong>Test pass rate</strong></td><td>CI + testbed findings</td><td>Regression risk</td></tr>
+            <tr><td><strong>Model success rate</strong></td><td>Orchestrator telemetry</td><td>Agent failures + escalation frequency</td></tr>
+            <tr><td><strong>Cost per slice</strong></td><td>Cost ledger</td><td>Token-burn creep, the project getting harder to reason about</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="format">Record Shape</h2>
+
+        <div class="cmd-block mb-4">
+          <div class="cmd-block-header"><span>.forge/health-dna.jsonl, one record</span></div>
+          <pre><code>{
+  "timestamp": "2026-04-20T00:00:00Z",
+  "driftScore":       0.91,
+  "incidentRate7d":   0,
+  "testPassRate":     0.998,
+  "modelSuccessRate": 0.96,
+  "costPerSlice":     0.34,
+  "composite":        0.93,
+  "delta7d":          -0.02,
+  "delta30d":         -0.08
+}</code></pre>
+        </div>
+
+        <p><code>composite</code> is a weighted blend computed inside <code>forge_health_trend</code> (current default weights: drift 0.30, incident-rate 0.25, test-pass 0.20, model-success 0.15, cost 0.10, see <code>pforge-mcp/server.mjs</code>). <code>delta7d</code> and <code>delta30d</code> compare against historical records, a small negative delta is noise, a sustained negative delta is decay.</p>
+
+        <h2 id="decay">Decay Detection</h2>
+        <p>The watcher can alert on Health DNA thresholds:</p>
+        <ul>
+          <li><code>delta7d &lt; -0.10</code>, short-term regression, usually tied to a specific slice.</li>
+          <li><code>delta30d &lt; -0.15</code>, long-term decay, usually architectural.</li>
+          <li><code>composite &lt; 0.60</code>, absolute floor; blocks new executions until addressed.</li>
+        </ul>
+
+        <h2 id="ui">Dashboard</h2>
+        <p>The LiveGuard dashboard's Health tab renders the composite score as a sparkline, with per-signal sub-lines toggleable. The Forge Intelligence page cross-references Health DNA with the OpenBrain memory corpus, "your drift score dropped the day you added the new caching layer" is exactly the kind of conclusion the Learn station exists to surface.</p>
+
+        <div class="callout callout-info">
+          <strong>Why JSONL, not JSON?</strong> Health DNA is append-only by design, every run writes one line. The file rotates on size (rather than via a built-in trim tool). That way a rolled-back slice doesn't also roll back the memory of how sick the project was before the rollback.
+        </div>
+
+        <div id="chapter-prev-next" class="chapter-nav"></div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="assets/manual.js"></script>
+</body>
+</html>

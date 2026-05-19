@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Plan Forge | Live Progress, Cost Tracking, Session Replay</title>
+  <meta name="description" content="Plan Forge Dashboard — real-time plan execution, cost trend analysis, run comparison, quorum visualization, keyboard navigation, theme toggle, skill catalog, watcher live feed, LiveGuard health, and export. 25 tabs, zero config." />
+  <meta property="og:title" content="Plan Forge Dashboard — Live Execution Dashboard" />
+  <meta property="og:description" content="Real-time plan execution, cost tracking, session replay, OTLP traces, skill monitoring. Served at localhost:3100/dashboard." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://planforge.software/dashboard.html" />
+  <meta property="og:image" content="https://planforge.software/assets/dashboard/progress.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Plan Forge Dashboard — Live Execution Dashboard" />
+  <meta name="twitter:description" content="Real-time plan execution, cost tracking, session replay, OTLP traces, extensions, watcher, LiveGuard. 25 tabs, zero config." />
+  <link rel="canonical" href="https://planforge.software/dashboard.html" />
+  <link rel="icon" type="image/svg+xml" href="assets/plan-forge-logo.svg" />
+  <link rel="stylesheet" href="assets/tailwind.built.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/shared.css" />
+  <style>
+    .screenshot-card img {
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      cursor: zoom-in;
+    }
+    .screenshot-card img:hover {
+      transform: scale(1.02);
+      box-shadow: 0 0 40px rgba(245, 158, 11, 0.15);
+    }
+    /* Lightbox */
+    .lightbox { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.92); align-items: center; justify-content: center; cursor: zoom-out; }
+    .lightbox.active { display: flex; }
+    .lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 12px; box-shadow: 0 0 60px rgba(0,0,0,0.5); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased">
+
+  <!-- NAV -->
+  <nav class="sticky top-0 z-50 bg-slate-950/92 backdrop-blur-md border-b border-slate-800/60">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <a href="index.html" class="flex items-center gap-3 shrink-0"><img src="assets/plan-forge-logo.svg" alt="Plan Forge" class="h-7 w-auto" /></a>
+        <div class="hidden md:flex items-center gap-7">
+          <a href="index.html#solution" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">How It Works</a>
+          <a href="index.html#features" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Features</a>
+          <a href="index.html#quickstart" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Quick Start</a>
+          <a href="examples.html" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Examples</a>
+          <a href="blog/" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Blog</a>
+          <div class="nav-dropdown-trigger relative">
+            <button class="text-sm text-slate-400 hover:text-slate-100 transition-colors flex items-center gap-1">Resources <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg></button>
+            <div class="nav-dropdown absolute top-full right-0 w-[640px] p-5 bg-slate-900 border border-slate-700/60 rounded-xl shadow-2xl grid grid-cols-3 gap-4">
+              <div>
+                <p class="text-xs font-bold text-amber-500 uppercase tracking-wider mb-2 px-2">Start Here</p>
+                <a href="shop-tour.html" class="block px-2 py-1.5 text-sm text-amber-400 hover:bg-slate-800 rounded transition-colors font-semibold">Shop Tour</a>
+                <a href="problem.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">The 80/20 Wall</a>
+                <a href="speckit-interop.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Spec Kit Interop</a>
+              </div>
+              <div>
+                <p class="text-xs font-bold text-forge-500 uppercase tracking-wider mb-2 px-2">Learn</p>
+                <a href="manual/" class="block px-2 py-1.5 text-sm text-forge-400 hover:bg-slate-800 rounded transition-colors font-semibold">Manual</a>
+                <a href="docs.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Documentation</a>
+              </div>
+              <div>
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Reference</p>
+                <a href="capabilities.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Capabilities</a>
+                <a href="dashboard.html" class="block px-2 py-1.5 text-sm text-forge-400 hover:bg-slate-800 rounded transition-colors font-semibold">Dashboard</a>
+                <a href="extensions.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Extensions</a>
+                <a href="faq.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">FAQ</a>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="hidden md:flex items-center gap-3">
+          <a href="https://github.com/srnichols/plan-forge" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">GitHub</a>
+          <a href="index.html#quickstart" class="px-4 py-2 text-sm font-semibold bg-forge-500 hover:bg-forge-400 text-slate-900 rounded-lg transition-colors">Get Started</a>
+        </div>
+        <button id="mobile-btn" class="md:hidden p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors" aria-label="Open menu">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="mobile-menu" class="hidden md:hidden border-t border-slate-800/60 bg-slate-950/98">
+      <div class="px-4 py-3 space-y-1">
+        <a href="index.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Home</a>
+        <a href="examples.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Examples</a>
+        <a href="blog/" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Blog</a>
+        <a href="shop-tour.html" class="block py-2 text-sm text-amber-400 hover:text-slate-100 font-semibold">Shop Tour</a>
+        <a href="manual/" class="block py-2 text-sm text-forge-400 hover:text-slate-100 font-semibold">Manual</a>`n        <a href="problem.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">The 80/20 Wall</a>
+        <a href="extensions.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Extensions</a>
+        <a href="speckit-interop.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Spec Kit Interop</a>
+        <a href="docs.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Docs</a>
+        <a href="dashboard.html" class="block py-2 text-sm text-forge-400 hover:text-slate-100">Dashboard</a>
+        <a href="faq.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">FAQ</a>
+        <a href="capabilities.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Capabilities</a>
+        <a href="https://github.com/srnichols/plan-forge" rel="noopener" class="block py-2 text-sm text-forge-400 font-semibold">GitHub &#x2192;</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HEADER -->
+  <section class="page-header-bg py-20">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-4">Dashboard</p>
+      <h1 class="text-5xl font-black text-white mb-4">Live Execution Dashboard</h1>
+      <p class="text-xl text-slate-400 max-w-2xl mx-auto">Real-time visibility into plan execution, costs, traces, and configuration. 25 tabs, zero config, served at <code class="text-forge-400 bg-slate-800/60 px-2 py-0.5 rounded text-base">localhost:3100/dashboard</code>.</p>
+      <div class="mt-6 flex justify-center gap-3 flex-wrap text-sm">
+        <span class="px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">Real-Time WebSocket</span>
+        <span class="px-3 py-1 rounded-full bg-green-500/20 text-green-400 border border-green-500/30">Cost Trends + Anomaly</span>
+        <span class="px-3 py-1 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">Run Comparison</span>
+        <span class="px-3 py-1 rounded-full bg-forge-500/20 text-forge-400 border border-forge-500/30">Quorum Visualization</span>
+        <span class="px-3 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30">Keyboard Navigation</span>
+        <span class="px-3 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">Export JSON/CSV</span>
+        <span class="px-3 py-1 rounded-full bg-teal-500/20 text-teal-400 border border-teal-500/30">Light/Dark Theme</span>
+        <span class="px-3 py-1 rounded-full bg-pink-500/20 text-pink-400 border border-pink-500/30">Skill Catalog</span>
+        <span class="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">Run Launch Panel</span>
+        <span class="px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">DAG Visualizer</span>
+        <span class="px-3 py-1 rounded-full bg-lime-500/20 text-lime-400 border border-lime-500/30">Memory Search Presets</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- LAUNCH -->
+  <section class="py-12 bg-slate-900 border-b border-slate-800/60">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal bg-slate-800/60 rounded-2xl border border-slate-700/40 p-8">
+        <h2 class="text-lg font-bold text-white mb-4">Getting Started</h2>
+        <p class="text-slate-400 mb-4">The dashboard launches automatically when the MCP server starts. No separate install required.</p>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <p class="text-sm text-slate-500 mb-2">Via MCP (auto-starts with VS Code)</p>
+            <pre class="bg-slate-950 rounded-lg p-4 text-sm font-mono text-forge-400 overflow-x-auto">// .vscode/mcp.json — auto-configured by setup
+{
+  "servers": {
+    "plan-forge": {
+      "command": "node",
+      "args": ["pforge-mcp/server.mjs"]
+    }
+  }
+}</pre>
+          </div>
+          <div>
+            <p class="text-sm text-slate-500 mb-2">Dashboard-only mode (no MCP stdio)</p>
+            <pre class="bg-slate-950 rounded-lg p-4 text-sm font-mono text-forge-400 overflow-x-auto">node pforge-mcp/server.mjs --dashboard-only
+
+# Dashboard → http://localhost:3100/dashboard
+# WebSocket → ws://localhost:3101</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB SCREENSHOTS -->
+  <section class="py-16 bg-slate-950">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-20">
+
+      <!-- Progress -->
+      <div class="reveal screenshot-card" id="progress">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 text-lg">⚡</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Progress</h2>
+            <p class="text-slate-400 mt-1">Live view of the currently executing plan. Each slice is rendered as a card showing its status (pending, executing, completed, failed), the AI model used, execution time, and token cost. The progress bar updates in real time via WebSocket events. Slices using API-based models like Grok display a purple <span class="inline-block px-1.5 py-0.5 text-xs font-bold rounded bg-purple-500/30 text-purple-300 border border-purple-400/30">API</span> badge.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Plan Browser</strong> panel lists all plan files in <code class="text-forge-400 text-sm">docs/plans/</code> with their status, slice count, and branch. Click <strong>Estimate</strong> to preview cost/token estimates or <strong>Run</strong> to launch execution directly. Expand <strong class="text-white">Select slices</strong> to toggle individual slices on/off before running — unchecked slices are passed as <code class="text-forge-400 text-sm">--skip-slices</code>.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Scope Contract</strong> accordion shows each plan's In Scope, Out of Scope, and Forbidden file lists. The <strong class="text-white">DAG View</strong> reveals slice dependency relationships with <code class="text-forge-400 text-xs">[P]</code> parallel tags and <code class="text-forge-400 text-xs">←</code> dependency arrows.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Event Log</strong> panel at the bottom records all WebSocket events in real time with timestamps, color-coded by event type. It auto-scrolls during active execution and executing slice cards show a live elapsed-time counter.</p>
+            <p class="text-slate-400 mt-2">Slice cards show <strong class="text-white">escalation indicators</strong> — when auto-escalation promotes a slice to a stronger model after retry failures, a <span class="text-amber-400">⬆️ Escalated</span> badge appears showing the model promotion chain. The <strong class="text-white">Plan Browser → /ui</strong> link opens the <a href="http://localhost:3100/ui" class="text-forge-400 hover:underline">Web UI plan visualization</a> for a read-only DAG view.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/progress.png" alt="Dashboard Progress tab with plan browser showing 6 plans, plus slice cards — 3 completed, 1 executing" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Runs -->
+      <div class="reveal screenshot-card" id="runs">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center text-green-400 text-lg">📋</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Runs</h2>
+            <p class="text-slate-400 mt-1">Historical log of every plan execution with powerful filtering, sorting, and analysis tools.</p>
+            <ul class="text-slate-400 mt-2 space-y-1 text-sm list-disc list-inside">
+              <li><strong class="text-white">Filter Bar</strong> — filter by plan, status, model, mode, and date range. Filters combine with AND logic.</li>
+              <li><strong class="text-white">Sortable Columns</strong> — click any column header to cycle through ascending, descending, and default sort order.</li>
+              <li><strong class="text-white">Run Detail Drawer</strong> — click any row to slide open a right-panel drawer showing per-slice detail cards with status, worker, tokens, cost, gate errors, expandable gate output, and <strong>Tasks &amp; commands</strong> detail (task list, build/test commands). Failed runs show a <strong>Resume from Slice N</strong> button to restart from the failure point.</li>
+              <li><strong class="text-white">Run Comparison</strong> — toggle Compare mode, select two runs, and view side-by-side cards with cost/duration/token deltas color-coded (green = lower, red = higher).</li>
+              <li><strong class="text-white">Export</strong> — export filtered runs as JSON or CSV via the Export dropdown menu.</li>
+              <li><strong class="text-white">Keyboard Navigation</strong> — press <code class="text-forge-400 text-xs">j</code>/<code class="text-forge-400 text-xs">k</code> to move between rows, <code class="text-forge-400 text-xs">Enter</code> to open detail, <code class="text-forge-400 text-xs">Esc</code> to close.</li>
+            </ul>
+          </div>
+        </div>
+        <img src="assets/dashboard/runs.png" alt="Dashboard Runs tab showing historical execution log" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Cost -->
+      <div class="reveal screenshot-card" id="cost">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-forge-500/20 flex items-center justify-center text-forge-400 text-lg">💰</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Cost</h2>
+            <p class="text-slate-400 mt-1">Cumulative cost visualization across all runs. The donut chart breaks down spend by model, and the monthly bar chart shows cost over time. Data comes from <code class="text-forge-400 text-sm">cost-history.json</code>.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Cost Trend Line Chart</strong> plots per-run cost with a dashed average line. Points are color-coded: <span class="text-green-400">green</span> (within 2&times; average), <span class="text-yellow-400">amber</span> (2-3&times;), <span class="text-red-400">red</span> (&gt;3&times;). An <strong class="text-white">Anomaly Detection Banner</strong> appears automatically when any of the latest 5 runs exceeds 3&times; the historical average — click to dismiss.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Duration Per Run</strong> bar chart visualizes execution time per run — color-coded blue (&lt;2min), amber (2-5min), red (&gt;5min). The <strong class="text-white">Model Comparison</strong> table aggregates per-model performance: run count, pass rate, average duration, cost per run, and total tokens. <strong class="text-white">Export Cost</strong> downloads cost data as JSON or CSV.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Model Performance</strong> section shows success rate per model with a color-coded bar chart (green &gt;80%, amber 60-80%, red &lt;60%). When agent-per-slice routing is active, shows the recommended model vs. actual model used, with historical success rate driving the recommendation.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/cost.png" alt="Dashboard Cost tab showing cumulative cost chart across runs" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Actions -->
+      <div class="reveal screenshot-card" id="actions">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400 text-lg">🎯</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Actions</h2>
+            <p class="text-slate-400 mt-1">One-click access to 12 forge operations. Run <strong>Smith</strong> (environment diagnostics), <strong>Sweep</strong> (TODO/FIXME detection with structured table view), <strong>Analyze</strong> (plan consistency scoring), <strong>Analyze (Quorum)</strong> (multi-model consensus analysis), <strong>Diagnose</strong> (multi-model bug investigation), <strong>Status</strong> (editable phase status with inline dropdowns), <strong>Validate</strong> (setup file checks), and <strong>Extensions</strong> (catalog browser). Results display inline below each card.</p>
+            <p class="text-slate-400 mt-2"><strong class="text-white">Launch Plan</strong> opens a full execution modal — pick a plan, mode (auto/assisted), model, quorum toggle, then launch or estimate first. Worker detection shows available CLI workers and API providers. <strong class="text-white">Create Branch</strong> creates a git branch from the plan's branch strategy. <strong class="text-white">Auto-Commit</strong> generates a conventional commit from the current slice goal. <strong class="text-white">Diff</strong> shows changed files color-coded against the scope contract — green for in-scope, yellow for out-of-scope, red for forbidden.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/actions.png" alt="Dashboard Actions tab showing 11 action cards including git ops, sweep, and status editor" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Config -->
+      <div class="reveal screenshot-card" id="config">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-slate-500/20 flex items-center justify-center text-slate-400 text-lg">⚙️</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Config</h2>
+            <p class="text-slate-400 mt-1">View and edit project configuration without touching files. Set the active preset, template version, enabled agents (Claude, Cursor, Codex, Gemini, Windsurf, Generic), and default model routing. The <strong>API Providers</strong> section shows which external model providers are configured — set <code class="text-forge-400 text-sm">XAI_API_KEY</code> to enable Grok models (grok-4, grok-3, grok-3-mini). The <strong>OpenBrain Memory</strong> section shows whether the OpenBrain MCP server is connected for persistent project memory. Changes save to <code class="text-forge-400 text-sm">.forge/config.json</code>.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Bridge Status</strong> panel shows connected notification channels (Telegram, Slack, Discord, Generic), notification level per channel, and pending approval count. When approvals are pending, <strong class="text-white">Approve/Reject</strong> buttons let you resolve them directly from the dashboard. The <strong class="text-white">Escalation Chain</strong> shows the configured model promotion order from <code class="text-forge-400 text-sm">.forge.json</code>.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Advanced Settings</strong> panel exposes max parallelism, max retries, run history limit, and full <strong>Quorum Settings</strong> (enable/disable, complexity threshold, model list). The <strong>Available Workers</strong> section shows detected CLI workers and API providers.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Memory Search</strong> panel features categorized preset chips (Plans, Architecture, Config, Testing, Cost, Issues) that auto-populate searches. Click any preset to instantly search, or type custom queries. Results render as formatted cards with file paths, line numbers, and excerpts. When no results match, the panel suggests alternative queries.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/config.png" alt="Dashboard Config tab showing preset, agents, model routing, API providers, OpenBrain memory status, and memory search" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Traces -->
+      <div class="reveal screenshot-card" id="traces">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-orange-500/20 flex items-center justify-center text-orange-400 text-lg">🔍</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Traces</h2>
+            <p class="text-slate-400 mt-1">OTLP-compatible execution trace viewer. Each plan run produces a trace with spans for every slice, gate check, and tool invocation. Select a run to see its full span tree with timing, status codes, and error details. Use the <strong class="text-white">Search spans</strong> input to filter by span name, attributes, or log summary content in real time. Compatible with OpenTelemetry collectors for export to Jaeger, Zipkin, or Azure Monitor.</p>
+            <p class="text-slate-400 mt-2"><strong class="text-white">Quorum Visualization</strong> — when a run used quorum mode, a purple banner shows model legs, success rate, and dispatch duration. Slice spans show a <span class="inline-block px-1.5 py-0.5 text-xs font-bold rounded bg-purple-500/30 text-purple-300 border border-purple-400/30">&#x1F52E;</span> badge with leg counts. Click any quorum span to see a detail panel with complexity score, threshold, models dispatched, successful legs, dispatch duration, and reviewer cost.</p>
+            <p class="text-slate-400 mt-2"><strong class="text-white">Enhanced Span Attributes</strong> — clicking any span now renders a formatted attribute table (not raw JSON) with friendly labels, expandable log summaries, and structured event rendering with per-event attributes and severity coloring.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/traces.png" alt="Dashboard Traces tab showing execution trace span tree" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Skills -->
+      <div class="reveal screenshot-card" id="skills">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-cyan-500/20 flex items-center justify-center text-cyan-400 text-lg">🛠️</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Skills</h2>
+            <p class="text-slate-400 mt-1">Monitor multi-step skill executions in real time. Skills like <code class="text-forge-400 text-sm">/code-review</code>, <code class="text-forge-400 text-sm">/database-migration</code>, and <code class="text-forge-400 text-sm">/staging-deploy</code> emit step-level events via WebSocket. Each step shows its status (pending, running, completed, failed) with a progress indicator.</p>
+            <p class="text-slate-400 mt-2">The <strong class="text-white">Skill Catalog</strong> grid shows all available skills (both built-in and custom). Custom skills from <code class="text-forge-400 text-sm">.github/skills/</code> are tagged with a blue <span class="inline-block px-1.5 py-0.5 text-xs rounded bg-blue-500/30 text-blue-300">custom</span> badge; built-in skills show a gray <span class="inline-block px-1.5 py-0.5 text-xs rounded bg-gray-500/30 text-gray-300">built-in</span> badge. The catalog loads from the <code class="text-forge-400 text-sm">/api/skills</code> endpoint.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/skills.png" alt="Dashboard Skills tab showing code-review skill with 4 steps in progress" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Replay -->
+      <div class="reveal screenshot-card" id="replay">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center text-rose-400 text-lg">🔄</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Replay</h2>
+            <p class="text-slate-400 mt-1">Session replay for completed runs. Select any historical run and replay its execution timeline step by step. See exactly which slices ran, when gates passed or failed, and how costs accumulated. Useful for post-mortems, team reviews, and debugging failed executions.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/replay.png" alt="Dashboard Replay tab showing session replay viewer" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+      <!-- Extensions -->
+      <div class="reveal screenshot-card" id="extensions">
+        <div class="flex items-start gap-6 mb-6">
+          <span class="shrink-0 w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-lg">🧩</span>
+          <div>
+            <h2 class="text-2xl font-bold text-white">Extensions</h2>
+            <p class="text-slate-400 mt-1">Browse and manage community extensions directly from the dashboard. Each extension card shows the name, description, author, version, and what it provides (agents, instructions, prompts, MCP config). Cards include <strong class="text-white">Install</strong> and <strong class="text-white">Uninstall</strong> buttons — click to install or remove extensions without leaving the dashboard. Installed extensions show a green checkmark. Extensions are curated in the <a href="extensions.html" class="text-forge-400 hover:underline">community catalog</a>.</p>
+          </div>
+        </div>
+        <img src="assets/dashboard/extensions.png" alt="Dashboard Extensions tab with install/uninstall buttons on extension cards" class="w-full rounded-xl border border-slate-700/40 shadow-2xl" loading="lazy" />
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section class="py-16 bg-slate-900 border-t border-slate-800/60">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal">
+        <h2 class="text-2xl font-bold text-white mb-8 text-center">How It Works</h2>
+        <div class="grid md:grid-cols-3 gap-6">
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6 text-center">
+            <div class="text-3xl mb-3">📡</div>
+            <h3 class="font-semibold text-white mb-2">WebSocket Hub</h3>
+            <p class="text-sm text-slate-400">Port 3101 broadcasts real-time events — slice progress, cost updates, skill steps, trace spans. The dashboard auto-reconnects on disconnect.</p>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6 text-center">
+            <div class="text-3xl mb-3">🗂️</div>
+            <h3 class="font-semibold text-white mb-2">REST API</h3>
+            <p class="text-sm text-slate-400">Port 3100 serves the dashboard UI and exposes JSON endpoints for run history, cost data, config, traces, skills, and action execution.</p>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6 text-center">
+            <div class="text-3xl mb-3">💾</div>
+            <h3 class="font-semibold text-white mb-2">Persistent Data</h3>
+            <p class="text-sm text-slate-400">Run history, cost records, and traces persist in <code class="text-forge-400 text-xs">.forge/</code> JSON files. Data survives server restarts and is scoped per project.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- POWER UX -->
+  <section class="py-16 bg-slate-950 border-t border-slate-800/60">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal">
+        <h2 class="text-2xl font-bold text-white mb-8 text-center">Power UX</h2>
+        <div class="grid md:grid-cols-2 gap-6">
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6">
+            <div class="text-2xl mb-3">⌨️</div>
+            <h3 class="font-semibold text-white mb-2">Keyboard Navigation</h3>
+            <p class="text-sm text-slate-400">Press <code class="text-forge-400 text-xs">1</code>–<code class="text-forge-400 text-xs">9</code> to switch tabs, <code class="text-forge-400 text-xs">j</code>/<code class="text-forge-400 text-xs">k</code> to navigate rows, <code class="text-forge-400 text-xs">Enter</code> to open details, <code class="text-forge-400 text-xs">Esc</code> to close panels. Press <code class="text-forge-400 text-xs">?</code> to show all shortcuts.</p>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6">
+            <div class="text-2xl mb-3">🌙</div>
+            <h3 class="font-semibold text-white mb-2">Light / Dark Theme</h3>
+            <p class="text-sm text-slate-400">Toggle between dark and light themes via the header button. Your preference persists in localStorage. Chart colors adapt automatically.</p>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6">
+            <div class="text-2xl mb-3">📱</div>
+            <h3 class="font-semibold text-white mb-2">Responsive Layout</h3>
+            <p class="text-sm text-slate-400">Dashboard adapts to tablet (1024px) and mobile (768px) breakpoints. Non-essential columns hide on smaller screens, and layouts switch from grid to stack.</p>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl border border-slate-700/40 p-6">
+            <div class="text-2xl mb-3">📤</div>
+            <h3 class="font-semibold text-white mb-2">Export Data</h3>
+            <p class="text-sm text-slate-400">Export run history as JSON or CSV from the Runs tab, or export cost data as JSON or CSV from the Cost tab. Filtered results export only matching runs.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LIGHTBOX -->
+  <div class="lightbox" id="lightbox">
+    <img src="" alt="Enlarged screenshot" id="lightbox-img" />
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-slate-800/60 bg-slate-950 py-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col md:flex-row items-center justify-between gap-4 mb-4">
+        <div class="flex items-center gap-3">
+          <img src="https://github.com/srnichols.png" alt="Scott Nichols" class="w-8 h-8 rounded-full border border-slate-700" loading="lazy" />
+          <p class="text-sm text-slate-500">Created by <a href="https://github.com/srnichols" class="text-forge-400 hover:underline">Scott Nichols</a></p>
+        </div>
+        <div class="flex gap-4">
+          <a href="https://github.com/srnichols" class="text-sm text-slate-500 hover:text-slate-300">GitHub</a>
+          <a href="https://www.linkedin.com/in/srnichols/" class="text-sm text-slate-500 hover:text-slate-300">LinkedIn</a>
+        </div>
+      </div>
+      <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+        <p class="text-sm text-slate-600">&copy; 2026 Plan Forge. Open source under the MIT License.</p>
+        <div class="flex gap-6">
+          <a href="index.html" class="text-sm text-slate-500 hover:text-slate-300">Home</a>
+          <a href="docs.html" class="text-sm text-slate-500 hover:text-slate-300">Docs</a>
+          <a href="capabilities.html" class="text-sm text-slate-500 hover:text-slate-300">Capabilities</a>
+          <a href="https://github.com/srnichols/plan-forge" class="text-sm text-slate-500 hover:text-slate-300">GitHub</a>
+          <a href="faq.html" class="text-sm text-slate-500 hover:text-slate-300">FAQ</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/shared.js"></script>
+  <script>
+    // Lightbox
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    document.querySelectorAll('.screenshot-card img').forEach(img => {
+      img.addEventListener('click', () => {
+        lightboxImg.src = img.src;
+        lightboxImg.alt = img.alt;
+        lightbox.classList.add('active');
+      });
+    });
+    lightbox.addEventListener('click', () => lightbox.classList.remove('active'));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.classList.remove('active'); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,2543 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plan Forge — Forge the Plan. Harden the Scope. Ship with Confidence.</title>
+  <meta name="description" content="Plan Forge is the AI-Native SDLC Forge Shop — one workshop, four stations (Smelt, Forge, Guard, Learn) covering every phase of the software lifecycle. Stop scope creep. Stop AI drift. Ship enterprise-grade software with confidence." />
+  <meta property="og:title" content="Plan Forge — Forge the Plan. Harden the Scope. Ship with Confidence." />
+  <meta property="og:description" content="The AI-Native SDLC Forge Shop. Smelt, Forge, Guard, Learn — one workshop, four stations, every phase of the software lifecycle." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://planforge.software/" />
+  <meta property="og:image" content="https://planforge.software/assets/brand/og-card-v2.webp" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:type" content="image/webp" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://planforge.software/assets/brand/og-card-v2.webp" />
+  <meta name="twitter:title" content="Plan Forge — The AI-Native SDLC Forge Shop" />
+  <meta name="twitter:description" content="The AI-Native SDLC Forge Shop — four stations (Smelt, Forge, Guard, Learn), 88 MCP tools, autonomous execution, live dashboard." />
+  <link rel="canonical" href="https://planforge.software/" />
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Plan Forge","url":"https://planforge.software","description":"The AI-Native SDLC Forge Shop — one workshop, four stations (Smelt, Forge, Guard, Learn) covering every phase of the software lifecycle","applicationCategory":"DeveloperApplication","operatingSystem":"Windows, macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Organization","name":"Plan Forge","url":"https://github.com/srnichols/plan-forge"}}
+  </script>
+  <link rel="icon" type="image/svg+xml" href="assets/plan-forge-logo.svg" />
+  <link rel="stylesheet" href="assets/tailwind.built.css" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    code, pre { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+    .hero-bg {
+      background:
+        radial-gradient(ellipse at 50% -10%, rgba(245, 158, 11, 0.18) 0%, transparent 65%),
+        radial-gradient(ellipse at 85% 40%, rgba(239, 68, 68, 0.08) 0%, transparent 55%),
+        radial-gradient(ellipse at 15% 60%, rgba(245, 158, 11, 0.06) 0%, transparent 50%),
+        #020617;
+    }
+
+    .grid-overlay {
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    .forge-glow {
+      box-shadow: 0 0 30px rgba(245, 158, 11, 0.35), 0 0 60px rgba(245, 158, 11, 0.12);
+    }
+
+    @keyframes pulse-soft {
+      0%, 100% { opacity: 0.7; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.02); }
+    }
+    .pulse-soft { animation: pulse-soft 4s ease-in-out infinite; }
+
+    /* Scroll reveal */
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Active nav */
+    nav a.nav-active { color: #f59e0b !important; }
+
+    /* Nav dropdown — click-controlled (see inline script below).
+       The dropdown <div> has Tailwind's `grid` class for its open layout,
+       which defaults to display:grid. We force it hidden and only show it
+       when JS adds .nav-dropdown-open to the trigger wrapper.
+       !important is required to beat Tailwind's `.grid` utility. */
+    .nav-dropdown-trigger > .nav-dropdown { display: none !important; }
+    .nav-dropdown-trigger.nav-dropdown-open > .nav-dropdown { display: grid !important; }
+
+    /* Copy feedback */
+    .copy-btn.copied { color: #34d399 !important; }
+
+    /* Back to top */
+    .back-to-top {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    .back-to-top.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Mobile readability: brighten text for glare resistance */
+    @media (max-width: 767px) {
+      .text-slate-400 { color: #cbd5e1 !important; }
+      .text-slate-500 { color: #94a3b8 !important; }
+      .text-slate-600 { color: #94a3b8 !important; }
+      td, th { color: #e2e8f0; }
+      code { color: #e2e8f0; }
+    }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 antialiased">
+
+  <!-- ================================================
+       NAVIGATION
+  ================================================ -->
+  <nav class="sticky top-0 z-50 bg-slate-950/92 backdrop-blur-md border-b border-slate-800/60">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+
+        <!-- Logo -->
+        <a href="#home" class="flex items-center gap-3 shrink-0">
+          <img src="assets/plan-forge-logo.svg" alt="Plan Forge" class="h-7 w-auto" />
+        </a>
+
+        <!-- Desktop links -->
+        <div class="hidden md:flex items-center gap-7">
+          <a href="#solution"   class="text-sm text-slate-400 hover:text-slate-100 transition-colors">How It Works</a>
+          <a href="#features"   class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Features</a>
+          <a href="#quickstart" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Quick Start</a>
+          <a href="examples.html" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Examples</a>
+          <a href="manual/" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Manual</a>
+          <a href="blog/" class="text-sm text-slate-400 hover:text-slate-100 transition-colors">Blog</a>
+          <div class="nav-dropdown-trigger relative">
+            <button class="text-sm text-slate-400 hover:text-slate-100 transition-colors flex items-center gap-1">
+              Resources
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div class="nav-dropdown absolute top-full right-0 w-[640px] p-5 bg-slate-900 border border-slate-700/60 rounded-xl shadow-2xl grid grid-cols-3 gap-4">
+              <div>
+                <p class="text-xs font-bold text-amber-500 uppercase tracking-wider mb-2 px-2">Start Here</p>
+                <a href="shop-tour.html" class="block px-2 py-1.5 text-sm text-amber-400 hover:bg-slate-800 rounded transition-colors font-semibold">Shop Tour</a>
+                <a href="problem.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">The 80/20 Wall</a>
+                <a href="speckit-interop.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Spec Kit Interop</a>
+              </div>
+              <div>
+                <p class="text-xs font-bold text-forge-500 uppercase tracking-wider mb-2 px-2">Learn</p>
+                <a href="manual/" class="block px-2 py-1.5 text-sm text-forge-400 hover:bg-slate-800 rounded transition-colors font-semibold">Manual</a>
+                <a href="docs.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Documentation</a>
+              </div>
+              <div>
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Reference</p>
+                <a href="capabilities.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Capabilities</a>
+                <a href="architecture/" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Architecture</a>
+                <a href="dashboard.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Dashboard</a>
+                <a href="extensions.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">Extensions</a>
+                <a href="faq.html" class="block px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded transition-colors">FAQ</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Desktop CTA -->
+        <div class="hidden md:flex items-center gap-3">
+          <a href="https://github.com/srnichols/plan-forge" rel="noopener"
+             class="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-100 transition-colors">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z" clip-rule="evenodd"/>
+            </svg>
+            GitHub
+          </a>
+          <a href="#quickstart"
+             class="px-4 py-2 text-sm font-semibold bg-forge-500 hover:bg-forge-400 text-slate-900 rounded-lg transition-colors">
+            Get Started
+          </a>
+        </div>
+
+        <!-- Mobile menu button -->
+        <button id="mobile-btn" class="md:hidden p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors" aria-label="Open menu">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="hidden md:hidden border-t border-slate-800/60 bg-slate-950/98">
+      <div class="px-4 py-3 space-y-1">
+        <a href="#solution"   class="block py-2 text-sm text-slate-400 hover:text-slate-100">How It Works</a>
+        <a href="#features"   class="block py-2 text-sm text-slate-400 hover:text-slate-100">Features</a>
+        <a href="#quickstart" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Quick Start</a>
+        <a href="examples.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Examples</a>
+        <a href="blog/" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Blog</a>
+        <a href="shop-tour.html" class="block py-2 text-sm text-amber-400 hover:text-slate-100 font-semibold">Shop Tour</a>
+        <a href="manual/" class="block py-2 text-sm text-forge-400 hover:text-slate-100 font-semibold">Manual</a>
+        <a href="problem.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">The 80/20 Wall</a>
+        <a href="extensions.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Extensions</a>
+        <a href="speckit-interop.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Spec Kit Interop</a>
+        <a href="docs.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Docs</a>
+        <a href="dashboard.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Dashboard</a>
+        <a href="architecture/" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Architecture</a>
+        <a href="faq.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">FAQ</a>
+        <a href="capabilities.html" class="block py-2 text-sm text-slate-400 hover:text-slate-100">Capabilities</a>
+        <a href="https://github.com/srnichols/plan-forge" rel="noopener" class="block py-2 text-sm text-forge-400 font-semibold">GitHub →</a>
+      </div>
+    </div>
+  </nav>
+
+
+  <!-- ================================================
+       HERO
+  ================================================ -->
+  <section id="home" class="hero-bg grid-overlay relative overflow-hidden">
+    <!-- Decorative glows -->
+    <div class="absolute top-16 left-1/3 w-[500px] h-[500px] bg-amber-500/8 rounded-full blur-3xl pointer-events-none pulse-soft"></div>
+    <div class="absolute top-48 right-1/4 w-72 h-72 bg-red-500/6 rounded-full blur-3xl pointer-events-none"></div>
+
+    <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-32 text-center">
+
+      <!-- Badge -->
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 mb-8 rounded-full bg-slate-800/80 border border-slate-700/60 text-sm text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-forge-500 animate-pulse"></span>
+        Open Source · MIT License · Dogfooded · v2.90.10
+      </div>
+
+      <!-- Logo -->
+      <div class="mb-8">
+        <img src="assets/plan-forge-logo.svg" alt="Plan Forge" class="h-16 md:h-20 mx-auto" />
+      </div>
+
+      <!-- Headline -->
+      <h1 class="text-5xl md:text-7xl font-black tracking-tight text-white mb-6 leading-[1.05]">
+        The AI-Native<br />
+        SDLC&nbsp;<span class="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-500">Forge&nbsp;Shop</span>.
+      </h1>
+
+      <p class="text-xl md:text-2xl text-slate-400 max-w-3xl mx-auto leading-relaxed mb-6">
+        One workshop. <strong class="text-slate-200">Four Stations.</strong> Every phase of your software lifecycle — <span class="text-amber-300">Smelt</span>, <span class="text-amber-300">Forge</span>, <span class="text-amber-300">Guard</span>, <span class="text-amber-300">Learn</span> — under one roof, AI-run, human-supervised.
+      </p>
+
+      <!-- ─── A6 · Two-sentence positioning block (verbatim across docs/index.html, README.md, what-is-plan-forge.html) ─── -->
+      <div class="max-w-3xl mx-auto mb-8 rounded-2xl border border-slate-700/50 bg-slate-900/40 p-5 sm:p-6 text-left">
+        <p class="text-base text-slate-300 leading-relaxed mb-3">
+          Plan Forge is the orchestration harness that sits <strong class="text-amber-300">on top of</strong> GitHub Copilot (and other AI coding tools). It does not replace your model or your IDE — it adds the SDLC layer GitHub deliberately leaves to the ecosystem: <span class="text-slate-200">planning, validation gates, memory, cost control, and reviewer separation</span>.
+        </p>
+        <p class="text-base text-slate-300 leading-relaxed">
+          It is also licensed MIT because your SDLC is yours, and your institutional memory lives in <strong class="text-amber-300">OpenBrain</strong> — a user-owned service — because your accumulated decisions should not be trapped inside any one AI vendor.
+        </p>
+        <p class="text-xs text-slate-500 mt-3 italic">Harness on substrate, not a Copilot replacement. See the <a href="manual/github-stack-alignment.html" class="text-amber-400 hover:underline">GitHub stack alignment</a> and <a href="manual/plan-forge-on-the-github-stack.html" class="text-amber-400 hover:underline">surface-by-surface map</a>.</p>
+      </div>
+
+      <p class="text-base md:text-lg text-slate-500 max-w-2xl mx-auto leading-relaxed mb-10 italic">
+        "A blacksmith without a shop is just a hammer in a hand." — Plan Forge gives your AI agent the whole shop.
+      </p>
+
+      <!-- Read the problem story -->
+      <p class="text-sm text-slate-500 mb-6">
+        Spending thousands on AI tokens and hitting the 80% wall? <a href="problem.html" class="text-forge-400 hover:underline">Read why — and how to fix it →</a>
+      </p>
+
+      <!-- Hero illustration — Forge Shop panorama (all four stations in one scene) -->
+      <div class="mb-10 max-w-5xl mx-auto">
+        <img src="assets/brand/forge-shop-panorama.webp" alt="The Forge Shop: crucible smelting molten iron, anvil with hammer mid-strike, rune-inscribed watchtower scanning, and a golden brain absorbing event streams — all four stations in one workshop." class="w-full rounded-2xl border border-slate-700/40 shadow-2xl shadow-amber-500/10" loading="eager" />
+        <p class="text-xs text-slate-600 mt-3 italic">Smelt → Forge → Guard → Learn — every SDLC phase, one shop.</p>
+      </div>
+
+      <!-- Verified metrics -->
+      <div class="mb-12 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
+        <div class="bg-slate-800/60 rounded-xl p-4 text-center border border-slate-700/30">
+          <div class="text-2xl font-bold text-forge-400">28+</div>
+          <div class="text-xs text-slate-500">phases self-built</div>
+        </div>
+        <div class="bg-slate-800/60 rounded-xl p-4 text-center border border-slate-700/30">
+          <div class="text-2xl font-bold text-green-400">3285</div>
+          <div class="text-xs text-slate-500">self-tests passing</div>
+        </div>
+        <div class="bg-slate-800/60 rounded-xl p-4 text-center border border-slate-700/30">
+          <div class="text-2xl font-bold text-blue-400">67</div>
+          <div class="text-xs text-slate-500">MCP tools</div>
+        </div>
+        <div class="bg-slate-800/60 rounded-xl p-4 text-center border border-slate-700/30">
+          <div class="text-2xl font-bold text-purple-400">0</div>
+          <div class="text-xs text-slate-500">manual rollbacks</div>
+        </div>
+      </div>
+
+      <!-- CTAs -->
+      <div class="flex flex-col sm:flex-row gap-4 justify-center mb-16">
+        <a href="#quickstart"
+           class="group inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold bg-forge-500 hover:bg-forge-400 text-slate-900 rounded-xl transition-all transform hover:scale-105 forge-glow">
+          Start Building Right
+          <svg class="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+          </svg>
+        </a>
+        <a href="https://github.com/srnichols/plan-forge" rel="noopener"
+           class="inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl border border-slate-700 transition-all">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z" clip-rule="evenodd"/>
+          </svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <!-- Quick Forge Card — 4 steps to productive -->
+      <div class="max-w-2xl mx-auto mb-16 rounded-2xl border border-forge-500/30 bg-gradient-to-br from-forge-500/8 to-slate-800/40 p-6 sm:p-8">
+        <h3 class="text-lg font-bold text-white mb-1 text-center">5-Minute Quick Forge</h3>
+        <p class="text-xs text-slate-500 mb-5 text-center">Zero to hardened plan execution in 4 steps</p>
+        <ol class="space-y-3 text-sm">
+          <li class="flex items-start gap-3">
+            <span class="w-6 h-6 rounded-full bg-forge-500/20 border border-forge-500/40 flex items-center justify-center text-forge-400 text-xs font-bold shrink-0 mt-0.5">1</span>
+            <div>
+              <span class="text-white font-medium">Install the plugin</span>
+              <span class="text-slate-500 ml-1">—</span>
+              <a href="vscode://chat-plugin/install?source=srnichols/plan-forge" class="text-forge-400 hover:underline ml-1">One-click install for VS Code</a>
+            </div>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="w-6 h-6 rounded-full bg-forge-500/20 border border-forge-500/40 flex items-center justify-center text-forge-400 text-xs font-bold shrink-0 mt-0.5">2</span>
+            <div>
+              <span class="text-white font-medium">Init your project</span>
+              <span class="text-slate-500 ml-1">—</span>
+              <code class="text-xs bg-slate-800 px-1.5 py-0.5 rounded ml-1 text-slate-300">pforge init -Preset dotnet</code>
+            </div>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="w-6 h-6 rounded-full bg-forge-500/20 border border-forge-500/40 flex items-center justify-center text-forge-400 text-xs font-bold shrink-0 mt-0.5">3</span>
+            <div>
+              <span class="text-white font-medium">Describe your feature</span>
+              <span class="text-slate-500 ml-1">— select the <strong class="text-slate-300">Specifier</strong> agent in Copilot Chat</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="w-6 h-6 rounded-full bg-forge-500/20 border border-forge-500/40 flex items-center justify-center text-forge-400 text-xs font-bold shrink-0 mt-0.5">4</span>
+            <div>
+              <span class="text-white font-medium">Click through the pipeline</span>
+              <span class="text-slate-500 ml-1">— Specify → Harden → Execute → Review → Ship</span>
+            </div>
+          </li>
+        </ol>
+        <p class="text-xs text-slate-600 mt-4 text-center">
+          <a href="#quickstart" class="text-forge-400 hover:underline">Detailed setup guide below ↓</a>
+          <span class="mx-2">·</span>
+          <a href="manual/quickstart-install.html" class="text-slate-500 hover:underline">Step-by-step manual quickstart</a>
+          <span class="mx-2">·</span>
+          <a href="manual/quick-reference.html" class="text-slate-500 hover:underline">Quick reference card</a>
+        </p>
+      </div>
+
+      <!-- Choose your path — audience-specific 5-minute walkthroughs -->
+      <div class="mt-4">
+        <h3 class="text-lg font-bold text-white mb-2 text-center">Pick the path that matches you</h3>
+        <p class="text-xs text-slate-500 mb-6 text-center">Five short walkthroughs — same product, framed for who you are.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <a href="https://github.com/srnichols/plan-forge/blob/master/docs/demos/independent-dev-demo.md" class="group p-5 rounded-xl bg-slate-800/50 border border-slate-700/40 hover:border-forge-500/40 transition-colors">
+            <div class="text-2xl mb-2">🧑‍💻</div>
+            <h4 class="text-sm font-bold text-white mb-1 group-hover:text-forge-400 transition-colors">Solo Developer</h4>
+            <p class="text-xs text-slate-500 leading-snug">One setup, all your AI tools — Claude, Cursor, Codex, Copilot. <span class="text-slate-600">10–15 min</span></p>
+          </a>
+          <a href="https://github.com/srnichols/plan-forge/blob/master/docs/demos/spec-kit-users-demo.md" class="group p-5 rounded-xl bg-slate-800/50 border border-slate-700/40 hover:border-green-500/40 transition-colors">
+            <div class="text-2xl mb-2">🌱</div>
+            <h4 class="text-sm font-bold text-white mb-1 group-hover:text-green-400 transition-colors">Spec Kit User</h4>
+            <p class="text-xs text-slate-500 leading-snug">Write specs with Spec Kit. Enforce them with Plan Forge. <span class="text-slate-600">10 min</span></p>
+          </a>
+          <a href="https://github.com/srnichols/plan-forge/blob/master/docs/demos/team-lead-demo.md" class="group p-5 rounded-xl bg-slate-800/50 border border-slate-700/40 hover:border-blue-500/40 transition-colors">
+            <div class="text-2xl mb-2">📊</div>
+            <h4 class="text-sm font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">Team Lead / Manager</h4>
+            <p class="text-xs text-slate-500 leading-snug">Measurable AI quality, CI enforcement, budget tracking. <span class="text-slate-600">15 min</span></p>
+          </a>
+          <a href="https://github.com/srnichols/plan-forge/blob/master/docs/demos/microsoft-enterprise-demo.md" class="group p-5 rounded-xl bg-slate-800/50 border border-slate-700/40 hover:border-sky-500/40 transition-colors">
+            <div class="text-2xl mb-2">🏢</div>
+            <h4 class="text-sm font-bold text-white mb-1 group-hover:text-sky-400 transition-colors">Microsoft / Enterprise</h4>
+            <p class="text-xs text-slate-500 leading-snug">Same VS Code + Copilot — with guardrails and quality scores. <span class="text-slate-600">15–20 min</span></p>
+          </a>
+          <a href="https://github.com/srnichols/plan-forge/blob/master/docs/demos/claude-code-demo.md" class="group p-5 rounded-xl bg-slate-800/50 border border-slate-700/40 hover:border-purple-500/40 transition-colors">
+            <div class="text-2xl mb-2">⚡</div>
+            <h4 class="text-sm font-bold text-white mb-1 group-hover:text-purple-400 transition-colors">Claude Code Power User</h4>
+            <p class="text-xs text-slate-500 leading-snug">Most automated AI pipeline available — Full Auto + MCP tools. <span class="text-slate-600">12–15 min</span></p>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       THE FOUR STATIONS — tour of the Forge Shop
+  ================================================ -->
+  <!-- Shared SVG sprite for station icons (inline so `<use href="#smelt"/>` works) -->
+  <div aria-hidden="true" class="hidden">
+    <!-- prettier-ignore -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute">
+      <symbol id="icon-smelt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9h14l-1.5 8a3 3 0 0 1-3 2.5h-5a3 3 0 0 1-3-2.5L5 9z"/><path d="M3 9h18"/><path d="M9 5v4M15 5v4"/><path d="M12 14v3"/><circle cx="12" cy="19.5" r="0.75" fill="currentColor"/></symbol>
+      <symbol id="icon-forge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h14a2 2 0 0 1 2 2v1H5a2 2 0 0 1-2-2v-1z"/><path d="M7 15v3h10v-3"/><path d="M5 20h14"/><path d="M14 12V8l4-4"/><path d="M16 3l3 3"/></symbol>
+      <symbol id="icon-guard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.3 8.3 8 9 4.7-.7 8-4.5 8-9V6l-8-3z"/><path d="M8.5 12c1-1.8 2.3-2.8 3.5-2.8s2.5 1 3.5 2.8c-1 1.8-2.3 2.8-3.5 2.8S9.5 13.8 8.5 12z"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/></symbol>
+      <symbol id="icon-learn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5a3 3 0 0 0-3 3 3 3 0 0 0-2 5.5A3 3 0 0 0 6 18a3 3 0 0 0 3 2V5z"/><path d="M15 5a3 3 0 0 1 3 3 3 3 0 0 1 2 5.5 3 3 0 0 1-2 4.5 3 3 0 0 1-3 2V5z"/><path d="M12 5v15"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 9h-2M12 15h2"/></symbol>
+    </svg>
+  </div>
+
+  <section id="stations" class="py-24 bg-slate-950 grid-overlay">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">The Four Stations</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">A Tour of the Forge Shop</h2>
+        <p class="text-xl text-slate-400 max-w-3xl mx-auto">
+          Every station is a phase of the software lifecycle. Every station is run by AI, watched by you, and wired into the next.
+        </p>
+      </div>
+
+      <!-- Smelt -->
+      <article id="smelt" class="grid md:grid-cols-2 gap-10 items-center mb-24 reveal">
+        <div class="order-2 md:order-1">
+          <div class="inline-flex items-center gap-3 mb-4 text-amber-400">
+            <svg class="w-8 h-8" aria-hidden="true"><use href="#icon-smelt"/></svg>
+            <span class="text-xs uppercase tracking-widest font-bold">Station 1 · Smelt</span>
+          </div>
+          <h3 class="text-3xl md:text-4xl font-bold text-white mb-4">Raw idea → refined spec.</h3>
+          <p class="text-slate-400 text-lg leading-relaxed mb-4">
+            Every plan starts as ore. The Smelt station interviews you, extracts the real requirements, flags hidden assumptions, and pours out a <strong class="text-slate-200">Scope Contract</strong> the AI can't argue with.
+          </p>
+          <ul class="space-y-2 text-slate-400 text-sm">
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> Specifier agent · hardening runbook · `/specify` slash command</li>
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> Output: a file the Forge station can execute without follow-up questions</li>
+          </ul>
+        </div>
+        <div class="order-1 md:order-2">
+          <img src="assets/brand/station-smelt.webp" alt="A stone crucible with molten iron pouring into a mold, blacksmith tongs resting on the rim, parchment checklist being inscribed in the warm ember light." class="w-full rounded-2xl border border-slate-700/40 shadow-xl shadow-amber-500/5" loading="lazy" />
+        </div>
+      </article>
+
+      <!-- Forge -->
+      <article id="forge-station" class="grid md:grid-cols-2 gap-10 items-center mb-24 reveal">
+        <div>
+          <img src="assets/brand/station-forge.webp" alt="Anvil with hammer mid-strike, sparks forming small geometric shapes — slices, blocks, and an execution graph glowing within the shower." class="w-full rounded-2xl border border-slate-700/40 shadow-xl shadow-amber-500/5" loading="lazy" />
+        </div>
+        <div>
+          <div class="inline-flex items-center gap-3 mb-4 text-amber-400">
+            <svg class="w-8 h-8" aria-hidden="true"><use href="#icon-forge"/></svg>
+            <span class="text-xs uppercase tracking-widest font-bold">Station 2 · Forge</span>
+          </div>
+          <h3 class="text-3xl md:text-4xl font-bold text-white mb-4">Spec → shipped code.</h3>
+          <p class="text-slate-400 text-lg leading-relaxed mb-4">
+            The anvil. Plans are broken into <strong class="text-slate-200">slices</strong> and struck one at a time — each a commit, each with its own gate. The hammer doesn't swing twice on the same slice unless tests pass.
+          </p>
+          <ul class="space-y-2 text-slate-400 text-sm">
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> `pforge run-plan` · slice gates · quorum mode · cost ledger</li>
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> Output: green tests, green CI, green ledger — or an honest stop</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- Guard -->
+      <article id="guard" class="grid md:grid-cols-2 gap-10 items-center mb-24 reveal">
+        <div class="order-2 md:order-1">
+          <div class="inline-flex items-center gap-3 mb-4 text-cyan-400">
+            <svg class="w-8 h-8" aria-hidden="true"><use href="#icon-guard"/></svg>
+            <span class="text-xs uppercase tracking-widest font-bold">Station 3 · Guard</span>
+          </div>
+          <h3 class="text-3xl md:text-4xl font-bold text-white mb-4">Standing watch over the floor.</h3>
+          <p class="text-slate-400 text-lg leading-relaxed mb-4">
+            The watchtower. <strong class="text-slate-200">LiveGuard</strong> scans secrets, env drift, CVE surface, and regression risk — before deploy, after every slice, every hour. Incidents become triaged fix plans, not pager calls at 3 AM.
+          </p>
+          <ul class="space-y-2 text-slate-400 text-sm">
+            <li class="flex gap-2"><span class="text-cyan-400">▸</span> forge_secret_scan · forge_drift_report · forge_regression_guard</li>
+            <li class="flex gap-2"><span class="text-cyan-400">▸</span> Output: pre-deploy block, post-slice advisory, incident → fix-proposal</li>
+          </ul>
+        </div>
+        <div class="order-1 md:order-2">
+          <img src="assets/brand/station-guard.webp" alt="Stone watchtower at the edge of the forge floor, rune-inscribed shield glowing cyan, sentry silhouettes patrolling the perimeter — a CVE-labeled scroll intercepted mid-air." class="w-full rounded-2xl border border-slate-700/40 shadow-xl shadow-cyan-500/5" loading="lazy" />
+        </div>
+      </article>
+
+      <!-- Learn -->
+      <article id="learn" class="grid md:grid-cols-2 gap-10 items-center reveal">
+        <div>
+          <img src="assets/brand/station-learn.webp" alt="A golden brain-shaped crystal suspended over an anvil, tendrils of light absorbing event motes, runic memory inscriptions floating upward into the crystal." class="w-full rounded-2xl border border-slate-700/40 shadow-xl shadow-amber-500/5" loading="lazy" />
+        </div>
+        <div>
+          <div class="inline-flex items-center gap-3 mb-4 text-amber-400">
+            <svg class="w-8 h-8" aria-hidden="true"><use href="#icon-learn"/></svg>
+            <span class="text-xs uppercase tracking-widest font-bold">Station 4 · Learn</span>
+          </div>
+          <h3 class="text-3xl md:text-4xl font-bold text-white mb-4">Every strike teaches the next.</h3>
+          <p class="text-slate-400 text-lg leading-relaxed mb-4">
+            The brain above the bench. Plan Forge remembers every incident, every fix, every review — and feeds it back into the next session as <strong class="text-slate-200">OpenBrain memories</strong>, bug-registry entries, and testbed findings. The shop gets sharper the longer you run it.
+          </p>
+          <ul class="space-y-2 text-slate-400 text-sm">
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> OpenBrain · bug registry · testbed findings · health-DNA trend</li>
+            <li class="flex gap-2"><span class="text-amber-400">▸</span> Output: tomorrow's plan is colder, faster, and less wrong</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- Tour CTA -->
+      <div class="text-center mt-16">
+        <p class="text-slate-500 text-sm mb-4">Want the full walkthrough?</p>
+        <a href="shop-tour.html" class="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl border border-slate-700 transition-all">
+          Take the Shop Tour
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+        </a>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       THE FLOOR MANAGER — Inner Loop + Forge-Master
+  ================================================ -->
+  <section id="floor-manager" class="py-24 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-y border-slate-800/60 relative overflow-hidden">
+    <div class="absolute inset-0 grid-overlay opacity-40 pointer-events-none"></div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div class="reveal">
+          <p class="text-cyan-400 text-sm font-semibold tracking-widest uppercase mb-3">Above the Four Stations</p>
+          <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">
+            The <span class="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-cyan-400">Floor Manager</span>.
+          </h2>
+          <p class="text-xl text-slate-300 leading-relaxed mb-6">
+            Four stations don't run themselves. <strong class="text-slate-100">Forge-Master</strong> and the <strong class="text-slate-100">Inner Loop</strong> walk the floor — rerouting work when a slice fails, retrying with what they learned, and feeding every outcome back into Smelt as the next ore.
+          </p>
+          <p class="text-slate-400 leading-relaxed mb-8">
+            This is what turns a 7-step pipeline into a <em>closed loop</em>: every failed test becomes a Crucible idea, every regression becomes a slice, every postmortem becomes a memory. The shop sharpens itself.
+          </p>
+
+          <!-- Capability bullets -->
+          <ul class="space-y-3 mb-8">
+            <li class="flex gap-3 text-slate-300">
+              <span class="text-amber-400 font-bold mt-0.5">⟲</span>
+              <span><strong class="text-slate-100">Reflexion retries</strong> — when a slice fails, the worker re-reads the failure, drafts a fix, and tries again with bounded attempts.</span>
+            </li>
+            <li class="flex gap-3 text-slate-300">
+              <span class="text-amber-400 font-bold mt-0.5">📜</span>
+              <span><strong class="text-slate-100">Trajectories &amp; postmortems</strong> — every attempt is recorded; failures auto-file meta-bugs against Plan Forge itself.</span>
+            </li>
+            <li class="flex gap-3 text-slate-300">
+              <span class="text-amber-400 font-bold mt-0.5">🛡️</span>
+              <span><strong class="text-slate-100">Adaptive gates</strong> — gates that catch real bugs get promoted; brittle ones get rewritten.</span>
+            </li>
+            <li class="flex gap-3 text-slate-300">
+              <span class="text-cyan-400 font-bold mt-0.5">🧭</span>
+              <span><strong class="text-slate-100">Forge-Master</strong> — the read-only foreman: classifies your intent, pulls memory, and orchestrates tool calls so you don't chain them by hand.</span>
+            </li>
+            <li class="flex gap-3 text-slate-300">
+              <span class="text-cyan-400 font-bold mt-0.5">🌐</span>
+              <span><strong class="text-slate-100">Cross-project federation</strong> — lessons from one repo become guardrails in the next. Opt-in, Dashboard-configurable.</span>
+            </li>
+          </ul>
+
+          <div class="flex flex-wrap gap-3">
+            <a href="manual/inner-loop.html" class="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold bg-amber-500 hover:bg-amber-400 text-slate-900 rounded-xl transition-all">
+              Read: The Inner Loop
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+            </a>
+            <a href="manual/how-it-works.html#closed-loop" class="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl border border-slate-700 transition-all">
+              See the closed loop
+            </a>
+          </div>
+        </div>
+
+        <div class="reveal">
+          <div class="relative">
+            <div class="absolute -inset-4 bg-gradient-to-r from-amber-500/10 via-cyan-500/10 to-amber-500/10 blur-2xl rounded-3xl"></div>
+            <img src="assets/brand/floor-manager.webp"
+                 alt="A glowing golden-brain mechanical foreman suspended above the forge floor, amber and cyan tendrils linking the four station silhouettes (crucible, anvil, watchtower, brain-crystal) in a closed feedback loop."
+                 class="relative w-full rounded-2xl border border-slate-700/40 shadow-2xl shadow-amber-500/10"
+                 loading="lazy" />
+          </div>
+          <p class="text-xs text-slate-500 italic mt-4 text-center">
+            The foreman walks the floor — Forge-Master orchestrates, the Inner Loop closes the cycle.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       THE PROBLEM
+  ================================================ -->
+  <section id="problem" class="py-24 bg-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">The Problem</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">AI Agents Drift Without Guardrails</h2>
+        <p class="text-xl text-slate-400 max-w-2xl mx-auto">
+          Fast isn't the same as good. Without structure, AI-generated code tends to be untestable, insecure, and impossible to maintain at scale.
+        </p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-16">
+        <div class="p-6 rounded-2xl bg-slate-800/60 border border-red-900/30 hover:border-red-700/40 transition-colors">
+          <div class="w-10 h-10 rounded-lg bg-red-900/40 flex items-center justify-center mb-4 text-xl">🔀</div>
+          <h3 class="font-semibold text-white mb-2">Silent Scope Creep</h3>
+          <p class="text-sm text-slate-400">"I'll also add..." — features you never asked for, silently introduced. You find out at code review.</p>
+        </div>
+        <div class="p-6 rounded-2xl bg-slate-800/60 border border-red-900/30 hover:border-red-700/40 transition-colors">
+          <div class="w-10 h-10 rounded-lg bg-red-900/40 flex items-center justify-center mb-4 text-xl">🎲</div>
+          <h3 class="font-semibold text-white mb-2">Undiscussed Decisions</h3>
+          <p class="text-sm text-slate-400">Database pattern, framework choice, architecture — picked without asking. You discover the consequences too late.</p>
+        </div>
+        <div class="p-6 rounded-2xl bg-slate-800/60 border border-red-900/30 hover:border-red-700/40 transition-colors">
+          <div class="w-10 h-10 rounded-lg bg-red-900/40 flex items-center justify-center mb-4 text-xl">🚫</div>
+          <h3 class="font-semibold text-white mb-2">Skipped Validation</h3>
+          <p class="text-sm text-slate-400">Ships code that doesn't build or breaks tests. "It should work" is not a quality gate for production.</p>
+        </div>
+        <div class="p-6 rounded-2xl bg-slate-800/60 border border-red-900/30 hover:border-red-700/40 transition-colors">
+          <div class="w-10 h-10 rounded-lg bg-red-900/40 flex items-center justify-center mb-4 text-xl">🧠</div>
+          <h3 class="font-semibold text-white mb-2">No Memory</h3>
+          <p class="text-sm text-slate-400">Every session starts from zero. You re-explain the same architecture decisions to a blank-slate AI every single time.</p>
+        </div>
+      </div>
+
+      <!-- Blacksmith quote -->
+      <div class="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/40 max-w-3xl mx-auto text-center">
+        <blockquote class="text-xl md:text-2xl text-slate-200 font-medium italic leading-relaxed">
+          "A blacksmith doesn't hand raw iron to a customer.<br />They heat it, hammer it, and temper it until it holds its edge."
+        </blockquote>
+        <p class="text-slate-500 text-sm mt-4">Plan Forge does the same for your AI-generated software.</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       THE SOLUTION — 7-Step Pipeline
+  ================================================ -->
+  <section id="solution" class="py-24 bg-slate-950 grid-overlay">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">The Solution</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">The 7-Step Hardening Pipeline</h2>
+        <p class="text-xl text-slate-400 max-w-2xl mx-auto">
+          A structured pipeline across 4 focused sessions that converts rough feature ideas into shipped, reviewed, production-grade code.
+        </p>
+        <p class="text-sm text-slate-500 max-w-2xl mx-auto mt-4 italic">Deterministic by default — with a reflective inner loop (retries with reflexion context, trajectories, auto-skills, postmortems) that turns every slice into a research step. The ten opt-in subsystems compose into a <a href="manual/self-deterministic-loop.html" class="text-forge-400 hover:text-forge-500">self-deterministic agent loop</a>.</p>
+      </div>
+
+      <!-- Pipeline -->
+      <div class="relative mb-16">
+        <!-- Station lanes — groups the 7 steps into the 3 workshop stations (desktop) -->
+        <div class="hidden lg:grid grid-cols-7 gap-4 mb-4">
+          <div class="col-span-3 px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500/10 to-amber-500/5 border border-amber-500/30 flex items-center justify-center gap-2 text-xs font-semibold text-amber-300">
+            <span>🪨</span><span>Smelt</span>
+            <span class="hidden xl:inline text-slate-500 font-normal">· idea → scope contract</span>
+          </div>
+          <div class="col-span-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-300">
+            <span>🔨</span><span>Forge</span>
+            <span class="hidden xl:inline text-slate-500 font-normal">· code → no TODOs</span>
+          </div>
+          <div class="col-span-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-rose-500/10 via-rose-500/5 to-purple-500/10 border border-rose-500/30 flex items-center justify-center gap-2 text-xs font-semibold text-rose-300">
+            <span>🛡️</span><span>Guard &amp; Ship</span>
+            <span class="hidden xl:inline text-slate-500 font-normal">· audit → commit</span>
+          </div>
+        </div>
+        <!-- Station lanes — compact chips for tablet/mobile -->
+        <div class="flex lg:hidden justify-center flex-wrap gap-2 mb-4 text-xs">
+          <span class="px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 font-semibold">🪨 Smelt</span>
+          <span class="text-slate-600">→</span>
+          <span class="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">🔨 Forge</span>
+          <span class="text-slate-600">→</span>
+          <span class="px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-300 font-semibold">🛡️ Guard &amp; Ship</span>
+        </div>
+
+        <!-- Connecting line (desktop) -->
+        <div class="hidden lg:block absolute top-[calc(2.75rem+3.25rem)] left-[calc(100%/14)] right-[calc(100%/14)] h-px bg-gradient-to-r from-amber-500/30 via-orange-500/30 to-red-500/30 pointer-events-none"></div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4">
+
+          <!-- Step 0 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-amber-500/20 border-2 border-amber-500/70 flex items-center justify-center text-amber-300 font-black text-lg mb-3 relative z-10">0</div>
+            <h3 class="text-sm font-bold text-white mb-1">Specify</h3>
+            <p class="text-xs text-slate-500 mb-2">What &amp; why</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-amber-900/40 text-amber-400 border border-amber-800/40">Session 1</span>
+          </div>
+
+          <!-- Step 1 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-sky-500/20 border-2 border-sky-500/70 flex items-center justify-center text-sky-300 font-black text-lg mb-3 relative z-10">1</div>
+            <h3 class="text-sm font-bold text-white mb-1">Pre-flight</h3>
+            <p class="text-xs text-slate-500 mb-2">Verify setup</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-sky-900/40 text-sky-400 border border-sky-800/40">Session 1</span>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-sky-500/20 border-2 border-sky-500/70 flex items-center justify-center text-sky-300 font-black text-lg mb-3 relative z-10">2</div>
+            <h3 class="text-sm font-bold text-white mb-1">Harden</h3>
+            <p class="text-xs text-slate-500 mb-2">Scope contract</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-sky-900/40 text-sky-400 border border-sky-800/40">Session 1</span>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-emerald-500/20 border-2 border-emerald-500/70 flex items-center justify-center text-emerald-300 font-black text-lg mb-3 relative z-10">3</div>
+            <h3 class="text-sm font-bold text-white mb-1">Execute</h3>
+            <p class="text-xs text-slate-500 mb-2">Slice by slice</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-emerald-900/40 text-emerald-400 border border-emerald-800/40">Session 2</span>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-emerald-500/20 border-2 border-emerald-500/70 flex items-center justify-center text-emerald-300 font-black text-lg mb-3 relative z-10">4</div>
+            <h3 class="text-sm font-bold text-white mb-1">Sweep</h3>
+            <p class="text-xs text-slate-500 mb-2">No TODOs left</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-emerald-900/40 text-emerald-400 border border-emerald-800/40">Session 2</span>
+          </div>
+
+          <!-- Step 5 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-rose-500/20 border-2 border-rose-500/70 flex items-center justify-center text-rose-300 font-black text-lg mb-3 relative z-10">5</div>
+            <h3 class="text-sm font-bold text-white mb-1">Review</h3>
+            <p class="text-xs text-slate-500 mb-2">Drift detection</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-rose-900/40 text-rose-400 border border-rose-800/40">Session 3</span>
+          </div>
+
+          <!-- Step 6 -->
+          <div class="flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full bg-purple-500/20 border-2 border-purple-500/70 flex items-center justify-center text-purple-300 font-black text-lg mb-3 relative z-10">6</div>
+            <h3 class="text-sm font-bold text-white mb-1">Ship</h3>
+            <p class="text-xs text-slate-500 mb-2">Commit &amp; close</p>
+            <span class="px-2 py-0.5 rounded text-xs bg-purple-900/40 text-purple-400 border border-purple-800/40">Session 4</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Composed figure: the 7 steps don't run alone.
+           Forge-Master observes from above, an inner loop lives inside Step 3,
+           and OpenBrain memory feeds the next run. -->
+      <div class="mb-12 max-w-5xl mx-auto">
+        <figure class="rounded-2xl border border-slate-700/40 bg-slate-900/40 p-6 sm:p-8 shadow-2xl shadow-amber-500/5 space-y-6">
+
+          <!-- BAND 1 — Forge-Master advisor rail -->
+          <div class="relative">
+            <div class="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-amber-300/90 mb-3">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-amber-500/20 border border-amber-500/40 text-[10px]">⚡</span>
+              <span>Forge-Master</span>
+              <span class="text-slate-600 font-normal normal-case tracking-normal">· one advisor, three touchpoints</span>
+            </div>
+            <div class="relative h-10 flex items-center">
+              <!-- dashed rail -->
+              <div class="absolute inset-x-4 top-1/2 h-px border-t border-dashed border-amber-500/30 pointer-events-none"></div>
+              <!-- 3 anchor pills -->
+              <div class="relative z-10 grid grid-cols-3 gap-3 w-full">
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                  <span class="text-slate-300"><strong class="text-white">Intake</strong> · funnel ideas into Smelt</span>
+                </div>
+                <div class="flex items-center justify-center gap-2 text-xs">
+                  <span class="w-2 h-2 rounded-full bg-amber-400 pulse-soft"></span>
+                  <span class="text-slate-300"><strong class="text-white">Inside the slice</strong> · reasons during Execute</span>
+                </div>
+                <div class="flex items-center justify-end gap-2 text-xs">
+                  <span class="text-slate-300"><strong class="text-white">Ops &amp; advice</strong> · post-ship Q&amp;A</span>
+                  <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BAND 2 — Inner loop inside Step 3 -->
+          <div class="relative p-5 rounded-xl bg-emerald-950/30 border border-emerald-800/40">
+            <div class="flex items-start gap-4">
+              <div class="shrink-0 w-12 h-12 rounded-full bg-emerald-500/20 border-2 border-emerald-500/70 flex items-center justify-center text-emerald-300 font-black relative">
+                <span>3</span>
+                <span class="absolute -top-1 -right-1 text-amber-300 pulse-soft text-sm">✦</span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-sm font-bold text-white">Execute — with an inner loop</span>
+                  <span class="text-emerald-400 text-base" aria-hidden="true">⟳</span>
+                </div>
+                <p class="text-xs text-slate-400 mb-3">Every slice is a research step. When a gate fails, the loop closes instead of the run:</p>
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/70 border border-slate-700/50 text-slate-300">try</span>
+                  <span class="text-slate-600">→</span>
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/70 border border-slate-700/50 text-slate-300">reflect</span>
+                  <span class="text-slate-600">→</span>
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/70 border border-slate-700/50 text-slate-300">trajectory</span>
+                  <span class="text-slate-600">→</span>
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/70 border border-slate-700/50 text-slate-300">auto-skill</span>
+                  <span class="text-slate-600">→</span>
+                  <span class="px-2.5 py-1 rounded-md bg-slate-900/70 border border-slate-700/50 text-slate-300">postmortem</span>
+                  <a href="manual/inner-loop.html" class="ml-auto text-forge-400 hover:text-forge-500 text-xs">Inside the loop →</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BAND 3 — Learn / OpenBrain memory -->
+          <div class="relative p-5 rounded-xl bg-gradient-to-r from-purple-500/5 via-slate-800/40 to-amber-500/5 border border-purple-500/20">
+            <div class="flex items-center gap-4">
+              <div class="shrink-0 w-12 h-12 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-xl">🧠</div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-sm font-bold text-white">Learn — OpenBrain memory</span>
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700/50 text-slate-400">captures every run</span>
+                </div>
+                <p class="text-xs text-slate-400">Postmortems, trajectories, decisions, drift scores — all indexed. The next <span class="text-amber-300 font-semibold">Smelt</span> starts with what this run learned.</p>
+              </div>
+              <!-- Curved back-arrow (desktop only) -->
+              <div class="hidden sm:flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap">
+                <span class="text-amber-400">↺</span>
+                <span>feeds next Smelt</span>
+              </div>
+            </div>
+          </div>
+
+          <figcaption class="text-[11px] text-slate-600 text-center pt-2">
+            The 7 steps above are the floor plan. Forge-Master walks the floor, the inner loop lives inside the anvil, and Learn is the shop's memory.
+            <a href="manual/how-it-works.html" class="text-forge-400 hover:text-forge-500 ml-1">Full diagram →</a>
+          </figcaption>
+        </figure>
+      </div>
+
+      <!-- Why separate sessions? -->
+      <div class="mb-10 p-8 rounded-2xl bg-gradient-to-r from-slate-800/60 to-slate-800/30 border border-forge-500/20">
+        <h3 class="text-lg font-bold text-white mb-3">💡 Why 4 Separate Sessions Instead of One Long Chat?</h3>
+        <p class="text-sm text-slate-400 mb-4">Most people use AI as a single long conversation. Plan Forge breaks that pattern on purpose — because <strong class="text-white">the builder shouldn't grade its own exam</strong>.</p>
+        <div class="grid sm:grid-cols-2 gap-4 text-sm">
+          <div class="p-4 rounded-xl bg-red-950/20 border border-red-800/20">
+            <h4 class="font-semibold text-red-400 mb-2">Single Session (chatbot way)</h4>
+            <ul class="space-y-1.5 text-xs text-slate-400">
+              <li>• Context exhausts halfway through</li>
+              <li>• Same AI reviews its own work</li>
+              <li>• Scope creep goes unnoticed</li>
+              <li>• Failure = restart the whole conversation</li>
+            </ul>
+          </div>
+          <div class="p-4 rounded-xl bg-emerald-950/20 border border-emerald-800/20">
+            <h4 class="font-semibold text-emerald-400 mb-2">Plan Forge (4 sessions)</h4>
+            <ul class="space-y-1.5 text-xs text-slate-400">
+              <li>• Fresh context for each role</li>
+              <li>• Independent reviewer catches blind spots</li>
+              <li>• Scope drift detected immediately</li>
+              <li>• Failure = re-run only the failed session</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Why it works -->
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="p-6 rounded-2xl bg-slate-800/40 border border-slate-700/30">
+          <div class="text-2xl mb-3">🔒</div>
+          <h3 class="font-semibold text-white mb-2">Scope Locked in Session 1</h3>
+          <p class="text-sm text-slate-400">The execution contract is created and locked. Nothing can be added mid-build without restarting the contract. Drift becomes structurally impossible.</p>
+        </div>
+        <div class="p-6 rounded-2xl bg-slate-800/40 border border-slate-700/30">
+          <div class="text-2xl mb-3">🔍</div>
+          <h3 class="font-semibold text-white mb-2">Independent Audit Session</h3>
+          <p class="text-sm text-slate-400">The reviewer runs in a completely separate session with fresh context. The executor can't self-audit — that's like grading your own exam.</p>
+        </div>
+        <div class="p-6 rounded-2xl bg-slate-800/40 border border-slate-700/30">
+          <div class="text-2xl mb-3">✅</div>
+          <h3 class="font-semibold text-white mb-2">Validated at Every Slice</h3>
+          <p class="text-sm text-slate-400">Build and test must pass at every slice boundary before moving to the next. No shipping code that doesn't compile or that breaks existing tests.</p>
+        </div>
+      </div>
+
+      <!-- Three ways to run -->
+      <div class="mt-12 p-8 rounded-2xl bg-slate-800/30 border border-slate-700/30">
+        <h3 class="text-lg font-bold text-white mb-6 text-center">Three Ways to Run the Same Pipeline</h3>
+        <div class="grid md:grid-cols-3 gap-6 text-center">
+          <div>
+            <div class="text-2xl mb-2">🖱️</div>
+            <h4 class="font-semibold text-white mb-1">Pipeline Agents</h4>
+            <p class="text-sm text-slate-400">Click-through flow with handoff buttons. Smoothest experience. Context carries automatically.</p>
+            <p class="text-xs text-slate-600 mt-2">VS Code + GitHub Copilot</p>
+          </div>
+          <div>
+            <div class="text-2xl mb-2">📎</div>
+            <h4 class="font-semibold text-white mb-1">Prompt Templates</h4>
+            <p class="text-sm text-slate-400">Attach step files in Copilot Chat. See exactly what each step does. Best for learning the pipeline.</p>
+            <p class="text-xs text-slate-600 mt-2">VS Code + GitHub Copilot</p>
+          </div>
+          <div>
+            <div class="text-2xl mb-2">📋</div>
+            <h4 class="font-semibold text-white mb-1">Copy-Paste Prompts</h4>
+            <p class="text-sm text-slate-400">Copy prompts from the runbook. Works in any AI tool — Claude, Cursor, ChatGPT, terminal agents.</p>
+            <p class="text-xs text-slate-600 mt-2">Any AI Tool</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       FEATURES
+  ================================================ -->
+  <section id="features" class="py-24 bg-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Features</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">Enterprise-Grade by Default</h2>
+        <p class="text-xl text-slate-400 max-w-2xl mx-auto">
+          Guardrails, specialized reviewers, autonomous execution, cost tracking, and a live dashboard — every project gets the full suite.
+        </p>
+      </div>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+        <!-- Two-Layer Guardrails — spans 2 cols -->
+        <div class="lg:col-span-2 p-8 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-slate-700/50">
+          <div class="flex items-start gap-4 mb-6">
+            <div class="w-12 h-12 rounded-xl bg-forge-500/20 flex items-center justify-center text-2xl shrink-0">🛡️</div>
+            <div>
+              <h3 class="text-xl font-bold text-white mb-2">Two-Layer Guardrails</h3>
+              <p class="text-slate-400">Automatic protection at two levels. The baseline ships with every preset. The project profile is generated per-project via an interview prompt.</p>
+            </div>
+          </div>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-forge-400 mb-2">Layer 1 — Universal Baseline</h4>
+              <p class="text-xs text-slate-400 leading-relaxed">Architecture principles, OWASP security, TDD, error handling, type safety, async patterns. Ships automatically. No configuration needed.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-forge-400 mb-2">Layer 2 — Project Profile</h4>
+              <p class="text-xs text-slate-400 leading-relaxed">Coverage targets, latency SLAs, compliance requirements, domain-specific rules — generated from a one-time interview and stored in the repo.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reviewer Agents -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-orange-500/20 flex items-center justify-center text-2xl mb-4">🤖</div>
+          <h3 class="text-xl font-bold text-white mb-2">Specialized Reviewer Agents</h3>
+          <p class="text-sm text-slate-400 mb-4">Dedicated AI reviewer personas — each focused on one concern, checking it deeply.</p>
+          <ul class="space-y-2 text-xs text-slate-400">
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>Security Reviewer — OWASP Top 10</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>Architecture Reviewer — layer separation</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>Performance Analyzer — hot paths, allocations</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>Database Reviewer — N+1, safe queries</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>Test Runner + Deploy Helper</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>+ 8 cross-stack agents (API, accessibility, CI/CD, compliance, error handling...)</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-forge-400 shrink-0"></span>+ 6 pipeline agents (Specifier → Shipper)</li>
+          </ul>
+        </div>
+
+        <!-- Autonomous Execution — spans 2 cols -->
+        <div class="lg:col-span-2 p-8 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-blue-700/30">
+          <div class="flex items-start gap-4 mb-6">
+            <div class="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-2xl shrink-0">🚀</div>
+            <div>
+              <h3 class="text-xl font-bold text-white mb-2">Autonomous Execution & Monitoring</h3>
+              <p class="text-slate-400">One command runs an entire hardened plan — spawning AI workers, validating at every slice boundary, tracking cost, and reporting results. Monitor everything in a live dashboard.</p>
+            </div>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-4">
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-blue-400 mb-2">Run Plans</h4>
+              <p class="text-xs text-slate-400 leading-relaxed"><code class="text-blue-300">pforge run-plan &lt;plan&gt;</code> — automatic execution with DAG scheduling, validation gates, token tracking. Full Auto or Assisted modes.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-blue-400 mb-2">Live Dashboard</h4>
+              <p class="text-xs text-slate-400 leading-relaxed"><code class="text-blue-300">localhost:3100/dashboard</code> — real-time slice progress, cost charts, run history, session replay, quick actions.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-blue-400 mb-2">Parallel & Cost</h4>
+              <p class="text-xs text-slate-400 leading-relaxed"><code class="text-blue-300">[P]</code> tags for concurrent slices. 23-model pricing table. Per-slice token tracking. Monthly cost reports.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto-loading Instructions -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/20 flex items-center justify-center text-2xl mb-4">⚡</div>
+          <h3 class="text-xl font-bold text-white mb-2">Auto-Loading Instructions</h3>
+          <p class="text-sm text-slate-400">Instruction files load automatically based on the file being edited. Editing SQL? Database guardrails load. Editing auth? Security guardrails load. No action needed.</p>
+        </div>
+
+        <!-- Quorum Mode -->
+        <div class="p-8 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-red-700/30">
+          <div class="flex items-start gap-4 mb-4">
+            <div class="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center text-2xl shrink-0">🗳️</div>
+            <div>
+              <h3 class="text-xl font-bold text-white mb-1">Quorum Mode</h3>
+              <p class="text-sm text-slate-400">Multi-model consensus. Dispatch each slice to 3 AI models in parallel for independent dry-run analysis, synthesize the best approach, then execute with higher confidence.</p>
+            </div>
+          </div>
+          <div class="space-y-2 text-xs text-slate-400">
+            <div class="flex items-center gap-2"><span class="text-red-400">→</span> <code class="text-red-300">--quorum=auto</code> triggers only on complex slices (score ≥ 6)</div>
+            <div class="flex items-center gap-2"><span class="text-red-400">→</span> Complexity scored by 7 weighted signals (scope, deps, security, DB keywords...)</div>
+            <div class="flex items-center gap-2"><span class="text-red-400">→</span> A/B tested: <strong class="text-white">+20% more tests</strong>, extracted DRY helpers, better edge case coverage</div>
+          </div>
+          <a href="capabilities.html#quorum" class="mt-3 inline-block text-xs text-red-400 hover:underline">See A/B results + workflow diagram →</a>
+        </div>
+
+        <!-- Audit Loop -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center text-2xl mb-4">🔄</div>
+          <h3 class="text-xl font-bold text-white mb-2">Audit Loop</h3>
+          <p class="text-sm text-slate-400 mb-3">Closed-loop bug discovery. The audit drain probes live routes, triages findings into bug/spec/classifier lanes, and iterates until convergence. Runs post-plan or on demand.</p>
+          <div class="space-y-2 text-xs text-slate-400">
+            <div class="flex items-center gap-2"><span class="text-emerald-400">→</span> <code class="text-emerald-300">pforge audit-loop</code> — manual one-shot drain</div>
+            <div class="flex items-center gap-2"><span class="text-emerald-400">→</span> <code class="text-emerald-300">audit.mode: "auto"</code> — threshold-gated, default off</div>
+            <div class="flex items-center gap-2"><span class="text-emerald-400">→</span> Production always forbidden — dev and staging only</div>
+          </div>
+        </div>
+
+        <!-- Forge-Master Studio -->
+        <div class="p-0 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-amber-700/30 overflow-hidden">
+          <img src="assets/forge-master-studio-hero.webp"
+               alt="Forge-Master orchestrating ghostly apprentice-smiths — a visual metaphor for multi-agent tool orchestration"
+               loading="lazy" decoding="async"
+               class="w-full h-44 object-cover border-b border-amber-700/20" />
+          <div class="p-8">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center text-2xl shrink-0">🧭</div>
+              <div>
+                <h3 class="text-xl font-bold text-white mb-1">Forge-Master Studio <span class="text-xs font-normal text-amber-400 align-middle">v2.63+</span></h3>
+                <p class="text-sm text-slate-400">A read-only reasoning orchestrator with its own dashboard. Classifies intent, pulls OpenBrain memory, and chains read-only forge tools on your behalf — so you can ask open-ended questions instead of wiring tool calls by hand.</p>
+              </div>
+            </div>
+            <div class="space-y-2 text-xs text-slate-400">
+              <div class="flex items-center gap-2"><span class="text-amber-400">→</span> Studio tab in the main dashboard — prompt gallery, streaming chat, live tool-call trace</div>
+              <div class="flex items-center gap-2"><span class="text-amber-400">→</span> <code class="text-amber-300">forge_master_ask</code> MCP tool for agents that want one-shot reasoning</div>
+              <div class="flex items-center gap-2"><span class="text-amber-400">→</span> <code class="text-amber-300">pforge forge-master status|logs</code> CLI for scripts + health checks</div>
+            </div>
+            <a href="capabilities.html#forge-master" class="mt-3 inline-block text-xs text-amber-400 hover:underline">Read the capability reference →</a>
+          </div>
+        </div>
+
+        <!-- Slash Command Skills -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center text-2xl mb-4">⚙️</div>
+          <h3 class="text-xl font-bold text-white mb-2">Slash Command Skills</h3>
+          <p class="text-sm text-slate-400 mb-4">Multi-step executable procedures with validation gates between steps.</p>
+          <div class="space-y-2">
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/database-migration</code>
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/staging-deploy</code>
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/test-sweep</code>
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/code-review</code>
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/health-check</code>
+            <code class="block text-xs text-forge-400 bg-slate-900/60 px-2 py-1 rounded">/forge-execute</code>
+          </div>
+        </div>
+
+        <!-- Scaffolding Prompts -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center text-2xl mb-4">📐</div>
+          <h3 class="text-xl font-bold text-white mb-2">Scaffolding Prompts</h3>
+          <p class="text-sm text-slate-400">15 prompt templates for generating consistent code patterns — entities, services, controllers, tests, DTOs, workers, and more — all following your project's architecture.</p>
+        </div>
+
+        <!-- Lifecycle Hooks -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center text-2xl mb-4">🔗</div>
+          <h3 class="text-xl font-bold text-white mb-2">Lifecycle Hooks</h3>
+          <p class="text-sm text-slate-400">Hooks run automatically at agent lifecycle points — blocking edits to forbidden paths, warning on TODO markers, auto-formatting, and alerting when code ships without tests.</p>
+        </div>
+
+        <!-- Cloud Agent Ready -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-sky-700/30">
+          <div class="w-12 h-12 rounded-xl bg-sky-500/20 flex items-center justify-center text-2xl mb-4">☁️</div>
+          <h3 class="text-xl font-bold text-white mb-2">Cloud Agent Ready</h3>
+          <p class="text-sm text-slate-400 mb-3">Works with the Copilot cloud agent out of the box. Add <code class="text-sky-300">copilot-setup-steps.yml</code> to provision guardrails, MCP tools, and validation gates before the agent writes a single line.</p>
+          <ul class="space-y-1 text-xs text-slate-500">
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0"></span>Instruction files auto-load identically in cloud + local</li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0"></span>88 MCP tools wired via <code class="text-sky-300">.vscode/mcp.json</code></li>
+            <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0"></span>Complements CodeQL, secret scanning, and Copilot code review</li>
+          </ul>
+        </div>
+
+        <!-- The Smith -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center text-2xl mb-4">🔨</div>
+          <h3 class="text-xl font-bold text-white mb-2">The Smith</h3>
+          <p class="text-sm text-slate-400 mb-4">Run <code class="text-forge-400">pforge smith</code> to inspect your forge before you build. Diagnoses your environment, VS Code configuration, setup health, version currency, and common problems — with actionable fix suggestions for every issue.</p>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 text-xs"><span class="text-green-400">✅</span> <span class="text-slate-400">git 2.44.0</span></div>
+            <div class="flex items-center gap-2 text-xs"><span class="text-green-400">✅</span> <span class="text-slate-400">17 instruction files (expected: ≥15)</span></div>
+            <div class="flex items-center gap-2 text-xs"><span class="text-red-400">❌</span> <span class="text-slate-400">chat.promptFiles not set</span></div>
+            <div class="text-xs text-yellow-400 pl-5">FIX: Add to .vscode/settings.json</div>
+          </div>
+        </div>
+
+        <!-- GitHub Action -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/20 flex items-center justify-center text-2xl mb-4">🔄</div>
+          <h3 class="text-xl font-bold text-white mb-2">CI Validation Action</h3>
+          <p class="text-sm text-slate-400 mb-4">Drop one line into your GitHub workflow to validate plans on every PR — setup health, file counts, placeholders, orphans, plan artifacts, and code sweep.</p>
+          <pre class="bg-slate-900/60 rounded-lg p-3 text-xs text-forge-400 overflow-x-auto"><code>- uses: srnichols/plan-forge-validate@v1</code></pre>
+        </div>
+
+        <!-- Spec Kit Interop -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-green-700/30">
+          <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center text-2xl mb-4">🌱</div>
+          <h3 class="text-xl font-bold text-white mb-2">Spec Kit Compatible</h3>
+          <p class="text-sm text-slate-400 mb-4">Auto-imports Spec Kit specs, plans, and constitutions. Shared extension catalog. Write specs with Spec Kit, enforce them with Plan Forge.</p>
+          <a href="speckit-interop.html" class="text-xs text-forge-400 hover:underline">See the combined workflow →</a>
+        </div>
+
+        <!-- MCP Server -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-purple-700/30">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center text-2xl mb-4">🔌</div>
+          <h3 class="text-xl font-bold text-white mb-2">MCP Server + Orchestrator</h3>
+          <p class="text-sm text-slate-400 mb-4">88 MCP tools (Core + LiveGuard + Watcher + Crucible + Tempering + Bug Registry + Testbed + Forge-Master + Lattice + Sync + Memory + Notify + Doctor) — run plans autonomously with <code class="text-forge-400">forge_run_plan</code>, multi-model analysis with <code class="text-forge-400">forge_analyze --quorum</code> and <code class="text-forge-400">forge_diagnose</code>, full health check with <code class="text-forge-400">forge_liveguard_run</code>, query the code graph with <code class="text-forge-400">forge_lattice_query</code>, sync agent memory with <code class="text-forge-400">forge_sync_memories</code>, generate images with <code class="text-forge-400">forge_generate_image</code>, track costs with <code class="text-forge-400">forge_cost_report</code>, monitor in real-time via WebSocket hub + dashboard at <code class="text-forge-400">localhost:3100/dashboard</code>. Full Auto, Assisted, and Quorum execution modes. xAI Grok + OpenAI support via API provider registry.</p>
+          <div class="space-y-1 text-xs text-slate-500">
+            <div>88 tools (Core · LiveGuard · Watcher · Crucible · Tempering · Bug Registry · Testbed · Forge-Master · Lattice · Sync · Memory · Notify · Doctor) · 103+ REST endpoints · Dashboard · WebSocket · Traces · Parallel · Grok · Image Gen</div>
+          </div>
+        </div>
+
+        <!-- Auto-Escalation & Model Routing — spans 2 cols -->
+        <div class="lg:col-span-2 p-8 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-amber-700/30">
+          <div class="flex items-start gap-4 mb-6">
+            <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center text-2xl shrink-0">⚡</div>
+            <div>
+              <h3 class="text-xl font-bold text-white mb-2">Auto-Escalation & Model Performance Routing</h3>
+              <p class="text-slate-400">When a slice fails, the orchestrator automatically walks the <code class="text-forge-400">escalationChain</code> and retries on the next model — no manual intervention. Historical performance data in <code class="text-forge-400">model-performance.json</code> drives automatic model selection for best quality/cost ratio.</p>
+            </div>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-4">
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-amber-400 mb-2">Auto-Escalation</h4>
+              <p class="text-xs text-slate-400 leading-relaxed">Slice fails → walks <code class="text-amber-300">escalationChain</code> → retries on next model. Emits <code class="text-amber-300">slice-escalated</code> event.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-amber-400 mb-2">Model Performance</h4>
+              <p class="text-xs text-slate-400 leading-relaxed"><code class="text-amber-300">model-performance.json</code> tracks success rate, cost, duration. Auto-selects cheapest model with &gt;80% pass rate.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-700/30">
+              <h4 class="text-sm font-semibold text-amber-400 mb-2">Smart Estimate</h4>
+              <p class="text-xs text-slate-400 leading-relaxed"><code class="text-amber-300">--estimate</code> shows recommended model per slice with historical success rate before you run.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto-Update + Dual-Publish -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-slate-700/50">
+          <div class="w-12 h-12 rounded-xl bg-teal-500/20 flex items-center justify-center text-2xl mb-4">🔄</div>
+          <h3 class="text-xl font-bold text-white mb-2">Auto-Update + Dual-Publish</h3>
+          <p class="text-sm text-slate-400 mb-4"><code class="text-forge-400">pforge smith</code> checks GitHub for newer releases (24 h cache, silent offline). <code class="text-forge-400">pforge ext publish</code> outputs both a Plan Forge and a Spec Kit-compatible catalog entry in one command.</p>
+          <div class="space-y-2 text-xs text-slate-400">
+            <div class="flex items-center gap-2"><span class="text-yellow-400">⚠</span> New version available — run <code class="text-forge-400">pforge update</code></div>
+            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> Extensions dual-published to Plan Forge + Spec Kit catalogs</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- What's the difference? -->
+      <div class="mt-12 p-8 rounded-2xl bg-slate-800/30 border border-slate-700/30">
+        <h3 class="text-lg font-bold text-white mb-6 text-center">Wait — What's the Difference Between All These File Types?</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-700/50">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">Type</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">What It Is</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">When It Runs</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">Example</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60">
+              <tr>
+                <td class="px-4 py-3 text-forge-400 font-medium whitespace-nowrap">📋 Instruction</td>
+                <td class="px-4 py-3 text-slate-300">Coding rules the AI must follow</td>
+                <td class="px-4 py-3 text-slate-400">Auto-loads when you edit a matching file</td>
+                <td class="px-4 py-3 text-slate-500"><code class="text-xs">security.instructions.md</code></td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 text-forge-400 font-medium whitespace-nowrap">📐 Prompt</td>
+                <td class="px-4 py-3 text-slate-300">Scaffolding recipe you attach in chat</td>
+                <td class="px-4 py-3 text-slate-400">When you reference it in Copilot Chat</td>
+                <td class="px-4 py-3 text-slate-500"><code class="text-xs">new-entity.prompt.md</code></td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 text-forge-400 font-medium whitespace-nowrap">🤖 Agent</td>
+                <td class="px-4 py-3 text-slate-300">Specialized reviewer persona</td>
+                <td class="px-4 py-3 text-slate-400">When you pick it from the agent dropdown</td>
+                <td class="px-4 py-3 text-slate-500"><code class="text-xs">security-reviewer.agent.md</code></td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 text-forge-400 font-medium whitespace-nowrap">⚙️ Skill</td>
+                <td class="px-4 py-3 text-slate-300">Multi-step procedure with validation</td>
+                <td class="px-4 py-3 text-slate-400">When you type <code class="text-forge-400">/skill-name</code></td>
+                <td class="px-4 py-3 text-slate-500"><code class="text-xs">/database-migration</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-slate-600 mt-4 text-center">Instructions = passive rules (auto-loaded). Prompts = recipes (you trigger). Agents = reviewers (you pick). Skills = workflows (you invoke).</p>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       LIVEGUARD — POST-CODING INTELLIGENCE
+  ================================================ -->
+  <section id="liveguard" class="py-24 bg-gradient-to-b from-slate-900 to-slate-950">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <!-- Hero -->
+      <div class="text-center mb-16 reveal">
+        <p class="text-amber-500 text-sm font-semibold tracking-widest uppercase mb-3">LiveGuard</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">The Forge Stops. LiveGuard Watches.</h2>
+        <p class="text-xl text-slate-400 max-w-3xl mx-auto mb-10">
+          Plan Forge sessions end when the code ships. LiveGuard watches everything after — drift, secrets, dependencies, regressions, incidents. 14 post-coding tools that detect, respond, and learn automatically.
+        </p>
+        <img src="assets/liveguard-hero.webp" alt="Dark forge control room with three stations: magnifying glass detecting code violations, anvil with lightning shields for automatic response, golden brain absorbing knowledge" class="w-full max-w-4xl mx-auto rounded-2xl border border-slate-700/30 shadow-2xl shadow-amber-500/10" />
+      </div>
+
+      <!-- Detect / Respond / Learn -->
+      <div class="grid md:grid-cols-3 gap-8 mb-16">
+
+        <!-- Detect -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-amber-700/30 reveal">
+          <div class="w-14 h-14 rounded-xl bg-amber-500/20 flex items-center justify-center text-3xl mb-6">🔍</div>
+          <h3 class="text-2xl font-bold text-white mb-3">Detect</h3>
+          <p class="text-slate-400 mb-6">Continuously score your codebase against architecture guardrail rules. Catches empty-catch blocks, unsafe types, sync-over-async, SQL injection, and deferred work markers.</p>
+          <ul class="space-y-2 text-sm text-slate-400">
+            <li class="flex items-start gap-2"><span class="text-amber-400 mt-0.5">▸</span> Drift scoring (0–100) with trend tracking</li>
+            <li class="flex items-start gap-2"><span class="text-amber-400 mt-0.5">▸</span> App code vs framework code separation</li>
+            <li class="flex items-start gap-2"><span class="text-amber-400 mt-0.5">▸</span> Secret scanning via Shannon entropy</li>
+            <li class="flex items-start gap-2"><span class="text-amber-400 mt-0.5">▸</span> Dependency vulnerability monitoring (.NET + npm)</li>
+            <li class="flex items-start gap-2"><span class="text-amber-400 mt-0.5">▸</span> Environment config key divergence</li>
+          </ul>
+        </div>
+
+        <!-- Respond -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-red-700/30 reveal">
+          <div class="w-14 h-14 rounded-xl bg-red-500/20 flex items-center justify-center text-3xl mb-6">⚡</div>
+          <h3 class="text-2xl font-bold text-white mb-3">Respond</h3>
+          <p class="text-slate-400 mb-6">Violations don't just get reported — they trigger automatic incident capture, fix proposal generation, and regression verification. One call does it all.</p>
+          <ul class="space-y-2 text-sm text-slate-400">
+            <li class="flex items-start gap-2"><span class="text-red-400 mt-0.5">▸</span> Auto-chain: drift → incident → fix proposal</li>
+            <li class="flex items-start gap-2"><span class="text-red-400 mt-0.5">▸</span> Fix plans include code snippets with <code class="text-red-300">▸▸▸</code> violation markers</li>
+            <li class="flex items-start gap-2"><span class="text-red-400 mt-0.5">▸</span> Auto-resolve incidents when regression guard passes</li>
+            <li class="flex items-start gap-2"><span class="text-red-400 mt-0.5">▸</span> MTTR tracking from capture to resolution</li>
+            <li class="flex items-start gap-2"><span class="text-red-400 mt-0.5">▸</span> Forbidden file enforcement with exit code 1</li>
+          </ul>
+        </div>
+
+        <!-- Learn -->
+        <div class="p-8 rounded-2xl bg-slate-800/60 border border-teal-700/30 reveal">
+          <div class="w-14 h-14 rounded-xl bg-teal-500/20 flex items-center justify-center text-3xl mb-6">🧠</div>
+          <h3 class="text-2xl font-bold text-white mb-3">Learn</h3>
+          <p class="text-slate-400 mb-6">Every finding is captured. The system tunes itself — escalation chains reorder by success rate, cost estimates calibrate from actuals, quorum thresholds adapt. The forge gets smarter every run.</p>
+          <ul class="space-y-2 text-sm text-slate-400">
+            <li class="flex items-start gap-2"><span class="text-teal-400 mt-0.5">▸</span> Auto-tune escalation chain by model success rate</li>
+            <li class="flex items-start gap-2"><span class="text-teal-400 mt-0.5">▸</span> Cost estimates calibrate from historical actuals</li>
+            <li class="flex items-start gap-2"><span class="text-teal-400 mt-0.5">▸</span> Adaptive quorum threshold (self-tuning token spend)</li>
+            <li class="flex items-start gap-2"><span class="text-teal-400 mt-0.5">▸</span> Recurring incident detection + auto-escalation</li>
+            <li class="flex items-start gap-2"><span class="text-teal-400 mt-0.5">▸</span> Project Health DNA fingerprint for decay detection</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- One Call Code Example -->
+      <div class="max-w-4xl mx-auto reveal">
+        <div class="p-8 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-800/50 border border-amber-700/30">
+          <div class="flex items-center gap-3 mb-4">
+            <code class="text-forge-400 font-bold text-lg">forge_liveguard_run</code>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400 border border-amber-700/30">One call replaces 8</span>
+          </div>
+          <p class="text-slate-400 mb-6">Full health check in a single MCP tool call. Runs drift scan, sweep, secret scan, regression guard, dep watch, alert triage, and health trend — returns a unified status.</p>
+          <pre class="bg-slate-900/80 rounded-xl p-5 text-xs text-slate-300 overflow-x-auto leading-relaxed"><code>{
+  <span class="text-amber-400">"drift"</span>:      { "score": 100, "appViolations": 0 },
+  <span class="text-amber-400">"sweep"</span>:      { "appMarkers": 0 },
+  <span class="text-amber-400">"secrets"</span>:    { "findings": 0 },
+  <span class="text-amber-400">"regression"</span>: { "gates": 2, "passed": 2, "failed": 0 },
+  <span class="text-amber-400">"deps"</span>:       { "vulnerabilities": 0 },
+  <span class="text-amber-400">"alerts"</span>:     { "critical": 0, "high": 0, "openIncidents": 0 },
+  <span class="text-amber-400">"health"</span>:     { "avgScore": 100, "trend": "stable" },
+  <span class="text-green-400">"overallStatus"</span>: <span class="text-green-400">"green"</span>
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Link to manual -->
+      <div class="text-center mt-12">
+        <a href="manual/what-is-liveguard.html" class="text-forge-400 hover:text-forge-300 transition-colors font-semibold">
+          Read the LiveGuard Manual (4 chapters) →
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       PERSISTENT MEMORY
+  ================================================ -->
+  <section id="memory" class="py-24 bg-slate-950">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-16 items-center">
+
+        <!-- Content -->
+        <div>
+          <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Persistent Memory</p>
+          <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">Your AI Gets Smarter Over Time</h2>
+          <p class="text-xl text-slate-400 mb-8">
+            Every decision you make, every pattern you establish, every lesson learned — captured once and searchable forever. Across sessions, across AI tools, across projects.
+          </p>
+
+          <div class="space-y-6 mb-10">
+            <div class="flex gap-4">
+              <div class="w-9 h-9 rounded-lg bg-forge-500/20 border border-forge-500/30 flex items-center justify-center shrink-0 text-forge-400 font-bold text-sm mt-0.5">1</div>
+              <div>
+                <h4 class="font-semibold text-white mb-1">Capture During Execution</h4>
+                <p class="text-sm text-slate-400">Plan Forge agents automatically capture architecture decisions, patterns, and postmortems as they work — tagged by project, phase, and slice. The Shipper (Step 6) batch-captures lessons learned after every feature.</p>
+              </div>
+            </div>
+            <div class="flex gap-4">
+              <div class="w-9 h-9 rounded-lg bg-forge-500/20 border border-forge-500/30 flex items-center justify-center shrink-0 text-forge-400 font-bold text-sm mt-0.5">2</div>
+              <div>
+                <h4 class="font-semibold text-white mb-1">Search by Meaning, Not Keywords</h4>
+                <p class="text-sm text-slate-400">Semantic vector search understands intent. Ask "what did we decide about caching?" and find it — even if you never used exactly those words in the original thought.</p>
+              </div>
+            </div>
+            <div class="flex gap-4">
+              <div class="w-9 h-9 rounded-lg bg-forge-500/20 border border-forge-500/30 flex items-center justify-center shrink-0 text-forge-400 font-bold text-sm mt-0.5">3</div>
+              <div>
+                <h4 class="font-semibold text-white mb-1">Any Tool, Any Session, Any Project</h4>
+                <p class="text-sm text-slate-400">Works with GitHub Copilot, Claude, Cursor, ChatGPT, Gemini, Windsurf, and 9+ more via the MCP protocol. Captured in one session, retrieved in the next — no re-explaining.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-3">
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">pgvector semantic search</span>
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">MCP protocol</span>
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">Self-hosted &amp; private</span>
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">9 AI clients</span>
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">Project-scoped</span>
+            <span class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300">Docker / Azure / K8s</span>
+          </div>
+        </div>
+
+        <!-- Terminal demo -->
+        <div class="rounded-2xl bg-slate-900 border border-slate-700/60 overflow-hidden shadow-2xl">
+          <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/70 border-b border-slate-700/50">
+            <div class="w-3 h-3 rounded-full bg-red-500/60"></div>
+            <div class="w-3 h-3 rounded-full bg-amber-500/60"></div>
+            <div class="w-3 h-3 rounded-full bg-green-500/60"></div>
+            <span class="ml-3 text-xs text-slate-500 font-mono">memory — persistent across sessions</span>
+          </div>
+
+          <div class="p-6 font-mono text-sm space-y-5">
+            <div>
+              <div class="text-slate-500 text-xs mb-2"># Plan Forge Shipper auto-captures after Phase 2:</div>
+              <div class="p-3 rounded-lg bg-slate-800/60 text-slate-300 text-xs leading-relaxed">
+                <span class="text-forge-400">💾 captured:</span> "Decision: Using PostgreSQL<br />
+                &nbsp;&nbsp;row-level security over app-level tenant<br />
+                &nbsp;&nbsp;filtering. RLS scales better at query time.<br />
+                <span class="text-slate-500">&nbsp;&nbsp;project: saas-platform · phase-2-slice-4"</span>
+              </div>
+            </div>
+
+            <div>
+              <div class="text-slate-500 text-xs mb-2"># 4 months later, starting a new project:</div>
+              <div class="text-slate-300">
+                <span class="text-forge-400">You:</span> "How did we handle multi-tenancy last time?"
+              </div>
+              <div class="mt-2 p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/30 text-xs text-emerald-300 leading-relaxed">
+                <span class="text-emerald-400">✅ Found</span> (94% match):<br />
+                "Decision: PostgreSQL row-level security<br />
+                over app-level filtering. RLS scales better."<br />
+                <span class="text-slate-500">Source: plan-forge-phase-2-slice-4 · 4 months ago</span>
+              </div>
+            </div>
+
+            <div class="border-t border-slate-800 pt-4">
+              <div class="text-slate-500 text-xs mb-1"># The AI already knows your standards.</div>
+              <div class="text-slate-300 text-xs">
+                <span class="text-forge-400">Agent:</span> "Applying RLS pattern from saas-platform<br />
+                &nbsp;&nbsp;decision — consistent with your architecture."
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       UNIFIED SYSTEM — Plan Forge + OpenBrain + OpenClaw
+  ================================================ -->
+  <section id="unified" class="py-24 bg-slate-950">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Unified System Architecture</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">Plan Forge Is One Piece of a Bigger Picture</h2>
+        <p class="text-xl text-slate-400 max-w-3xl mx-auto mb-4">
+          Combine Plan Forge with OpenBrain and OpenClaw to build a closed-loop development system — where AI agents plan, build, remember, and communicate across every surface you use.
+        </p>
+        <p class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-950/40 border border-emerald-800/30 text-sm text-emerald-400">
+          ✅ Plan Forge works fully standalone — these are optional power-ups, not requirements.
+        </p>
+      </div>
+
+      <!-- Three projects -->
+      <div class="grid md:grid-cols-3 gap-6 mb-12">
+
+        <div class="p-8 rounded-2xl bg-gradient-to-br from-amber-950/40 to-slate-800/60 border border-amber-700/30">
+          <div class="text-3xl mb-4">🔨</div>
+          <h3 class="text-lg font-bold text-white mb-1">Plan Forge</h3>
+          <p class="text-xs text-forge-400 font-semibold uppercase tracking-wide mb-3">The Blueprint</p>
+          <p class="text-sm text-slate-400 mb-5">What to build, how to build it, and when to stop. Guardrails, pipeline, and execution contracts.</p>
+          <div class="space-y-1.5 text-xs text-slate-500">
+            <div class="flex items-center gap-2"><span class="text-forge-400">+</span> Great guardrails &amp; methodology</div>
+            <div class="flex items-center gap-2"><span class="text-forge-400">+</span> 4-session isolation model</div>
+            <div class="flex items-center gap-2"><span class="text-forge-400">+</span> Works in VS Code and any AI tool</div>
+          </div>
+        </div>
+
+        <div class="p-8 rounded-2xl bg-gradient-to-br from-blue-950/40 to-slate-800/60 border border-blue-700/30">
+          <div class="text-3xl mb-4">🧠</div>
+          <h3 class="text-lg font-bold text-white mb-1">OpenBrain</h3>
+          <p class="text-xs text-blue-400 font-semibold uppercase tracking-wide mb-3">The Memory</p>
+          <p class="text-sm text-slate-400 mb-5">Why we decided, what we learned, what failed. Persistent semantic memory across every session and every tool.</p>
+          <div class="space-y-1.5 text-xs text-slate-500">
+            <div class="flex items-center gap-2"><span class="text-blue-400">+</span> Decisions survive across sessions</div>
+            <div class="flex items-center gap-2"><span class="text-blue-400">+</span> pgvector semantic search</div>
+            <div class="flex items-center gap-2"><span class="text-blue-400">+</span> 9 AI clients via MCP protocol</div>
+          </div>
+        </div>
+
+        <div class="p-8 rounded-2xl bg-gradient-to-br from-purple-950/40 to-slate-800/60 border border-purple-700/30">
+          <div class="text-3xl mb-4">🦅</div>
+          <h3 class="text-lg font-bold text-white mb-1">OpenClaw</h3>
+          <p class="text-xs text-purple-400 font-semibold uppercase tracking-wide mb-3">The Nervous System</p>
+          <p class="text-sm text-slate-400 mb-5">Always-on AI gateway across 20+ channels. Start a build from your phone at 3am, get a Slack notification when the review passes.</p>
+          <div class="space-y-1.5 text-xs text-slate-500">
+            <div class="flex items-center gap-2"><span class="text-purple-400">+</span> WhatsApp, Telegram, Slack, Discord</div>
+            <div class="flex items-center gap-2"><span class="text-purple-400">+</span> Voice wake + talk mode</div>
+            <div class="flex items-center gap-2"><span class="text-purple-400">+</span> Launches Copilot CLI for execution</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- What unified looks like -->
+      <div class="rounded-2xl bg-slate-800/40 border border-slate-700/40 overflow-hidden mb-10">
+        <div class="px-6 py-4 bg-slate-800/60 border-b border-slate-700/40">
+          <h3 class="text-sm font-semibold text-white">What the unified system looks like end-to-end</h3>
+        </div>
+        <div class="p-6">
+          <ol class="space-y-4">
+            <li class="flex gap-4 items-start">
+              <span class="w-7 h-7 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+              <div>
+                <span class="text-sm text-white font-medium">Describe a feature from any device</span>
+                <span class="text-sm text-slate-400"> — WhatsApp message, Slack DM, phone, terminal, or voice. OpenClaw routes the request.</span>
+              </div>
+            </li>
+            <li class="flex gap-4 items-start">
+              <span class="w-7 h-7 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+              <div>
+                <span class="text-sm text-white font-medium">OpenBrain loads prior context</span>
+                <span class="text-sm text-slate-400"> — architecture decisions, postmortems, known patterns — before your agent writes a single line.</span>
+              </div>
+            </li>
+            <li class="flex gap-4 items-start">
+              <span class="w-7 h-7 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+              <div>
+                <span class="text-sm text-white font-medium">Plan Forge hardens the plan</span>
+                <span class="text-sm text-slate-400"> — scope locked, slices defined, guardrails loaded. Then Copilot CLI builds it slice by slice with validation gates.</span>
+              </div>
+            </li>
+            <li class="flex gap-4 items-start">
+              <span class="w-7 h-7 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">4</span>
+              <div>
+                <span class="text-sm text-white font-medium">You get notified on your phone</span>
+                <span class="text-sm text-slate-400"> — "Slice 3 of 5 complete. Build passed. Ready to proceed?" Approve from your couch.</span>
+              </div>
+            </li>
+            <li class="flex gap-4 items-start">
+              <span class="w-7 h-7 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">5</span>
+              <div>
+                <span class="text-sm text-white font-medium">OpenBrain captures every lesson</span>
+                <span class="text-sm text-slate-400"> — The Shipper batch-captures postmortems, decisions, and patterns. Next feature, the AI already knows your standards.</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- CTA -->
+      <div class="text-center">
+        <p class="text-slate-500 text-sm mb-4">Plan Forge ships with OpenBrain integration hooks across 106+ files — ready to connect the moment you deploy OpenBrain.</p>
+        <a href="https://github.com/srnichols/plan-forge/blob/master/docs/UNIFIED-SYSTEM-ARCHITECTURE.md"
+           class="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-forge-400 bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-700 transition-colors">
+          Read the Unified System Architecture →
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       COMPARISON TABLE
+  ================================================ -->
+  <section class="py-24 bg-slate-900">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Results</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">The Difference Is Measurable</h2>
+      </div>
+
+      <div class="rounded-2xl border border-slate-700/50 overflow-hidden">
+        <div class="grid grid-cols-3 bg-slate-800">
+          <div class="px-5 py-4 text-sm font-semibold text-slate-400">Scenario</div>
+          <div class="px-5 py-4 text-sm font-semibold text-red-400 border-l border-slate-700/60">❌ Without Guardrails</div>
+          <div class="px-5 py-4 text-sm font-semibold text-emerald-400 border-l border-slate-700/60">✅ With Plan Forge</div>
+        </div>
+        <div class="divide-y divide-slate-800">
+          <div class="grid grid-cols-3">
+            <div class="px-5 py-4 text-sm text-slate-300">Code quality</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">Passes once, breaks in production</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Follows your architecture from line 1</div>
+          </div>
+          <div class="grid grid-cols-3 bg-slate-900/40">
+            <div class="px-5 py-4 text-sm text-slate-300">Rework rate</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">30–50% needs rework after review</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Independent review catches drift before merge</div>
+          </div>
+          <div class="grid grid-cols-3">
+            <div class="px-5 py-4 text-sm text-slate-300">Session context</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">Re-explain decisions in every session</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Memory loads prior decisions in seconds</div>
+          </div>
+          <div class="grid grid-cols-3 bg-slate-900/40">
+            <div class="px-5 py-4 text-sm text-slate-300">Token efficiency</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">Context window wasted on exploration</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Hardened plan = fewer tokens, faster results</div>
+          </div>
+          <div class="grid grid-cols-3">
+            <div class="px-5 py-4 text-sm text-slate-300">Deployment</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">"Works on my machine"</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Validation gates must pass at every slice</div>
+          </div>
+          <div class="grid grid-cols-3 bg-slate-900/40">
+            <div class="px-5 py-4 text-sm text-slate-300">Postmortems</div>
+            <div class="px-5 py-4 text-sm text-slate-400 border-l border-slate-800">Written once, never read again</div>
+            <div class="px-5 py-4 text-sm text-slate-300 border-l border-slate-800">Searched automatically at next phase start</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       TECH STACKS
+  ================================================ -->
+  <section id="stacks" class="py-24 bg-slate-950 grid-overlay">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Presets</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">Your Stack. Your Rules.</h2>
+        <p class="text-xl text-slate-400 max-w-2xl mx-auto mb-8">
+          9 pre-configured guardrail packs (8 app + 1 IaC) for the most common enterprise stacks. One setup command installs the right instruction files, agents, skills, and templates.
+        </p>
+        <img src="assets/tech-stacks-grid.webp" alt="9 supported tech stacks connected in a neural network" class="mx-auto max-w-3xl w-full rounded-2xl border border-slate-700/40 shadow-2xl shadow-amber-500/5" loading="lazy" />
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-purple-500/50 transition-all hover:shadow-lg hover:shadow-purple-500/5">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-purple-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7v10l10 5 10-5V7L12 2z" stroke="#a78bfa" stroke-width="1.5"/><path d="M12 7l-5 2.5v5L12 17l5-2.5v-5L12 7z" fill="#a78bfa" opacity="0.3"/><text x="12" y="14.5" text-anchor="middle" fill="#a78bfa" font-size="6" font-weight="700" font-family="Inter,sans-serif">C#</text></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">.NET / C#</h3>
+          <p class="text-sm text-slate-400 mb-4">ASP.NET Core, Blazor, Entity Framework, xUnit. 17 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset dotnet</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-blue-500/50 transition-all hover:shadow-lg hover:shadow-blue-500/5">
+          <div class="w-12 h-12 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-blue-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="3" fill="#3178c6" opacity="0.2" stroke="#3178c6" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="800" font-family="Inter,sans-serif">TS</text></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">TypeScript</h3>
+          <p class="text-sm text-slate-400 mb-4">React, Node.js, Express, Vitest, pnpm. Includes frontend instructions.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset typescript</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-yellow-500/50 transition-all hover:shadow-lg hover:shadow-yellow-500/5">
+          <div class="w-12 h-12 rounded-xl bg-yellow-500/15 border border-yellow-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-yellow-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M9.5 8c0-1 .7-2 2-2s2 1.3 2 2c0 2-2 2.5-2 4" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round"/><circle cx="11.5" cy="15" r="0.8" fill="#fbbf24"/><path d="M15 8c0-1 .7-2 2-2s2 1.3 2 2c0 2-2 2.5-2 4" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/><circle cx="17" cy="15" r="0.8" fill="#fbbf24" opacity="0.5"/></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Python</h3>
+          <p class="text-sm text-slate-400 mb-4">FastAPI, Django, pytest, SQLAlchemy. 17 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset python</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-red-500/50 transition-all hover:shadow-lg hover:shadow-red-500/5">
+          <div class="w-12 h-12 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-red-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M8 4h8c1 0 2 1 2 2v1c0 .5-.2 1-.5 1.3.6.4 1 1 1 1.7v1c0 1.5-1.5 2.5-3 2.5" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/><path d="M10 12.5v5c0 1.5-1 2.5-2.5 2.5" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/><path d="M14 12.5v3.5c0 1 .5 2 2 2" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Java</h3>
+          <p class="text-sm text-slate-400 mb-4">Spring Boot, Gradle / Maven, JUnit 5. 17 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset java</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-cyan-500/50 transition-all hover:shadow-lg hover:shadow-cyan-500/5">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-cyan-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><text x="12" y="16" text-anchor="middle" fill="#22d3ee" font-size="11" font-weight="800" font-family="Inter,sans-serif">Go</text></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Go</h3>
+          <p class="text-sm text-slate-400 mb-4">Chi, Gin, standard library, Go test. 17 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset go</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-orange-500/50 transition-all hover:shadow-lg hover:shadow-orange-500/5">
+          <div class="w-12 h-12 rounded-xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-orange-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M20 8c-1.5-3-5-5-8.5-4C8 5 5.5 8 5 11.5c-.5 3.5 1 6.5 3.5 8.5" stroke="#f97316" stroke-width="1.8" stroke-linecap="round"/><path d="M14 4c2 2 3 5 2 8s-4 5.5-7 6" stroke="#f97316" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Swift</h3>
+          <p class="text-sm text-slate-400 mb-4">SwiftUI, iOS / macOS, Vapor. 16 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset swift</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-amber-600/50 transition-all hover:shadow-lg hover:shadow-amber-600/5">
+          <div class="w-12 h-12 rounded-xl bg-amber-600/15 border border-amber-600/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-amber-600/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="#d97706" stroke-width="1.5" opacity="0.3"/><path d="M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16" stroke="#d97706" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="#d97706" stroke-width="1.5"/><line x1="12" y1="4" x2="12" y2="6" stroke="#d97706" stroke-width="1.5"/><line x1="12" y1="18" x2="12" y2="20" stroke="#d97706" stroke-width="1.5"/><line x1="4" y1="12" x2="6" y2="12" stroke="#d97706" stroke-width="1.5"/><line x1="18" y1="12" x2="20" y2="12" stroke="#d97706" stroke-width="1.5"/></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Rust</h3>
+          <p class="text-sm text-slate-400 mb-4">Axum, Tokio, CLI tools, cargo test. 16 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset rust</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-indigo-500/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5">
+          <div class="w-12 h-12 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-indigo-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><text x="12" y="15.5" text-anchor="middle" fill="#818cf8" font-size="8" font-weight="800" font-family="Inter,sans-serif">PHP</text></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">PHP</h3>
+          <p class="text-sm text-slate-400 mb-4">Laravel, Symfony, Slim, PHPUnit. 16 instruction files.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset php</code>
+        </div>
+
+        <div class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/50 hover:border-sky-500/50 transition-all hover:shadow-lg hover:shadow-sky-500/5">
+          <div class="w-12 h-12 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center mb-3 group-hover:shadow-md group-hover:shadow-sky-500/20 transition-shadow">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none"><path d="M4 16c0-3 2-5 5-5h6c3 0 5 2 5 5" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" fill="#38bdf8" fill-opacity="0.15"/><path d="M8 11c0-2 1.5-4 4-4s4 2 4 4" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <h3 class="font-bold text-white mb-1">Azure IaC</h3>
+          <p class="text-sm text-slate-400 mb-4">Bicep, Terraform, PowerShell, azd. Full CAF + WAF + Landing Zone guardrails.</p>
+          <code class="text-xs text-forge-400 bg-slate-900/70 px-2 py-1.5 rounded block">.\setup.ps1 -Preset azure-iac</code>
+        </div>
+
+      </div>
+
+      <p class="text-center text-sm text-slate-500 mt-8">
+        9 presets (8 app + 1 IaC). All presets also install 8 cross-stack agents: API contracts, accessibility, multi-tenancy, CI/CD, observability, dependency, compliance, and error handling.
+      </p>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       QUICK START
+  ================================================ -->
+  <section id="quickstart" class="py-24 bg-slate-900">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Quick Start</p>
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">Up and Running in Minutes</h2>
+        <p class="text-xl text-slate-400 max-w-2xl mx-auto mb-6">
+          One setup script bootstraps your entire guardrails stack — instruction files, agents, skills, hooks, and Copilot config.
+        </p>
+
+        <!-- Prerequisites -->
+        <div class="flex flex-wrap justify-center gap-3">
+          <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700/60 text-xs text-slate-300">✅ VS Code</span>
+          <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700/60 text-xs text-slate-300">✅ GitHub Copilot</span>
+          <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700/60 text-xs text-slate-300">✅ Git</span>
+          <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800/40 border border-slate-700/40 text-xs text-slate-500">That's it — no other dependencies</span>
+        </div>
+      </div>
+
+      <div class="space-y-8">
+
+        <!-- Easy Button: One-Prompt Install -->
+        <details class="group rounded-2xl border border-forge-500/40 bg-gradient-to-br from-forge-500/8 to-slate-800/40 overflow-hidden">
+          <summary class="flex items-center justify-between px-6 py-4 cursor-pointer list-none hover:bg-slate-800/40 transition-colors">
+            <div class="flex items-center gap-3">
+              <span class="px-2.5 py-0.5 rounded-full bg-forge-500/20 text-forge-400 text-xs font-bold border border-forge-500/30">⚡ EASY BUTTON</span>
+              <h3 class="font-semibold text-white text-sm">Paste one prompt — your AI installs everything automatically</h3>
+            </div>
+            <svg class="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform shrink-0 ml-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-6 pb-6 border-t border-forge-500/20 pt-5">
+            <p class="text-sm text-slate-400 mb-4">Open Copilot Chat (Agent Mode), Claude Code, or Cursor in your project — paste this prompt. The AI reads the setup guide, detects your stack, installs everything, customizes the files, and validates. Zero manual steps.</p>
+            <div class="rounded-xl bg-slate-950/80 border border-forge-500/30 overflow-hidden">
+              <div class="flex items-center justify-between px-4 py-2.5 bg-forge-500/10 border-b border-forge-500/20">
+                <span class="text-xs text-forge-400 font-semibold">Paste into any AI chat — Copilot, Claude, Cursor</span>
+                <button onclick="copyCode(this)" class="text-xs text-slate-500 hover:text-forge-400 transition-colors cursor-pointer">Copy</button>
+              </div>
+              <pre class="p-5 text-sm text-slate-200 overflow-x-auto whitespace-pre-wrap"><code>Clone https://github.com/srnichols/plan-forge into a temporary directory. Read its AGENT-SETUP.md file completely and follow the instructions exactly:
+
+1. Scan THIS project's root directory and auto-detect the tech stack from marker files (*.csproj = dotnet, go.mod = go, package.json + tsconfig.json = typescript, pom.xml = java, pyproject.toml = python, *.bicep = azure-iac). If multiple stacks exist, combine them.
+
+2. Detect which AI tool is running this prompt and set the -Agent flag:
+   - GitHub Copilot → -Agent copilot (default, can omit)
+   - Claude Code → -Agent claude
+   - Cursor → -Agent cursor
+   - Codex CLI → -Agent codex
+   - Not sure → -Agent all (installs all agent formats)
+
+3. Run the Plan Forge setup script non-interactively:
+   .\setup.ps1 -Preset &lt;detected&gt; -Agent &lt;detected-agent&gt; -ProjectPath "." -ProjectName "&lt;this folder name&gt;" -Force
+
+4. After setup completes, customize the generated files:
+   - Edit .github/copilot-instructions.md with this project's actual name, tech stack, build/test/lint commands, and architecture
+   - If CLAUDE.md was generated, verify it looks correct
+   - Edit docs/plans/DEPLOYMENT-ROADMAP.md with a first phase placeholder
+
+5. Run .\pforge.ps1 smith to inspect the forge and confirm all checks pass.
+
+6. If pforge-mcp/server.mjs was installed, run: cd pforge-mcp &amp;&amp; npm install (activates 69 forge MCP tools).
+
+7. If specs/ or memory/constitution.md exist (Spec Kit project), note that Step 0 will auto-detect and offer to import them.
+
+8. Call forge_capabilities to verify all tools are available and discover workflows, config options, and OpenBrain memory integration.
+
+9. Show me a summary of what was installed and any issues found.</code></pre>
+            </div>
+            <p class="text-xs text-slate-600 mt-3 text-center">Works with GitHub Copilot (Agent Mode), Claude Code, Cursor, or any AI tool with terminal access.</p>
+          </div>
+        </details>
+
+        <!-- Divider -->
+        <div class="flex items-center gap-4">
+          <div class="flex-1 h-px bg-slate-700/40"></div>
+          <span class="text-xs text-slate-500 font-medium uppercase tracking-wider">or do it manually</span>
+          <div class="flex-1 h-px bg-slate-700/40"></div>
+        </div>
+
+        <!-- Step 1 -->
+        <div class="flex gap-5">
+          <div class="w-10 h-10 rounded-full bg-forge-500/20 border-2 border-forge-500/60 flex items-center justify-center text-forge-400 font-bold shrink-0 mt-1">1</div>
+          <div class="flex-1">
+            <h3 class="font-semibold text-white mb-3">Use as a GitHub Template</h3>
+            <div class="rounded-xl bg-slate-950 border border-slate-700/60 overflow-hidden">
+              <div class="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800/50 border-b border-slate-700/50">
+                <div class="w-2.5 h-2.5 rounded-full bg-red-500/50"></div>
+                <div class="w-2.5 h-2.5 rounded-full bg-amber-500/50"></div>
+                <div class="w-2.5 h-2.5 rounded-full bg-green-500/50"></div>
+                <span class="ml-2 text-xs text-slate-500">Terminal</span>
+              </div>
+              <pre class="p-5 text-sm text-slate-300 overflow-x-auto"><code><span class="text-slate-500"># Click "Use this Template" on GitHub, or clone directly:</span>
+git clone https://github.com/srnichols/plan-forge.git my-project-plans
+cd my-project-plans</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="flex gap-5">
+          <div class="w-10 h-10 rounded-full bg-forge-500/20 border-2 border-forge-500/60 flex items-center justify-center text-forge-400 font-bold shrink-0 mt-1">2</div>
+          <div class="flex-1">
+            <h3 class="font-semibold text-white mb-3">Run the Setup Wizard</h3>
+            <div class="rounded-xl bg-slate-950 border border-slate-700/60 overflow-hidden">
+              <div class="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800/50 border-b border-slate-700/50">
+                <div class="w-2.5 h-2.5 rounded-full bg-red-500/50"></div>
+                <div class="w-2.5 h-2.5 rounded-full bg-amber-500/50"></div>
+                <div class="w-2.5 h-2.5 rounded-full bg-green-500/50"></div>
+                <span class="ml-2 text-xs text-slate-500">PowerShell / Bash</span>
+              </div>
+              <pre class="p-5 text-sm text-slate-300 overflow-x-auto"><code><span class="text-slate-500"># Interactive wizard picks your stack (setup.sh for macOS/Linux):</span>
+.\setup.ps1
+
+<span class="text-slate-500"># Or specify directly (PowerShell / Bash):</span>
+.\setup.ps1 -Preset dotnet        <span class="text-slate-500"># .NET / C#</span>
+.\setup.ps1 -Preset typescript    <span class="text-slate-500"># TypeScript / React</span>
+.\setup.ps1 -Preset python        <span class="text-slate-500"># Python / FastAPI</span>
+.\setup.ps1 -Preset java          <span class="text-slate-500"># Java / Spring Boot</span>
+.\setup.ps1 -Preset go            <span class="text-slate-500"># Go / Chi / Gin</span>
+.\setup.ps1 -Preset swift         <span class="text-slate-500"># Swift / SwiftUI</span>
+.\setup.ps1 -Preset rust          <span class="text-slate-500"># Rust / Axum</span>
+.\setup.ps1 -Preset php           <span class="text-slate-500"># PHP / Laravel</span>
+.\setup.ps1 -Preset azure-iac     <span class="text-slate-500"># Azure Bicep / Terraform / azd</span>
+
+<span class="text-slate-500"># Add support for other AI agents (optional):</span>
+.\setup.ps1 -Preset dotnet -Agent claude   <span class="text-slate-500"># + Claude Code</span>
+.\setup.ps1 -Preset dotnet -Agent all      <span class="text-slate-500"># + Claude + Cursor + Codex + Gemini + Windsurf + Generic</span></code></pre>
+            </div>
+            <p class="text-xs text-slate-500 mt-2">Installs instruction files, agents, skills, lifecycle hooks, and <code class="text-forge-400">copilot-instructions.md</code> into your project. Add <code class="text-forge-400">-Agent</code> to generate native files for Claude, Cursor, Codex, Gemini, Windsurf, or Generic.</p>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="flex gap-5">
+          <div class="w-10 h-10 rounded-full bg-forge-500/20 border-2 border-forge-500/60 flex items-center justify-center text-forge-400 font-bold shrink-0 mt-1">3</div>
+          <div class="flex-1">
+            <h3 class="font-semibold text-white mb-1">Describe Your Feature — Your AI Does the Rest</h3>
+            <p class="text-sm text-slate-500 mb-4"><strong class="text-slate-300">VS Code + Copilot</strong>: Agent Mode → select <strong class="text-slate-300">Specifier</strong> from the agent picker. <strong class="text-slate-300">Claude Code</strong>: invoke <code class="text-forge-400">/planforge-step0-specify-feature</code>. <strong class="text-slate-300">Cursor</strong>: run the <code class="text-forge-400">planforge.step0-specify-feature</code> command. Type one sentence — the pipeline runs from there.</p>
+
+            <!-- The one prompt -->
+            <div class="rounded-xl bg-slate-950 border border-forge-500/30 overflow-hidden mb-4">
+              <div class="flex items-center justify-between px-4 py-2.5 bg-forge-500/10 border-b border-forge-500/20">
+                <div class="flex items-center gap-2">
+                  <div class="w-2.5 h-2.5 rounded-full bg-forge-500/70"></div>
+                  <span class="text-xs text-forge-400 font-semibold">Copilot Chat → Agent Mode → Specifier</span>
+                </div>
+                <span class="text-xs text-slate-600">That's literally it.</span>
+              </div>
+              <pre class="p-5 text-sm text-slate-200 overflow-x-auto"><code>I want to add user authentication with JWT tokens and
+role-based access control to the admin panel.</code></pre>
+            </div>
+
+            <!-- What happens automatically -->
+            <div class="rounded-xl bg-slate-800/40 border border-slate-700/40 overflow-hidden">
+              <div class="px-4 py-2.5 bg-slate-800/60 border-b border-slate-700/40">
+                <span class="text-xs text-slate-400 font-semibold">What happens next — automatically, via handoff buttons:</span>
+              </div>
+              <div class="p-4 space-y-2.5">
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-xs text-amber-400 font-bold shrink-0 mt-0.5">S</span>
+                  <div>
+                    <span class="text-sm text-white font-medium">Specifier</span>
+                    <span class="text-sm text-slate-400"> — interviews you, surfaces ambiguities, produces the feature spec</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-xs text-sky-400 font-bold shrink-0 mt-0.5">H</span>
+                  <div>
+                    <span class="text-sm text-white font-medium">Plan Hardener</span>
+                    <span class="text-sm text-slate-400"> — converts the spec into a locked execution contract, runs pre-flight checks</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-xs text-emerald-400 font-bold shrink-0 mt-0.5">E</span>
+                  <div>
+                    <span class="text-sm text-white font-medium">Executor</span>
+                    <span class="text-sm text-slate-400"> — builds slice by slice, runs build + tests at every boundary, no TODOs left behind</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-xs text-rose-400 font-bold shrink-0 mt-0.5">R</span>
+                  <div>
+                    <span class="text-sm text-white font-medium">Reviewer Gate</span>
+                    <span class="text-sm text-slate-400"> — independent fresh session audits for drift, security gaps, and missed requirements</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-xs text-purple-400 font-bold shrink-0 mt-0.5">✓</span>
+                  <div>
+                    <span class="text-sm text-white font-medium">Shipper</span>
+                    <span class="text-sm text-slate-400"> — commits, updates the roadmap, captures lessons to memory for next time</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Alternatives callout -->
+            <p class="text-xs text-slate-600 mt-4">
+              <strong class="text-slate-500">Using Claude, Cursor, or Codex?</strong> The <code class="text-slate-400">-Agent</code> flag generated native skills and commands — invoke them directly in your tool. Or use the copy-paste prompts from the runbook in any AI tool.
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="mt-12 flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="https://github.com/srnichols/plan-forge/generate" rel="noopener"
+           class="inline-flex items-center justify-center gap-2 px-8 py-4 font-bold bg-forge-500 hover:bg-forge-400 text-slate-900 rounded-xl transition-all transform hover:scale-105">
+          Use This Template on GitHub →
+        </a>
+        <a href="manual/quickstart-install.html"
+           class="inline-flex items-center justify-center gap-2 px-8 py-4 font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl border border-slate-700 transition-all">
+          Step-by-Step Quickstart →
+        </a>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       WHO IT'S FOR
+  ================================================ -->
+  <section id="who" class="py-24 bg-slate-950">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="text-center mb-16 reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Who it's for</p>
+        <h2 class="text-4xl font-bold text-white mb-4">Your Entry Point</h2>
+        <p class="text-slate-400">Different roles, same framework. Click your path.</p>
+      </div>
+
+      <div class="space-y-4">
+
+        <!-- AI Agent — featured / expanded by default -->
+        <div class="rounded-2xl border border-forge-500/50 bg-gradient-to-br from-forge-500/8 to-slate-800/60 overflow-hidden">
+          <div class="flex items-center gap-3 px-6 py-4 border-b border-forge-500/20">
+            <span class="px-2.5 py-0.5 rounded-full bg-forge-500/20 text-forge-400 text-xs font-bold border border-forge-500/30">⚡ MAGIC MODE</span>
+            <h3 class="font-bold text-white">You're an AI agent setting up a project</h3>
+          </div>
+          <div class="p-6">
+            <p class="text-sm text-slate-400 mb-4">Give your AI this single prompt. It reads <code class="text-forge-400">AGENT-SETUP.md</code>, auto-detects the tech stack, runs the setup script non-interactively, and customizes the generated files. No manual steps.</p>
+
+            <!-- The magic prompt -->
+            <div class="rounded-xl bg-slate-950/80 border border-forge-500/30 overflow-hidden mb-4">
+              <div class="flex items-center justify-between px-4 py-2.5 bg-forge-500/10 border-b border-forge-500/20">
+                <span class="text-xs text-forge-400 font-semibold">Paste this into any AI chat (Copilot, Claude, Cursor, etc.)</span>
+                <button onclick="copyCode(this)" class="text-xs text-slate-500 hover:text-forge-400 transition-colors cursor-pointer">Copy</button>
+              </div>
+              <pre class="p-5 text-sm text-slate-200 overflow-x-auto whitespace-pre-wrap"><code>Read the file AGENT-SETUP.md in the plan-forge repo root.
+Follow the instructions exactly:
+1. Scan this project and detect the tech stack
+2. Detect which AI agent you are (Copilot/Claude/Cursor/Codex) for the -Agent flag
+3. Run setup.ps1 (or setup.sh) non-interactively with the correct -Preset and -Agent flags plus -Force
+4. Customize copilot-instructions.md with this project's actual details
+5. Run pforge smith to validate the setup
+6. If pforge-mcp/server.mjs exists, run: cd pforge-mcp &amp;&amp; npm install (activates MCP tools)
+7. Call forge_capabilities to verify all tools are available
+8. Note any Spec Kit artifacts found (specs/, memory/constitution.md)
+
+Repo: https://github.com/srnichols/plan-forge
+Target project: (current directory)</code></pre>
+            </div>
+
+            <div class="grid sm:grid-cols-3 gap-3 text-xs">
+              <div class="p-3 rounded-lg bg-slate-800/60 border border-slate-700/40 text-slate-400">
+                <span class="text-white font-medium block mb-1">What it detects</span>
+                <code class="text-forge-400">*.csproj</code> → dotnet &nbsp;·&nbsp; <code class="text-forge-400">go.mod</code> → go &nbsp;·&nbsp; <code class="text-forge-400">pom.xml</code> → java &nbsp;·&nbsp; <code class="text-forge-400">tsconfig.json</code> → typescript &nbsp;·&nbsp; <code class="text-forge-400">pyproject.toml</code> → python &nbsp;·&nbsp; <code class="text-forge-400">*.bicep</code> → azure-iac
+              </div>
+              <div class="p-3 rounded-lg bg-slate-800/60 border border-slate-700/40 text-slate-400">
+                <span class="text-white font-medium block mb-1">What it installs</span>
+                ~17 instruction files, ~12 agents, 16+ skills, 8 lifecycle hooks, 8 pipeline prompts, copilot-instructions.md, 88 MCP tools
+              </div>
+              <div class="p-3 rounded-lg bg-slate-800/60 border border-slate-700/40 text-slate-400">
+                <span class="text-white font-medium block mb-1">What it customizes</span>
+                Fills in your project name, tech stack, build commands, and architecture details automatically
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Brand new -->
+        <details class="group rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
+          <summary class="flex items-center justify-between px-6 py-4 cursor-pointer list-none hover:bg-slate-800/60 transition-colors">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">🆕</span>
+              <h3 class="font-semibold text-white">Brand new to AI guardrails</h3>
+            </div>
+            <svg class="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-6 pb-6 border-t border-slate-700/40 pt-5 space-y-3">
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+              <p class="text-sm text-slate-400">Read the README — specifically <em>What Is This? (Plain English)</em> — to understand the 4-layer system.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+              <p class="text-sm text-slate-400">Clone the template and run <code class="text-forge-400">.\setup.ps1</code> — the interactive wizard asks your stack and bootstraps everything.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+              <p class="text-sm text-slate-400">Follow <a href="https://github.com/srnichols/plan-forge/blob/master/docs/QUICKSTART-WALKTHROUGH.md" class="text-forge-400 hover:underline">docs/QUICKSTART-WALKTHROUGH.md</a> — a step-by-step walkthrough of your first feature build.</p>
+            </div>
+          </div>
+        </details>
+
+        <!-- VS Code + Copilot developer -->
+        <details class="group rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
+          <summary class="flex items-center justify-between px-6 py-4 cursor-pointer list-none hover:bg-slate-800/60 transition-colors">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">🧑‍💻</span>
+              <h3 class="font-semibold text-white">A developer using VS Code + Copilot</h3>
+            </div>
+            <svg class="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-6 pb-6 border-t border-slate-700/40 pt-5 space-y-3">
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+              <p class="text-sm text-slate-400">Run <code class="text-forge-400">.\setup.ps1 -Preset &lt;your-stack&gt;</code> — installs instruction files, agents, and skills directly into your project's <code class="text-slate-400">.github/</code> folder.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+              <p class="text-sm text-slate-400">Read <a href="https://github.com/srnichols/plan-forge/blob/master/CUSTOMIZATION.md" class="text-forge-400 hover:underline">CUSTOMIZATION.md</a> to fill in your project profile, generate domain-specific guardrails, and set up the project principles workshop.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+              <p class="text-sm text-slate-400">Read <a href="https://github.com/srnichols/plan-forge/blob/master/docs/COPILOT-VSCODE-GUIDE.md" class="text-forge-400 hover:underline">docs/COPILOT-VSCODE-GUIDE.md</a> — how Agent Mode works, how instruction files auto-load, managing context budget, and memory bridging.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">4</span>
+              <p class="text-sm text-slate-400">Open Copilot Chat → Agent Mode → pick <strong class="text-white">Specifier</strong> → describe your first feature. The pipeline runs from there.</p>
+            </div>
+          </div>
+        </details>
+
+        <!-- CLI-first developer -->
+        <details class="group rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
+          <summary class="flex items-center justify-between px-6 py-4 cursor-pointer list-none hover:bg-slate-800/60 transition-colors">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">📟</span>
+              <h3 class="font-semibold text-white">A CLI-first developer</h3>
+            </div>
+            <svg class="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-6 pb-6 border-t border-slate-700/40 pt-5 space-y-3">
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+              <p class="text-sm text-slate-400">Run <code class="text-forge-400">.\setup.ps1 -Preset &lt;your-stack&gt;</code> or <code class="text-forge-400">./setup.sh --preset &lt;your-stack&gt;</code>. Works on Windows (PowerShell), macOS, and Linux.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+              <p class="text-sm text-slate-400">Read <a href="https://github.com/srnichols/plan-forge/blob/master/docs/CLI-GUIDE.md" class="text-forge-400 hover:underline">docs/CLI-GUIDE.md</a> — how to run the pipeline from the terminal using <code class="text-forge-400">pforge.ps1</code> / <code class="text-forge-400">pforge.sh</code> helper scripts.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+              <p class="text-sm text-slate-400">Copy prompts from the runbook into any terminal-based AI agent (Claude Code, Copilot CLI, Aider, etc.). Same pipeline, no IDE required.</p>
+            </div>
+          </div>
+        </details>
+
+        <!-- Enterprise / SaaS team -->
+        <details class="group rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
+          <summary class="flex items-center justify-between px-6 py-4 cursor-pointer list-none hover:bg-slate-800/60 transition-colors">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">🏢</span>
+              <h3 class="font-semibold text-white">An enterprise or SaaS team</h3>
+            </div>
+            <svg class="w-4 h-4 text-slate-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-6 pb-6 border-t border-slate-700/40 pt-5 space-y-3">
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">1</span>
+              <p class="text-sm text-slate-400">Run setup with your primary stack. For microservices with infra: <code class="text-forge-400">.\setup.ps1 -Preset dotnet,azure-iac</code> installs both app guardrails and IaC guardrails in one pass.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">2</span>
+              <p class="text-sm text-slate-400">Run the <strong class="text-white">Project Profile</strong> workshop (<code class="text-forge-400">/project-profile</code>) — generates coverage targets, latency SLAs, and compliance requirements from a short interview, stored per-repo.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">3</span>
+              <p class="text-sm text-slate-400">Run the <strong class="text-white">Project Principles</strong> workshop — captures non-negotiables, forbidden patterns, and architectural commitments that every AI session loads automatically.</p>
+            </div>
+            <div class="flex gap-3 items-start">
+              <span class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">4</span>
+              <p class="text-sm text-slate-400">Add an <code class="text-forge-400">org-rules.instructions.md</code> with your internal standards (naming conventions, approved libraries, compliance gates). It auto-loads on every session.</p>
+            </div>
+          </div>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       AI TOOLS SUPPORTED
+  ================================================ -->
+  <section id="tools" class="py-20 bg-slate-900">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Compatibility</p>
+      <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Works With Your AI Tools</h2>
+      <p class="text-slate-400 mb-10 max-w-xl mx-auto">Advanced integration with VS Code + GitHub Copilot. First-class support for Claude Code, Cursor, and Codex CLI. Copy-paste prompts work with any AI tool.</p>
+
+      <div class="flex flex-wrap justify-center gap-3">
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-forge-500/60 text-sm text-white font-medium">🐙 GitHub Copilot</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-forge-500/60 text-sm text-white font-medium">🤖 Claude Code</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-forge-500/60 text-sm text-white font-medium">⚡ Cursor</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-forge-500/60 text-sm text-white font-medium">📟 Codex CLI</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-slate-700/60 text-sm text-slate-300">💎 Gemini</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-slate-700/60 text-sm text-slate-300">🌊 Windsurf</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-slate-700/60 text-sm text-slate-300">💬 ChatGPT</span>
+        <span class="px-5 py-2.5 rounded-full bg-slate-800 border border-slate-700/60 text-sm text-slate-300">🔧 Any AI tool</span>
+      </div>
+
+      <!-- Feature Parity Table -->
+      <div class="mt-12 max-w-5xl mx-auto">
+        <h3 class="text-lg font-bold text-white mb-6">Feature Parity by Agent</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="border-b border-slate-700/50">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">Feature</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">🐙 Copilot</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">🤖 Claude</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">⚡ Cursor</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">📟 Codex</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase">Others</th>
+              </tr>
+            </thead>
+            <tbody class="text-slate-400">
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Project context</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">16 guardrail instruction files</td>
+                <td class="px-4 py-3 text-green-400">✅ auto-load</td>
+                <td class="px-4 py-3 text-green-400">✅ embedded</td>
+                <td class="px-4 py-3 text-green-400">✅ embedded</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Pipeline prompts (8)</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Scaffolding prompts (70+)</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Reviewer agents (66)</td>
+                <td class="px-4 py-3 text-green-400">✅ picker</td>
+                <td class="px-4 py-3 text-green-400">✅ skills</td>
+                <td class="px-4 py-3 text-green-400">✅ cmds</td>
+                <td class="px-4 py-3 text-green-400">✅ skills</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">MCP tools (18 forge operations)</td>
+                <td class="px-4 py-3 text-green-400">✅ native</td>
+                <td class="px-4 py-3 text-green-400">✅ native</td>
+                <td class="px-4 py-3 text-green-400">✅ native</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Skills (3 multi-step workflows)</td>
+                <td class="px-4 py-3 text-green-400">✅ slash cmd</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Lifecycle hooks (5 types)</td>
+                <td class="px-4 py-3 text-green-400">✅ native</td>
+                <td class="px-4 py-3 text-forge-400">⚡ guided</td>
+                <td class="px-4 py-3 text-forge-400">⚡ guided</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Live dashboard (25 tabs)</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Autonomous plan execution</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Cost tracking &amp; telemetry</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Quorum mode (multi-model consensus)</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Extension ecosystem (3 packages)</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Presets (10 — 8 stacks + IaC + shared)</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-green-400">✅</td>
+                <td class="px-4 py-3 text-slate-500">📋</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">File-type awareness</td>
+                <td class="px-4 py-3 text-green-400">✅ native</td>
+                <td class="px-4 py-3 text-green-400">✅ guided</td>
+                <td class="px-4 py-3 text-green-400">✅ guided</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Post-edit scanning</td>
+                <td class="px-4 py-3 text-green-400">✅ hook</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Scope drift detection</td>
+                <td class="px-4 py-3 text-green-400">✅ hook + MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-green-400">✅ MCP</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr class="border-b border-slate-800/50">
+                <td class="px-4 py-3 text-white">Forbidden path blocking</td>
+                <td class="px-4 py-3 text-green-400">✅ enforced</td>
+                <td class="px-4 py-3 text-forge-400">⚡ advisory</td>
+                <td class="px-4 py-3 text-forge-400">⚡ advisory</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 text-white">Pipeline handoff buttons</td>
+                <td class="px-4 py-3 text-green-400">✅ click</td>
+                <td class="px-4 py-3 text-forge-400">⚡ guided</td>
+                <td class="px-4 py-3 text-forge-400">⚡ guided</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+                <td class="px-4 py-3 text-slate-500">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-slate-500 mt-4">✅ = native/MCP tool · ⚡ = instruction-guided · 📋 = copy-paste prompts · MCP = with <code class="text-slate-400">pforge-mcp/server.mjs</code> running · — = not supported</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       FINAL CTA
+  ================================================ -->
+  <section class="py-24 bg-slate-950">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <div class="relative p-12 rounded-3xl bg-gradient-to-br from-slate-800/80 to-slate-800/40 border border-slate-700/50 overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-amber-500/5 via-transparent to-orange-500/5 pointer-events-none"></div>
+        <div class="absolute -top-20 left-1/2 -translate-x-1/2 w-64 h-64 bg-amber-500/8 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="relative">
+          <h2 class="text-4xl md:text-5xl font-black text-white mb-4">
+            Stop Vibe Coding.<br />
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-500">
+              Start Forging.
+            </span>
+          </h2>
+          <p class="text-xl text-slate-400 mb-10 max-w-2xl mx-auto">
+            Plan Forge is free, open source, and ready to use in minutes. Your AI assistant is about to get a lot more disciplined.
+          </p>
+
+          <div class="flex flex-col sm:flex-row gap-4 justify-center">
+            <a href="https://github.com/srnichols/plan-forge/generate" rel="noopener"
+               class="group inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold bg-forge-500 hover:bg-forge-400 text-slate-900 rounded-xl transition-all transform hover:scale-105 forge-glow">
+              Use This Template
+              <svg class="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </a>
+            <a href="https://github.com/srnichols/plan-forge/stargazers" rel="noopener"
+               class="inline-flex items-center justify-center gap-2 px-8 py-4 font-semibold bg-transparent text-slate-300 rounded-xl border border-slate-600 hover:border-slate-400 transition-all">
+              ⭐ Star on GitHub
+            </a>
+          </div>
+
+          <p class="text-sm text-slate-600 mt-8">MIT Licensed · GitHub Template · No vendor lock-in · Works with any AI tool</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================
+       DOGFOODING
+  ================================================ -->
+  <section class="py-16 bg-slate-900 border-t border-slate-800/60">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <div class="reveal">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">Dogfooding</p>
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Plan Forge Builds Plan Forge</h2>
+        <p class="text-lg text-slate-400 max-w-2xl mx-auto mb-8">Every feature in this repo &mdash; the MCP server, the dashboard, the orchestrator, the quorum system &mdash; was developed using the same hardened plan pipeline that ships to users. If the pipeline can build itself without drift, it can build your project too.</p>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
+          <div class="bg-slate-800/60 rounded-xl p-4 border border-slate-700/30">
+            <div class="text-2xl font-bold text-forge-400">28+</div>
+            <div class="text-xs text-slate-500">phases executed</div>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl p-4 border border-slate-700/30">
+            <div class="text-2xl font-bold text-green-400">v2.90</div>
+            <div class="text-xs text-slate-500">current version</div>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl p-4 border border-slate-700/30">
+            <div class="text-2xl font-bold text-blue-400">0</div>
+            <div class="text-xs text-slate-500">manual rollbacks</div>
+          </div>
+          <div class="bg-slate-800/60 rounded-xl p-4 border border-slate-700/30">
+            <div class="text-2xl font-bold text-purple-400">3285</div>
+            <div class="text-xs text-slate-500">self-tests passing</div>
+          </div>
+        </div>
+        <p class="text-sm text-slate-600 mt-6">The dashboard screenshots in our docs were captured by a Playwright script &mdash; itself built slice-by-slice using Plan Forge.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================
+       LATEST FROM THE BLOG
+  ================================================ -->
+  <section class="py-20 bg-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center mb-12">
+        <p class="text-forge-500 text-sm font-semibold tracking-widest uppercase mb-3">From the Forge</p>
+        <h2 class="text-4xl font-bold text-white mb-4">Latest from the Blog</h2>
+        <p class="text-slate-400 max-w-2xl mx-auto">Lessons, patterns, and A/B test results from building with AI coding agents.</p>
+      </div>
+      <div class="grid md:grid-cols-3 gap-6 mb-8">
+        <a href="blog/the-80-20-wall.html" class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/40 hover:border-forge-500/40 transition-all">
+          <span class="px-2.5 py-1 rounded-full bg-red-500/10 text-xs font-medium text-red-400 border border-red-500/20">Problem</span>
+          <h3 class="text-lg font-bold text-white mt-3 mb-2 group-hover:text-forge-400 transition-colors">The 80/20 Wall</h3>
+          <p class="text-sm text-slate-400">Why AI agents break what they build — and the methodology that fixes it.</p>
+        </a>
+        <a href="blog/guardrails-lessons-learned.html" class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/40 hover:border-forge-500/40 transition-all">
+          <span class="px-2.5 py-1 rounded-full bg-forge-500/10 text-xs font-medium text-forge-400 border border-forge-500/20">Lessons</span>
+          <h3 class="text-lg font-bold text-white mt-3 mb-2 group-hover:text-forge-400 transition-colors">7 Guardrail Lessons</h3>
+          <p class="text-sm text-slate-400">Hard-won lessons from building 18 guardrail files and 19 reviewer agents.</p>
+        </a>
+        <a href="blog/seven-agents.html" class="group p-6 rounded-2xl bg-slate-800/60 border border-slate-700/40 hover:border-forge-500/40 transition-all">
+          <span class="px-2.5 py-1 rounded-full bg-sky-500/10 text-xs font-medium text-sky-400 border border-sky-500/20">Multi-Agent</span>
+          <h3 class="text-lg font-bold text-white mt-3 mb-2 group-hover:text-forge-400 transition-colors">One Framework, 7 Agents</h3>
+          <p class="text-sm text-slate-400">Same guardrails for Copilot, Claude, Cursor, Gemini, Windsurf, Codex, and any AI tool.</p>
+        </a>
+      </div>
+      <div class="text-center">
+        <a href="blog/" class="text-sm text-forge-400 hover:underline font-semibold">View all posts →</a>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ================================================
+       FOOTER
+  ================================================ -->
+  <footer class="border-t border-slate-800/60 bg-slate-950">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div class="grid md:grid-cols-4 gap-8 mb-10">
+
+        <!-- Brand -->
+        <div>
+          <img src="assets/plan-forge-logo.svg" alt="Plan Forge" class="h-7 mb-4" />
+          <p class="text-sm text-slate-500 leading-relaxed">AI coding guardrails for production-grade software. Open source. MIT licensed.</p>
+        </div>
+
+        <!-- Getting Started -->
+        <div>
+          <h4 class="text-sm font-semibold text-slate-300 mb-4">Getting Started</h4>
+          <ul class="space-y-3">
+            <li><a href="manual/" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">Manual</a></li>
+            <li><a href="docs.html" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">Documentation Hub</a></li>
+            <li><a href="https://github.com/srnichols/plan-forge/blob/master/docs/QUICKSTART-WALKTHROUGH.md" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">Quickstart Walkthrough</a></li>
+            <li><a href="https://github.com/srnichols/plan-forge/blob/master/docs/COPILOT-VSCODE-GUIDE.md" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">VS Code + Copilot Guide</a></li>
+            <li><a href="faq.html" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">FAQ</a></li>
+          </ul>
+        </div>
+
+        <!-- Documentation -->
+        <div>
+          <h4 class="text-sm font-semibold text-slate-300 mb-4">Documentation</h4>
+          <ul class="space-y-3">
+            <li><a href="extensions.html" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">Extensions</a></li>
+            <li><a href="examples.html" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">Stack Examples</a></li>
+            <li><a href="https://github.com/srnichols/plan-forge/blob/master/CHANGELOG.md" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">Changelog</a></li>
+            <li><a href="https://github.com/srnichols/plan-forge/blob/master/CONTRIBUTING.md" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">Contributing</a></li>
+          </ul>
+        </div>
+
+        <!-- Community -->
+        <div>
+          <h4 class="text-sm font-semibold text-slate-300 mb-4">Community</h4>
+          <ul class="space-y-3">
+            <li>
+              <a href="https://github.com/srnichols/plan-forge" rel="noopener" class="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors">
+                <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z" clip-rule="evenodd"/>
+                </svg>
+                GitHub Repository
+              </a>
+            </li>
+            <li><a href="https://github.com/srnichols/plan-forge/issues" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">Report an Issue</a></li>
+            <li><a href="https://github.com/srnichols/plan-forge/blob/master/ROADMAP.md" class="text-sm text-slate-500 hover:text-slate-300 transition-colors" rel="noopener">Roadmap</a></li>
+            <li><a href="problem.html" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">The 80/20 Wall</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Creator -->
+      <div class="pt-8 border-t border-slate-800/60">
+        <div class="flex flex-col md:flex-row items-center justify-between gap-6 mb-6">
+          <div class="flex items-center gap-4">
+            <img src="https://github.com/srnichols.png" alt="Scott Nichols" class="w-12 h-12 rounded-full border-2 border-slate-700" loading="lazy" />
+            <div>
+              <p class="text-sm font-semibold text-slate-300">Created by <a href="https://github.com/srnichols" class="text-forge-400 hover:underline">Scott Nichols</a></p>
+              <p class="text-xs text-slate-500">Director @ <a href="https://microsoft.com" class="text-slate-400 hover:text-slate-300">Microsoft</a></p>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <a href="https://github.com/srnichols" class="text-sm text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z" clip-rule="evenodd"/></svg>
+              GitHub
+            </a>
+            <a href="https://www.linkedin.com/in/srnichols/" class="text-sm text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M16.338 16.338H13.67V12.16c0-.995-.017-2.277-1.387-2.277-1.39 0-1.601 1.086-1.601 2.207v4.248H8.014v-8.59h2.559v1.174h.037c.356-.675 1.227-1.387 2.526-1.387 2.703 0 3.203 1.778 3.203 4.092v4.711zM5.005 6.575a1.548 1.548 0 11-.003-3.096 1.548 1.548 0 01.003 3.096zm1.336 9.763H3.667v-8.59h2.674v8.59zM17.668 1H2.328C1.595 1 1 1.581 1 2.298v15.403C1 18.418 1.595 19 2.328 19h15.34c.734 0 1.332-.582 1.332-1.299V2.298C19 1.581 18.402 1 17.668 1z"/></svg>
+              LinkedIn
+            </a>
+          </div>
+        </div>
+        <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+          <p class="text-sm text-slate-600">© 2026 Plan Forge. Open source under the MIT License.</p>
+          <p class="text-sm text-slate-600 italic">"Forge the plan. Harden the scope. Ship with confidence."</p>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Back to top button -->
+  <a href="#home" id="back-to-top" class="back-to-top fixed bottom-6 right-6 w-10 h-10 rounded-full bg-slate-800 border border-slate-700/60 flex items-center justify-center text-slate-400 hover:text-forge-400 hover:border-forge-500/40 transition-all shadow-lg z-40" aria-label="Back to top">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+  </a>
+
+  <!-- Shared JS: scroll reveal, active nav, mobile menu, copy buttons -->
+  <script>
+    // Scroll reveal
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+    }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // Active nav highlighting
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('nav a[href^="#"]');
+    window.addEventListener('scroll', () => {
+      let current = '';
+      sections.forEach(s => { if (window.scrollY >= s.offsetTop - 120) current = s.id; });
+      navLinks.forEach(a => a.classList.toggle('nav-active', a.getAttribute('href') === '#' + current));
+    }, { passive: true });
+
+    // Mobile menu
+    const btn = document.getElementById('mobile-btn');
+    const menu = document.getElementById('mobile-menu');
+    btn.addEventListener('click', () => menu.classList.toggle('hidden'));
+    menu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => menu.classList.add('hidden')));
+
+    // Back to top visibility
+    const btt = document.getElementById('back-to-top');
+    window.addEventListener('scroll', () => {
+      btt.classList.toggle('visible', window.scrollY > 600);
+    }, { passive: true });
+
+    // Copy button with feedback
+    function copyCode(el) {
+      const block = el.closest('.rounded-xl');
+      const code = block.querySelector('code');
+      if (code) {
+        navigator.clipboard.writeText(code.innerText);
+        const orig = el.textContent;
+        el.textContent = 'Copied!';
+        el.style.color = '#34d399';
+        setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 2000);
+      }
+    }
+
+    // Desktop dropdown menus — click-toggle with outside-click + Escape + mouseleave
+    // grace period. Keeps parity with shared.js (used on every other page).
+    const dropdownTriggers = document.querySelectorAll('.nav-dropdown-trigger');
+    dropdownTriggers.forEach((trigger) => {
+      const triggerBtn = trigger.querySelector('button');
+      if (!triggerBtn) return;
+      triggerBtn.setAttribute('aria-haspopup', 'true');
+      triggerBtn.setAttribute('aria-expanded', 'false');
+      triggerBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const wasOpen = trigger.classList.contains('nav-dropdown-open');
+        dropdownTriggers.forEach((t) => {
+          t.classList.remove('nav-dropdown-open');
+          const b = t.querySelector('button');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        });
+        if (!wasOpen) {
+          trigger.classList.add('nav-dropdown-open');
+          triggerBtn.setAttribute('aria-expanded', 'true');
+        }
+      });
+      trigger.querySelectorAll('.nav-dropdown a').forEach((a) =>
+        a.addEventListener('click', () => {
+          trigger.classList.remove('nav-dropdown-open');
+          triggerBtn.setAttribute('aria-expanded', 'false');
+        })
+      );
+    });
+    if (dropdownTriggers.length) {
+      document.addEventListener('click', (e) => {
+        dropdownTriggers.forEach((trigger) => {
+          if (!trigger.contains(e.target) && trigger.classList.contains('nav-dropdown-open')) {
+            trigger.classList.remove('nav-dropdown-open');
+            const b = trigger.querySelector('button');
+            if (b) b.setAttribute('aria-expanded', 'false');
+          }
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        dropdownTriggers.forEach((trigger) => {
+          if (trigger.classList.contains('nav-dropdown-open')) {
+            trigger.classList.remove('nav-dropdown-open');
+            const b = trigger.querySelector('button');
+            if (b) {
+              b.setAttribute('aria-expanded', 'false');
+              b.focus();
+            }
+          }
+        });
+      });
+    }
+  </script>
+
+</body>
+</html>

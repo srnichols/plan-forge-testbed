@@ -9,11 +9,11 @@
       "command": "node"
     },
     "openbrain": {
-      "args": [
-        "E:/GitHub/OpenBrain/dist/mcp/server.js"
-      ],
-      "type": "stdio",
-      "command": "node"
+      "type": "sse",
+      "url": "https://openbrain.tailfb4202.ts.net/sse",
+      "headers": {
+        "x-brain-key": "${env:OPENBRAIN_KEY}"
+      }
     }
   }
 }

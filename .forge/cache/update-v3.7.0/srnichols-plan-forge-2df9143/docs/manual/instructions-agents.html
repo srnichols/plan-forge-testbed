@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chapter 10: Instruction Files &amp; Agents — Plan Forge Manual</title>
+  <meta name="description" content="How Plan Forge guardrails auto-load: the applyTo system, 4 universal instruction files, and 17 domain-specific files that whisper the right rules at the right time." />
+  <link rel="icon" type="image/svg+xml" href="../assets/plan-forge-logo.svg" />
+  <link rel="stylesheet" href="../assets/tailwind.built.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../assets/shared.css" />
+  <link rel="stylesheet" href="assets/manual.css" />
+</head>
+<body class="bg-slate-950 text-slate-300 min-h-screen">
+  <button id="mobile-sidebar-btn" class="mobile-sidebar-btn fixed top-4 left-4 z-[101] lg:hidden p-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-400 hover:text-slate-100 transition-colors" aria-label="Open navigation"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+  <div class="manual-layout">
+    <aside id="manual-sidebar" class="manual-sidebar"><nav id="sidebar-nav"></nav></aside>
+    <main>
+      <!-- Hero -->
+      <img src="assets/chapter-heroes/ch10-hero.webp" alt="Constellation of glowing amber instruction-rule nodes interconnected by threads of light, auto-loading guardrails activating in context" loading="lazy" decoding="async" class="chapter-hero" />
+      <div class="chapter-content">
+
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Chapter 10</div>
+      <h1>Instruction Files &amp; Agents</h1>
+      <p class="text-lg text-slate-400 mb-8">The guardrail system: what each file covers, when it activates, and how agents review your code.</p>
+
+      <!-- ─── Overview ─── -->
+      <h2 id="overview">How Auto-Loading Works</h2>
+      <p>Each instruction file has an <code>applyTo</code> glob pattern in its YAML frontmatter. When you edit a file matching that pattern, the instruction auto-loads into the AI's context. No manual action needed, it's the difference between drowning the AI in every rule you have and having the right guidance whisper only when it's relevant. (For full details on writing your own <code>applyTo</code> patterns, see <a href="customization.html#custom-instructions">Chapter 9</a>.)</p>
+      <div class="cmd-block">
+        <div class="cmd-block-header"><span>Example: security.instructions.md</span></div>
+        <pre><code>---
+description: Security best practices, input validation, auth, secrets
+applyTo: "**/auth/**,**/security/**,**/middleware/**"
+---
+# Security Rules
+- Parameterized queries only, never string interpolation in SQL
+- Input validation at system boundaries
+- No secrets in code, use environment variables or secret managers
+...</code></pre>
+      </div>
+
+      <!-- ─── Concrete scenario ─── -->
+      <h2 id="scenario">A Concrete Scenario</h2>
+      <p>Say you ask Copilot Chat to make a change to <code>src/auth/token-validator.cs</code>. Here's what auto-loads, and why each one matters:</p>
+
+      <table class="manual-table">
+        <thead><tr><th>File that loads</th><th>Why it matched</th><th>What it whispers to the AI</th></tr></thead>
+        <tbody>
+          <tr><td><code>architecture-principles.instructions.md</code></td><td>Universal, <code>applyTo: "**"</code></td><td>Stop! Before writing code, ask the 5 architecture questions. Don't bypass scope, don't skip tests.</td></tr>
+          <tr><td><code>security.instructions.md</code></td><td>Path matched <code>**/auth/**</code></td><td>Parameterized queries only. No secrets in code. Validate inputs at every boundary. OWASP Top 10 defense patterns.</td></tr>
+          <tr><td><code>auth.instructions.md</code></td><td>Path matched <code>**/auth/**</code></td><td>JWT/OIDC patterns, token expiry rules, RBAC enforcement, multi-tenant isolation guards.</td></tr>
+          <tr><td><code>testing.instructions.md</code></td><td>Universal, <code>applyTo: "**"</code></td><td>Tests required for new behavior. Use the project's test framework. Cover edge cases (expired token, tampered signature).</td></tr>
+        </tbody>
+      </table>
+
+      <p>The AI now has 4 focused instruction files in its context, not 17. If you switch to editing <code>src/db/UserRepository.cs</code>, security stays loaded but auth swaps out for <code>database.instructions.md</code>. The right rules whisper at the right time, without you doing anything.</p>
+
+      <p>Below is the full catalog: which files exist, what each covers, and which patterns trigger them.</p>
+
+      <!-- ─── Shared (Universal) ─── -->
+      <h2 id="shared">Universal Files (All Presets)</h2>
+      <p>These four files ship with every preset, they form the universal baseline:</p>
+      <table class="manual-table">
+        <thead><tr><th>File</th><th>applyTo</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>architecture-principles</code></td><td><code>**</code></td><td>5 questions before coding, 4-layer architecture, separation of concerns</td></tr>
+          <tr><td><code>git-workflow</code></td><td><code>**</code></td><td>Conventional commits, push reminders, version-aware messaging</td></tr>
+          <tr><td><code>ai-plan-hardening-runbook</code></td><td><code>docs/plans/**</code></td><td>Quick-reference when editing plan files</td></tr>
+          <tr><td><code>status-reporting</code></td><td><code>docs/plans/**, .forge/**</code></td><td>Standard output templates for orchestration updates</td></tr>
+        </tbody>
+      </table>
+
+      <!-- ─── Domain Files ─── -->
+      <h2 id="domain">Domain Instruction Files (Per Preset)</h2>
+      <p>Each preset installs 17 domain-specific instruction files. They auto-load based on what you're editing:</p>
+      <table class="manual-table">
+        <thead><tr><th>File</th><th>Domain</th><th>Loads When Editing</th></tr></thead>
+        <tbody>
+          <tr><td><code>api-patterns</code></td><td>REST conventions, pagination, error responses</td><td>Controllers, routes, endpoints</td></tr>
+          <tr><td><code>auth</code></td><td>JWT/OIDC, RBAC (role-based access control), multi-tenant isolation</td><td>Auth modules, middleware</td></tr>
+          <tr><td><code>caching</code></td><td>Redis, in-memory cache, TTL strategies</td><td>Cache services, config</td></tr>
+          <tr><td><code>database</code></td><td>ORM/query patterns, migrations, connections</td><td>Repositories, SQL, models</td></tr>
+          <tr><td><code>dapr</code></td><td>Dapr sidecar patterns, pub/sub, state management</td><td>Dapr config, service invocation</td></tr>
+          <tr><td><code>deploy</code></td><td>Dockerfiles, health checks, container optimization</td><td>Dockerfiles, compose, k8s</td></tr>
+          <tr><td><code>errorhandling</code></td><td>Exception hierarchy, ProblemDetails (RFC 7807 standard JSON error responses), error boundaries</td><td>Error handlers, middleware</td></tr>
+          <tr><td><code>graphql</code></td><td>Schema design, resolvers, query patterns, Hot Chocolate / Apollo</td><td>GraphQL types, resolvers</td></tr>
+          <tr><td><code>messaging</code></td><td>Pub/sub, job queues, event-driven patterns</td><td>Event handlers, message consumers</td></tr>
+          <tr><td><code>multi-environment</code></td><td>Dev/staging/prod config, environment detection</td><td>Config files, env setup</td></tr>
+          <tr><td><code>naming</code></td><td>Naming conventions, file organization, namespace rules</td><td>All code files</td></tr>
+          <tr><td><code>observability</code></td><td>OpenTelemetry, structured logging, metrics</td><td>Logging, tracing, health</td></tr>
+          <tr><td><code>performance</code></td><td>Hot/cold path analysis, allocation reduction</td><td>Performance-critical code</td></tr>
+          <tr><td><code>security</code></td><td>Input validation, secret management, CORS</td><td>Auth, security, middleware</td></tr>
+          <tr><td><code>testing</code></td><td>Unit tests, integration tests, test containers</td><td>Test files</td></tr>
+          <tr><td><code>version</code></td><td>Semantic versioning, commit-driven bumps</td><td>Version files, changelogs</td></tr>
+          <tr><td><code>project-principles</code></td><td>Activates when PROJECT-PRINCIPLES.md exists</td><td>Plan files, reviews</td></tr>
+        </tbody>
+      </table>
+      <div class="callout callout-info">
+        <strong>TypeScript preset</strong> adds a 15th file: <code>frontend.instructions.md</code> for React/Vue patterns. The <code>azure-iac</code> preset replaces several app-specific files with Bicep/Terraform equivalents.
+      </div>
+      <p>As of v2.18, every instruction file includes <strong>Temper Guards</strong> (shortcut prevention tables) and <strong>Warning Signs</strong> (observable anti-patterns). These help agents avoid common quality erosion and help reviewers detect violations.</p>
+
+      <div class="callout callout-tip">
+        <strong>Agents, Skills &amp; Hooks</strong>, the reviewer agents (14), slash-command skills (12), and lifecycle hooks are covered in the companion reference:
+        <a href="instructions-agents-reference.html">Chapter 10 · Reference — Agents, Skills &amp; Hooks →</a>
+      </div>
+
+        <p class="text-sm text-slate-500 mt-8">📄 Full reference: <a href="../capabilities.html">capabilities</a>, <a href="multi-agent.html#copilot">Multi-Agent Setup — GitHub Copilot</a></p>
+      <div id="chapter-prev-next" class="chapter-nav"></div>
+
+    </div></main>
+  </div>
+  <script src="assets/manual.js"></script>
+</body>
+</html>

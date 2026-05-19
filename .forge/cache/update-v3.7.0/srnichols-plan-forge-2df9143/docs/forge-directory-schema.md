@@ -1,0 +1,224 @@
+# `.forge/` Directory Schema
+
+> **Version**: 1.0
+> **Last Updated**: 2026-04-04
+
+This document defines every file and directory under `.forge/`, their format, which tool creates them, and their purpose.
+
+---
+
+## Core Configuration
+
+### `.forge.json`
+- **Path**: Project root (not inside `.forge/`)
+- **Format**: JSON
+- **Created By**: `pforge init` (setup.ps1/setup.sh)
+- **Used By**: All tools, orchestrator, dashboard
+- **Schema**:
+```json
+{
+  "pipelineVersion": "2.0",
+  "templateVersion": "1.2.2",
+  "preset": "dotnet",
+  "agents": ["claude", "cursor", "codex"],
+  "modelRouting": {
+    "execute": "gpt-5.2-codex",
+    "review": "claude-sonnet-4.6",
+    "default": "auto"
+  },
+  "quorum": {
+    "enabled": false,
+    "auto": true,
+    "threshold": 7,
+    "models": ["claude-opus-4.6", "gpt-5.3-codex", "gemini-3.1-pro"],
+    "reviewerModel": "claude-opus-4.6",
+    "dryRunTimeout": 300000
+  },
+  "extensions": []
+}
+```
+
+---
+
+## Run Results
+
+### `.forge/runs/<timestamp>_<plan-name>/`
+- **Created By**: `forge_run_plan` / `pforge run-plan`
+- **Naming**: ISO timestamp (colons replaced by hyphens) + plan filename
+- **Example**: `.forge/runs/2026-04-04T09-30-00-000Z_Phase-1-AUTH-PLAN/`
+
+### `.forge/runs/<timestamp>/run.json`
+- **Format**: JSON
+- **Created By**: Orchestrator — at run start
+- **Schema**:
+```json
+{
+  "plan": "docs/plans/Phase-1-AUTH-PLAN.md",
+  "startTime": "2026-04-04T09:30:00.000Z",
+  "model": "claude-sonnet-4.6",
+  "modelRouting": { "default": "auto" },
+  "mode": "auto",
+  "sliceCount": 8,
+  "executionOrder": ["1", "2", "3", "4", "5", "6", "7", "8"]
+}
+```
+
+### `.forge/runs/<timestamp>/slice-N.json`
+- **Format**: JSON
+- **Created By**: Orchestrator — after each slice completes
+- **Schema**:
+```json
+{
+  "number": "1",
+  "title": "Database Migration",
+  "status": "passed",
+  "duration": 45000,
+  "exitCode": 0,
+  "gateStatus": "passed",
+  "gateOutput": "Build succeeded. 0 warnings.",
+  "gateError": null,
+  "tokens": {
+    "tokens_in": "unknown",
+    "tokens_out": 4200,
+    "model": "claude-sonnet-4.6",
+    "cost_usd": 0.12
+  },
+  "worker": "gh-copilot",
+  "model": "claude-sonnet-4.6"
+}
+```
+
+### `.forge/runs/<timestamp>/slice-N-log.txt`
+- **Format**: Plain text
+- **Created By**: Orchestrator — worker stdout/stderr capture
+- **Used By**: Dashboard Session Replay
+- **Contents**: Worker name, model, timestamps, full stdout + stderr
+
+### `.forge/runs/<timestamp>/slice-N-quorum.json`
+- **Format**: JSON
+- **Created By**: Orchestrator — when slice runs with quorum mode (v2.5)
+- **Schema**:
+```json
+{
+  "score": 8,
+  "signals": { "scopeWeight": 0.8, "dependencyWeight": 0.75, "securityWeight": 0.67, "databaseWeight": 0.33, "gateWeight": 0.6, "taskWeight": 0.8, "historicalWeight": 0 },
+  "threshold": 7,
+  "models": ["claude-opus-4.6", "gpt-5.3-codex", "gemini-3.1-pro"],
+  "successfulLegs": 3,
+  "totalLegs": 3,
+  "dispatchDuration": 125000,
+  "reviewerFallback": false,
+  "reviewerCost": 0.32
+}
+```
+
+### `.forge/runs/<timestamp>/summary.json`
+- **Format**: JSON
+- **Created By**: Orchestrator — at run completion
+- **Schema**:
+```json
+{
+  "plan": "docs/plans/Phase-1-AUTH-PLAN.md",
+  "startTime": "2026-04-04T09:30:00.000Z",
+  "endTime": "2026-04-04T10:15:00.000Z",
+  "mode": "auto",
+  "model": "claude-sonnet-4.6",
+  "sliceCount": 8,
+  "results": { "passed": 8, "failed": 0, "skipped": 0, "total": 8 },
+  "totalDuration": 2700000,
+  "totalTokensOut": 42000,
+  "status": "completed",
+  "sweep": { "ran": true, "clean": true, "markerCount": 0 },
+  "analyze": { "ran": true, "score": 91 },
+  "report": "All slices: 8 passed, 0 failed. Sweep: clean. Score: 91/100.",
+  "sliceResults": []
+}
+```
+
+### `.forge/runs/<timestamp>/events.log`
+- **Format**: Plain text (newline-delimited timestamped events)
+- **Created By**: Orchestrator — event bus log handler
+- **Used By**: WebSocket hub replays events for late-joining clients
+
+---
+
+## Cost Tracking
+
+### `.forge/cost-history.json`
+- **Format**: JSON array
+- **Created By**: Cost calculation engine
+- **Schema**:
+```json
+[
+  {
+    "runId": "2026-04-04T09-30-00-000Z_Phase-1-AUTH-PLAN",
+    "date": "2026-04-04",
+    "model": "claude-sonnet-4.6",
+    "tokensIn": 15000,
+    "tokensOut": 42000,
+    "costUSD": 0.85,
+    "plan": "Phase-1-AUTH-PLAN"
+  }
+]
+```
+
+---
+
+## Infrastructure
+
+### `.forge/server-ports.json`
+- **Format**: JSON
+- **Created By**: WebSocket hub — when HTTP/WS servers start
+- **Used By**: Dashboard connects to correct port
+- **Schema**:
+```json
+{
+  "http": 3100,
+  "ws": 3101,
+  "pid": 12345,
+  "startedAt": "2026-04-04T09:30:00.000Z"
+}
+```
+
+### `.forge/capabilities.json`
+- **Format**: JSON
+- **Created By**: `pforge init` — machine-readable discovery
+- **Schema**: Lists available tools, installed extensions, supported commands
+
+### `.forge/phase.lock`
+- **Format**: JSON
+- **Created By**: Team lock mechanism
+- **Used By**: Prevents concurrent runs on same phase
+- **Schema**:
+```json
+{
+  "user": "scott",
+  "timestamp": "2026-04-04T09:30:00.000Z",
+  "phase": "Phase-7-INVENTORY-PLAN",
+  "process_id": 12345
+}
+```
+- **Stale lock cleanup**: After 1 hour, lock is considered stale and can be overridden
+- **Identity**: From `git config user.name`
+
+---
+
+## Extensions
+
+### `.forge/extensions/`
+- **Created By**: `pforge ext install`
+- **Contains**: Installed extension directories (each has `extension.json`, agents, prompts, instructions)
+
+---
+
+## Gitignore
+
+All `.forge/` files except `.forge.json` (project root) should be in `.gitignore`:
+```
+.forge/runs/
+.forge/cost-history.json
+.forge/server-ports.json
+.forge/phase.lock
+```
+
+`.forge.json` is gitignored by default (project-specific config). This schema doc lives at `docs/forge-directory-schema.md` (the entire `.forge/` directory is gitignored, so the schema reference belongs under `docs/`).
