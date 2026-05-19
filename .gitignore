@@ -6,4 +6,7 @@ obj/
 .forge/cost-history.json
 .forge/server-ports.json
 .forge.json
+.forge/ab-test/
+.forge/cache/
+.forge/ProjectService-ORIGINAL.cs
 node_modules/
