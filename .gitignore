@@ -2,11 +2,5 @@ bin/
 obj/
 .vs/
 *.user
-.forge/runs/
-.forge/cost-history.json
-.forge/server-ports.json
-.forge.json
-.forge/ab-test/
-.forge/cache/
-.forge/ProjectService-ORIGINAL.cs
+.forge/
 node_modules/

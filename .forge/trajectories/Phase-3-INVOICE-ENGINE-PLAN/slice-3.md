@@ -1,7 +1,0 @@
-Slice 3 was essentially a hardening pass — the test file already existed with all eighteen scenarios correctly implemented. My work was alignment: renaming two test methods to match the plan's naming table exactly (adding the `Exception` suffix to `ThrowsInvalidOperation`) and replacing informal comments at the two spec-drift points with greppable `// SPEC DRIFT:` markers so the Reviewer Gate can find them mechanically.
-
-I confirmed the service behavior by reading InvoiceService.cs before touching the tests. The inactive-client path indeed filters by `IsActive` in the LINQ WHERE clause, so an inactive client simply isn't found — hence `KeyNotFoundException`, not `ValidationException`. The test correctly asserts the actual behavior and the drift comment explains why it diverges from the slice spec.
-
-The banker's rounding test uses carefully chosen midpoint inputs (`0.5h × $200.25` and `0.5h × $200.27`) that exercise `MidpointRounding.ToEven` in both directions. Future slices touching `BuildInvoiceLines` should be aware that the rounding happens at the line-total level, not on the hourly rate.
-
-No dead-ends encountered. The key files are `tests/TimeTracker.Tests/InvoiceServiceTests.cs` (modified) and `src/TimeTracker.Api/Services/InvoiceService.cs` (read-only reference). If a future slice addresses the spec drift, it will need to modify the client lookup in `GenerateInvoiceAsync` to throw `ValidationException` for inactive clients instead of letting them fall through to `KeyNotFoundException`.

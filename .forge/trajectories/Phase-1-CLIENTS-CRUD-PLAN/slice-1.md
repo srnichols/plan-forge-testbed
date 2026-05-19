@@ -1,5 +1,0 @@
-This slice was a verify-only pass. The ClientsController already existed with full conformance to the scope contract — primary constructor DI of IClientService, three required endpoints (GET all, GET by id, POST create) plus two bonus ones (PUT update, DELETE/deactivate), proper CancellationToken threading, and ValidationException-to-400 mapping via try/catch. No edits were needed.
-
-The one pattern worth noting for future slices: the controller uses exception-driven validation flow (catching ValidationException from the service layer) rather than a Result monad. This is consistent across all three controllers (Clients, TimeEntries, Invoices) so future slices should not attempt to refactor this pattern — it's the established project convention. A follow-up slice for global ProblemDetails middleware would be the proper place to centralize error mapping.
-
-Key files: `src/TimeTracker.Api/Controllers/ClientsController.cs`, `src/TimeTracker.Api/Services/IClientService.cs`, `src/TimeTracker.Api/Services/ClientService.cs`. The service handles all validation (name required, hourlyRate > 0, email format) and active-only filtering.

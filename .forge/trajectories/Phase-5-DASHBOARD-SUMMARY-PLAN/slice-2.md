@@ -1,5 +1,0 @@
-Slice 2 was nearly a no-op because Slice 1 had already created both the service file and the DI registration. The only meaningful change was upgrading the three `SumAsync` calls from `SumAsync(t => t.Hours, ct)` to `SumAsync(t => (decimal?)t.Hours, ct) ?? 0m` — the defensive null-coalescing pattern the quorum analysis converged on. This guards against provider differences where some EF Core providers return null instead of zero when summing an empty sequence.
-
-I confirmed all five DashboardServiceTests pass along with the full 71-test suite, with no regressions. The `EmptyDatabase_ReturnsAllZeros` test is the critical one exercising the null-coalescing path since InMemory may behave differently from PostgreSQL on empty-set sums.
-
-Future slices touching this service should not remove the `(decimal?)` cast — it looks redundant but is intentional. The controller in Slice 3 will consume `IDashboardService` via DI, which is already registered. No additional setup is needed for the next slice.

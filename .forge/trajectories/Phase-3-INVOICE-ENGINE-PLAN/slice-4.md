@@ -1,7 +1,0 @@
-This was a verify-and-harden slice. The controller already existed with all six endpoints wired up correctly. The only real gap was in the Generate method, which was missing an InvalidOperationException catch that the other state-transition endpoints (Issue, Pay, VoidInvoice) already had. The service layer's GenerateInvoiceAsync can throw InvalidOperationException when invoice number collision occurs after retry exhaustion, and without the catch it would bubble as a 500 instead of a 409 Conflict.
-
-The fix was a single four-line hunk inserted after the existing KeyNotFoundException catch in Generate. No other files were touched. The pattern is consistent with Issue, Pay, and VoidInvoice — all three already map InvalidOperationException to Conflict with an anonymous error object.
-
-I considered whether to also introduce ProblemDetails responses (per project guardrails), but the plan explicitly forbids that change in this slice since it would break existing Blazor consumers in InvoicesApi.cs and InvoicesList.razor.cs. That's deferred to a follow-up slice.
-
-Future slices touching InvoicesController should be aware that the DTO records (GenerateInvoiceRequest, VoidInvoiceRequest) are co-located at the bottom of the controller file. This matches the pattern in other controllers but may be relocated later. The controller uses primary constructor DI for IInvoiceService, which is the established project convention.
