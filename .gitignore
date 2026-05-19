@@ -3,4 +3,5 @@ obj/
 .vs/
 *.user
 .forge/
+.forge.json
 node_modules/
