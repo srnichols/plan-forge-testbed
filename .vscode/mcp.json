@@ -10,7 +10,7 @@
     },
     "openbrain": {
       "type": "sse",
-      "url": "https://openbrain.tailfb4202.ts.net/sse",
+      "url": "${env:OPENBRAIN_URL}",
       "headers": {
         "x-brain-key": "${env:OPENBRAIN_KEY}"
       }
