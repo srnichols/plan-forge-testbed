@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TimeTracker.Api.Data;
+using TimeTracker.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,8 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddScoped<IClientService, ClientService>();
 
 var app = builder.Build();
 
