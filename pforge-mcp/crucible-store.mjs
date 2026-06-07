@@ -37,7 +37,7 @@ import { randomUUID } from "node:crypto";
 
 import { releaseClaim } from "./crucible.mjs";
 
-const VALID_LANES = new Set(["tweak", "feature", "full"]);
+const VALID_LANES = new Set(["tweak", "feature", "full", "bug-batch"]);
 const VALID_SOURCES = new Set(["human", "agent"]);
 const VALID_STATUSES = new Set(["in-progress", "finalized", "abandoned"]);
 
@@ -75,7 +75,7 @@ function atomicWrite(path, content) {
  * @param {string|null} [opts.parentSmeltId=null] - for agent self-referrals
  * @returns {object} the created smelt record
  */
-export function createSmelt({ lane, rawIdea, projectDir, source = "human", parentSmeltId = null }) {
+export function createSmelt({ lane, rawIdea, projectDir, source = "human", parentSmeltId = null, bugId = null }) {
   if (!VALID_LANES.has(lane)) {
     throw new Error(`createSmelt: invalid lane '${lane}' (must be tweak|feature|full)`);
   }
@@ -99,6 +99,7 @@ export function createSmelt({ lane, rawIdea, projectDir, source = "human", paren
     status: "in-progress",
     source,
     parentSmeltId,
+    bugId: bugId || null,
   };
   atomicWrite(smeltPath(projectDir, record.id), JSON.stringify(record, null, 2));
   return record;

@@ -93,9 +93,17 @@ $configPath = Join-Path $ProjectPath ".forge.json"
 if (Test-Path $configPath) {
     $config = Get-Content $configPath -Raw | ConvertFrom-Json
     $preset = $config.preset
-    Write-Host "  INFO  Detected preset: $preset" -ForegroundColor Cyan
+    # Treat missing/empty preset the same as 'custom' — projects that haven't
+    # declared a stack preset shouldn't trigger stack-specific file checks
+    # (e.g. requiring database.instructions.md on a tooling-only repo).
+    if (-not $preset) {
+        Write-Host "  INFO  No preset declared in .forge.json — treating as 'custom'" -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "  INFO  Detected preset: $preset" -ForegroundColor Cyan
+    }
 
-    if ($preset -ne 'custom') {
+    if ($preset -and $preset -ne 'custom') {
         Check-FileExists "AGENTS.md"
         Check-FileExists ".github/instructions/testing.instructions.md"
         Check-FileExists ".github/instructions/security.instructions.md"
@@ -116,7 +124,7 @@ if (Test-Path $configPath) {
     Write-Host ""
     Write-Host "Agentic files (prompts, agents, skills):" -ForegroundColor Cyan
 
-    if ($preset -ne 'custom') {
+    if ($preset -and $preset -ne 'custom') {
         $promptsDir = Join-Path $ProjectPath ".github/prompts"
         $agentsDir  = Join-Path $ProjectPath ".github/agents"
         $skillsDir  = Join-Path $ProjectPath ".github/skills"
@@ -373,6 +381,38 @@ if ((Test-Path $mcpServerPath) -and (Test-Path $mcpPackagePath)) {
 }
 else {
     Write-Host "  WARN  MCP server: pforge-mcp/ not found (optional — only required in Plan Forge source repo)" -ForegroundColor Yellow
+    $warn++
+}
+
+# Forge-Master Studio (Phase-29 chat bridge — imported by pforge-mcp via
+# relative paths and registered as second MCP server in .vscode/mcp.json)
+$fmServerPath = Join-Path $ProjectPath "pforge-master/server.mjs"
+$fmPackagePath = Join-Path $ProjectPath "pforge-master/package.json"
+if ((Test-Path $fmServerPath) -and (Test-Path $fmPackagePath)) {
+    $fmPkg = Get-Content $fmPackagePath -Raw | ConvertFrom-Json
+    $fmModules = Join-Path $ProjectPath "pforge-master/node_modules"
+    if (Test-Path $fmModules) {
+        Write-Host "  PASS  Forge-Master: pforge-master v$($fmPkg.version) (deps installed)" -ForegroundColor Green
+    } else {
+        Write-Host "  WARN  Forge-Master: pforge-master v$($fmPkg.version) — run 'npm install' in pforge-master/" -ForegroundColor Yellow
+        $warn++
+    }
+    $pass++
+}
+else {
+    Write-Host "  WARN  Forge-Master: pforge-master/ not found (optional — chat bridge unavailable)" -ForegroundColor Yellow
+    $warn++
+}
+
+# pforge-sdk (shared helper library — NO runtime deps, imported via
+# relative paths from pforge-mcp; missing files crash opt-in features)
+$sdkClientPath = Join-Path $ProjectPath "pforge-sdk/src/client.mjs"
+if (Test-Path $sdkClientPath) {
+    Write-Host "  PASS  pforge-sdk: src/client.mjs found" -ForegroundColor Green
+    $pass++
+}
+else {
+    Write-Host "  WARN  pforge-sdk: src/client.mjs not found (deep imports from pforge-mcp will fail)" -ForegroundColor Yellow
     $warn++
 }
 

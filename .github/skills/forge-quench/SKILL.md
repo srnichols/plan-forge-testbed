@@ -1,7 +1,7 @@
 ---
 name: forge-quench
-description: "Systematically reduce .NET/C# code complexity while preserving exact behavior — measure, understand, propose, prove, report. Use after a feature is complete and tests pass, when code works but is harder to maintain than it should be."
-argument-hint: "[optional: specific files or directories to simplify, e.g. 'src/Services/' or 'src/Services/UserService.cs']"
+description: "Systematically reduce code complexity while preserving exact behavior — measure, understand, propose, prove, report. Use after a feature is complete and tests pass, when code works but is harder to maintain than it should be."
+argument-hint: "[optional: specific files or directories to simplify, e.g. 'src/services/' or 'src/UserService.cs']"
 tools:
   - run_in_terminal
   - read_file
@@ -21,29 +21,21 @@ tools:
 
 ### 1. Measure Complexity
 
-Identify the most complex methods in the target files. Use .NET-appropriate static analysis:
+Identify the most complex functions in the target files. Use language-appropriate static analysis:
 
 ```bash
-# Install dotnet-counters for runtime diagnostics (optional)
-dotnet tool install -g dotnet-counters
-
-# Count methods exceeding 50 lines
-grep -rn "public\|private\|protected\|internal" <target> --include="*.cs" | head -30
-
-# Check cyclomatic complexity via JetBrains dotnet-inspect if available
-# dotnet-inspect <target> --severity=WARNING
-
-# Manual analysis: identify deep nesting, long switch statements, excessive branching
-grep -rn "if\|else\|switch\|case\|catch" <target> --include="*.cs" | wc -l
+# Generic: count lines per function, nesting depth, branches
+# Stack-specific variants override this step with proper tools
+grep -rn "function\|def \|func \|fn \|public.*(" <target> | head -20
 ```
 
-List the **top 3–5 most complex methods** by:
-- Line count (methods >50 lines)
+List the **top 3–5 most complex functions** by:
+- Line count (functions >50 lines)
 - Nesting depth (>3 levels of indentation)
 - Branch count (>5 if/else/switch branches)
 - Parameter count (>4 parameters)
 
-> **If no methods exceed thresholds**: Report "No simplification candidates found" and STOP with a PASS.
+> **If no functions exceed thresholds**: Report "No simplification candidates found" and STOP with a PASS.
 
 ### 2. Understand First (Chesterton's Fence)
 
@@ -90,14 +82,14 @@ For each proposal:
 For each approved simplification:
 
 1. **Apply** the change to the file
-2. **Run the full test suite** immediately (`dotnet test`)
+2. **Run the full test suite** immediately
 3. **If tests pass**: Commit with a descriptive message:
    ```
-   refactor(services): extract validation from UserService.CreateAsync
+   refactor(<scope>): <what was simplified>
    
    Chesterton's Fence: <why the complexity existed>
    Simplification: <pattern applied>
-   Behavior: unchanged — all N tests pass (`dotnet test`)
+   Behavior: unchanged — all N tests pass
    ```
 4. **If tests FAIL**: Immediately revert the change. Do NOT fix the test — the failing test indicates the simplification changed behavior. Report the failure and move to the next candidate.
 
@@ -167,5 +159,5 @@ After completing this skill, confirm:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before simplifying**: `search_thoughts("code complexity", project: "TimeTracker", created_by: "copilot-vscode", type: "pattern")` — load prior simplification decisions, functions intentionally left complex, and patterns that worked
-- **After simplifying**: `capture_thought("Forge Quench: <N functions simplified, N skipped — key changes>", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-forge-quench")` — persist what was simplified and what was intentionally left complex for future sessions
+- **Before simplifying**: `search_thoughts("code complexity", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "pattern")` — load prior simplification decisions, functions intentionally left complex, and patterns that worked
+- **After simplifying**: `capture_thought("Forge Quench: <N functions simplified, N skipped — key changes>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-forge-quench")` — persist what was simplified and what was intentionally left complex for future sessions

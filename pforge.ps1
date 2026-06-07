@@ -67,6 +67,71 @@ function Write-ManualSteps([string]$Title, [string[]]$Steps) {
     Write-Host ""
 }
 
+# ─── .gitignore Manager (Issue #211) ───────────────────────────────────
+# Seed/refresh a marker-delimited managed block in the consumer's .gitignore
+# so runtime artifacts under .forge/ never get committed. Idempotent — user
+# content outside the markers is preserved. Twin of setup.ps1's function.
+function Update-PlanForgeGitignore([string]$RepoRoot) {
+    $gitignorePath = Join-Path $RepoRoot ".gitignore"
+    $beginMarker = "# >>> plan-forge managed (do not edit between markers) >>>"
+    $endMarker   = "# <<< plan-forge managed <<<"
+    $nl = [Environment]::NewLine
+    $managedBody = @(
+        $beginMarker,
+        "# Runtime / cache / telemetry produced by pforge — never commit.",
+        "# This block is refreshed by setup + 'pforge self-update'. Issue #211.",
+        "**/.forge/",
+        ".forge/secrets.json",
+        "pforge-mcp/node_modules/",
+        "pforge-mcp/cli-schema.json",
+        "pforge-mcp/.vitest-results.json",
+        "pforge-master/node_modules/",
+        "pforge-sdk/node_modules/",
+        $endMarker
+    ) -join $nl
+
+    if (Test-Path $gitignorePath) {
+        $content = Get-Content $gitignorePath -Raw
+        if ($null -eq $content) { $content = '' }
+        if ($content -match [regex]::Escape($beginMarker)) {
+            $pattern = [regex]::Escape($beginMarker) + "[\s\S]*?" + [regex]::Escape($endMarker)
+            $updated = [regex]::Replace($content, $pattern, { param($m) $managedBody })
+            if ($updated -ne $content) {
+                Set-Content -Path $gitignorePath -Value $updated -NoNewline
+                Write-Host "  ✅ Refreshed plan-forge managed block in .gitignore" -ForegroundColor Green
+            } else {
+                Write-Host "  ✓ .gitignore plan-forge block already current" -ForegroundColor DarkGray
+            }
+        } else {
+            $separator = if ($content.Length -eq 0 -or $content.EndsWith("`n")) { "" } else { $nl }
+            Add-Content -Path $gitignorePath -Value ($separator + $nl + $managedBody)
+            Write-Host "  ✅ Appended plan-forge managed block to .gitignore" -ForegroundColor Green
+        }
+    } else {
+        Set-Content -Path $gitignorePath -Value $managedBody
+        Write-Host "  ✅ Created .gitignore with plan-forge managed block" -ForegroundColor Green
+    }
+
+    $gitDir = Join-Path $RepoRoot ".git"
+    if (Test-Path $gitDir) {
+        Push-Location $RepoRoot
+        try {
+            $tracked = & git ls-files .forge 2>$null | Select-Object -First 1
+            if ($tracked) {
+                Write-Host ""
+                Write-Host "⚠  Files under .forge/ are currently tracked by git but the managed" -ForegroundColor Yellow
+                Write-Host "   .gitignore now excludes them. Clean up with:" -ForegroundColor Yellow
+                Write-Host "     git rm -r --cached .forge" -ForegroundColor Cyan
+                Write-Host "     git commit -m `"chore(pforge): untrack .forge/ runtime artifacts`"" -ForegroundColor Cyan
+                Write-Host ""
+            }
+        } catch {
+            Write-Verbose "Skipped .forge git-tracking check: $($_.Exception.Message)"
+        }
+        finally { Pop-Location }
+    }
+}
+
 function Show-Help {
     Write-Host ""
     Write-Host "pforge — Plan Forge Pipeline CLI" -ForegroundColor Cyan
@@ -86,6 +151,7 @@ function Show-Help {
     Write-Host "  ext remove <name> Remove an installed extension"
     Write-Host "  update [source]   Update framework files from Plan Forge source (preserves customizations)"
     Write-Host "  self-update       Check for and install the latest Plan Forge release from GitHub"
+    Write-Host "                      Flags: --force (heal), --downgrade (with --force), --yes/-y, --dry-run, --verify (run check + smith after)"
     Write-Host "  analyze <plan>    Cross-artifact analysis — requirement traceability, test coverage, scope compliance"
     Write-Host "  run-plan <plan>   Execute a hardened plan — spawn CLI workers, validate at every boundary, track tokens"
     Write-Host "  version-bump <v>  Update version across all files (VERSION, package.json, docs, README)"
@@ -105,6 +171,7 @@ function Show-Help {
     Write-Host "  testbed-happypath Run all happy-path testbed scenarios sequentially with aggregated pass/fail summary"
     Write-Host "  migrate-memory    Migrate legacy .forge/memory/ entries into the L2 brain store"
     Write-Host "  drain-memory      Drain pending OpenBrain queue records to the configured OpenBrain server"
+    Write-Host "  forge-home-cleanup Archive ephemeral .forge/ files (logs, tmp, release notes) and prune old archive slots"
     Write-Host "  mcp-call <tool>   Invoke any MCP tool by name (e.g. forge_crucible_list) via the local MCP server"
     Write-Host "  tour              Guided walkthrough of your installed Plan Forge files"
     Write-Host "  hammer-fm         Run Forge-Master hammer harness against a live dashboard (see: pforge hammer-fm --help)"
@@ -1121,7 +1188,7 @@ function Invoke-Sweep {
             ForEach-Object {
                 $findings = Select-String -Path $_.FullName -Pattern $patternRegex -CaseSensitive:$false
                 $relPath = $_.FullName.Substring($RepoRoot.Length + 1)
-                $isFramework = $relPath -match '^(pforge-mcp[/\\]|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
+                $isFramework = $relPath -match '^(pforge-(mcp|sdk|master)[/\\]|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
                 foreach ($m in $findings) {
                     $relDisplay = $m.Path.Substring($RepoRoot.Length + 1)
                     if ($isFramework) {
@@ -1432,7 +1499,7 @@ function Invoke-Update {
                     # Auto mode — prefer the source with the newer STABLE release
                     if ($siblingPath) {
                         $siblingVer = $null
-                        try { $siblingVer = (Get-Content (Join-Path $siblingPath "VERSION") -Raw).Trim() } catch {}
+                        try { $siblingVer = (Get-Content (Join-Path $siblingPath "VERSION") -Raw).Trim() } catch { Write-Verbose "Could not read sibling VERSION at ${siblingPath}: $($_.Exception.Message)" }
                         $siblingIsDev = $siblingVer -match '-dev\b'
 
                         # Fetch latest tag via node helper (cached 24h in .forge/update-check.json)
@@ -1600,10 +1667,29 @@ function Invoke-Update {
         }
     }
 
-    # Update shared instruction files
-    $srcSharedInstr = Join-Path $sourcePath ".github/instructions"
+    # Update shared instruction files.
+    # Source convention mirrors setup.ps1 Step 2:
+    #   $sourcePath/.github/instructions/             — Plan-Forge-internal files that ship as-is (no leakage)
+    #   $sourcePath/presets/shared/.github/instructions/ — consumer-facing genericized versions
+    # aci-design.instructions.md intentionally NOT in either list — MCP-tool-author guidance, not consumer-relevant.
+    $srcInternalInstr = Join-Path $sourcePath ".github/instructions"
+    $srcSharedInstr   = Join-Path $sourcePath "presets/shared/.github/instructions"
     $dstInstr = Join-Path $RepoRoot ".github/instructions"
-    $sharedInstructions = @("architecture-principles.instructions.md", "git-workflow.instructions.md", "ai-plan-hardening-runbook.instructions.md", "self-repair-reporting.instructions.md", "status-reporting.instructions.md", "context-fuel.instructions.md")
+    $internalInstructions = @("ai-plan-hardening-runbook.instructions.md", "context-fuel.instructions.md", "git-workflow.instructions.md", "security.instructions.md")
+    $sharedInstructions   = @("architecture-principles.instructions.md", "clean-code.instructions.md", "self-repair-reporting.instructions.md", "status-reporting.instructions.md", "testing.instructions.md")
+    if (Test-Path $srcInternalInstr) {
+        foreach ($instrName in $internalInstructions) {
+            $srcFile = Join-Path $srcInternalInstr $instrName
+            $dstFile = Join-Path $dstInstr $instrName
+            if ((Test-Path $srcFile) -and (Test-Path $dstFile)) {
+                $srcHash = (Get-FileHash $srcFile -Algorithm SHA256).Hash
+                $dstHash = (Get-FileHash $dstFile -Algorithm SHA256).Hash
+                if ($srcHash -ne $dstHash) {
+                    $updates += @{ Src = $srcFile; Dst = $dstFile; Name = ".github/instructions/$instrName" }
+                }
+            }
+        }
+    }
     if (Test-Path $srcSharedInstr) {
         foreach ($instrName in $sharedInstructions) {
             $srcFile = Join-Path $srcSharedInstr $instrName
@@ -1715,6 +1801,34 @@ function Invoke-Update {
         }
     }
 
+    # ─── pforge-sdk (helper library) + pforge-master (Studio MCP) ──
+    # Same auto-discover loop, parameterized by package directory. Consumer
+    # installs that skipped these crashed at runtime for opt-in features
+    # (lattice, notifications, hallmark, forge-master-chat). Issue: installer
+    # coverage gap — see fix(installer) commit.
+    foreach ($pkg in @('pforge-sdk', 'pforge-master')) {
+        $srcPkg = Join-Path $sourcePath $pkg
+        $dstPkg = Join-Path $RepoRoot $pkg
+        if (-not (Test-Path $srcPkg)) { continue }
+        Get-ChildItem -Path $srcPkg -File -Recurse |
+            Where-Object { $_.FullName -notmatch '(node_modules|\.forge|coverage)' } |
+            ForEach-Object {
+                $relPath = $_.FullName.Substring($srcPkg.Length + 1)
+                $relName = "$pkg/$($relPath.Replace('\', '/'))"
+                $dstFile = Join-Path $dstPkg $relPath
+                if ($neverUpdate -contains $relName) { return }
+                if (Test-Path $dstFile) {
+                    $srcHash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                    $dstHash = (Get-FileHash $dstFile -Algorithm SHA256).Hash
+                    if ($srcHash -ne $dstHash) {
+                        $updates += @{ Src = $_.FullName; Dst = $dstFile; Name = $relName }
+                    }
+                } else {
+                    $newFiles += @{ Src = $_.FullName; Dst = $dstFile; Name = $relName }
+                }
+            }
+    }
+
     # ─── CLI scripts (pforge.ps1, pforge.sh) ─────────────────────
     foreach ($cliFile in @("pforge.ps1", "pforge.sh")) {
         $srcFile = Join-Path $sourcePath $cliFile
@@ -1746,7 +1860,8 @@ function Invoke-Update {
     }
 
     # ─── Core CLI files (root level) ────────────────────────────
-    foreach ($cliFile in @("pforge.ps1", "pforge.sh", "VERSION")) {
+    # Includes root `pforge` bash shim so it self-heals on self-update.
+    foreach ($cliFile in @("pforge.ps1", "pforge.sh", "pforge", "VERSION")) {
         $srcFile = Join-Path $sourcePath $cliFile
         $dstFile = Join-Path $RepoRoot $cliFile
         if (Test-Path $srcFile) {
@@ -1772,6 +1887,29 @@ function Invoke-Update {
                 $relPath = $_.FullName.Substring($srcMcp.Length + 1)
                 $relName = "pforge-mcp/$($relPath.Replace('\', '/'))"
                 $dstFile = Join-Path $dstMcp $relPath
+                if (Test-Path $dstFile) {
+                    $srcHash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                    $dstHash = (Get-FileHash $dstFile -Algorithm SHA256).Hash
+                    if ($srcHash -ne $dstHash) {
+                        $updates += @{ Src = $_.FullName; Dst = $dstFile; Name = $relName }
+                    }
+                } else {
+                    $newFiles += @{ Src = $_.FullName; Dst = $dstFile; Name = $relName }
+                }
+            }
+    }
+
+    # ─── pforge-sdk + pforge-master (same scan, parameterized) ──
+    foreach ($pkg in @('pforge-sdk', 'pforge-master')) {
+        $srcPkg = Join-Path $sourcePath $pkg
+        $dstPkg = Join-Path $RepoRoot $pkg
+        if (-not (Test-Path $srcPkg)) { continue }
+        Get-ChildItem -Path $srcPkg -File -Recurse |
+            Where-Object { $_.FullName -notmatch '(node_modules|\.forge|coverage)' } |
+            ForEach-Object {
+                $relPath = $_.FullName.Substring($srcPkg.Length + 1)
+                $relName = "$pkg/$($relPath.Replace('\', '/'))"
+                $dstFile = Join-Path $dstPkg $relPath
                 if (Test-Path $dstFile) {
                     $srcHash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
                     $dstHash = (Get-FileHash $dstFile -Algorithm SHA256).Hash
@@ -1931,6 +2069,9 @@ Files in this directory (except this README) are gitignored — they are runtime
         Write-Host "  ✅ Created docs/plans/auto/" -ForegroundColor Green
     }
 
+    # ─── Refresh consumer .gitignore managed block (Issue #211) ───────
+    Update-PlanForgeGitignore -RepoRoot $RepoRoot
+
     Write-Host ""
     Write-Host "Update complete: v$currentVersion → v$sourceVersion" -ForegroundColor Green
     Write-Host "Run 'pforge check' to validate the updated setup." -ForegroundColor DarkGray
@@ -1950,7 +2091,7 @@ Files in this directory (except this README) are gitignored — they are runtime
     foreach ($cacheFile in @(".forge/version-check.json", ".forge/install-health.json")) {
         $cachePath = Join-Path $RepoRoot $cacheFile
         if (Test-Path $cachePath) {
-            try { Remove-Item -Force $cachePath -ErrorAction SilentlyContinue } catch { }
+            try { Remove-Item -Force $cachePath -ErrorAction SilentlyContinue } catch { Write-Verbose "Could not remove stale cache ${cachePath}: $($_.Exception.Message)" }
         }
     }
     # Write a fresh update-check.json so the next check returns isNewer=false
@@ -1961,7 +2102,9 @@ import { writeFreshCache } from './pforge-mcp/update-check.mjs';
 writeFreshCache(process.argv[1], process.argv[2]);
 "@
         & node --input-type=module -e $freshCacheScript $RepoRoot $sourceVersion 2>&1 | Out-Null
-    } catch { }
+    } catch {
+        Write-Verbose "Could not write fresh update-check cache (best-effort): $($_.Exception.Message)"
+    }
 
     # Auto-install MCP dependencies if MCP files were updated.
     # Bugs B & C fix: wrap both in @() so a single-hashtable $updates or
@@ -1990,6 +2133,24 @@ writeFreshCache(process.argv[1], process.argv[2]);
             Write-Host "  Stop the current server, then: node pforge-mcp/server.mjs" -ForegroundColor Yellow
         } catch {
             # Not running — no action needed
+        }
+    }
+
+    # Auto-install pforge-master dependencies if its files were updated.
+    # pforge-master declares @modelcontextprotocol/sdk + ws as runtime deps,
+    # so missing node_modules breaks the forge-master-chat MCP stdio server.
+    $fmUpdated = @(@($updates) + @($newFiles) | Where-Object { $_.Name -like "pforge-master/*" })
+    if ($fmUpdated) {
+        $fmDir = Join-Path $RepoRoot "pforge-master"
+        if (Test-Path (Join-Path $fmDir "package.json")) {
+            Write-Host ""
+            Write-Host "Installing pforge-master dependencies..." -ForegroundColor DarkCyan
+            try {
+                $null = & npm install --prefix $fmDir 2>&1
+                Write-Host "  ✅ npm install complete" -ForegroundColor Green
+            } catch {
+                Write-Host "  ⚠️  npm install failed — run manually: cd pforge-master && npm install" -ForegroundColor Yellow
+            }
         }
     }
 
@@ -2365,133 +2526,6 @@ function Invoke-Analyze {
     }
 }
 
-# ─── Command: drift ────────────────────────────────────────────────────
-function Invoke-Drift {
-    $threshold = 70
-    foreach ($arg in $Arguments) {
-        if ($arg -match '^--threshold[= ]?(\d+)$') { $threshold = [int]$Matches[1] }
-        elseif ($arg -match '^\d+$') { $threshold = [int]$arg }
-    }
-
-    Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║       Plan Forge — Drift Report                              ║" -ForegroundColor Cyan
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Scanning source files for architecture guardrail violations..." -ForegroundColor Cyan
-    Write-Host "Threshold: $threshold/100" -ForegroundColor White
-    Write-Host ""
-
-    $extensions = @("*.js", "*.mjs", "*.ts", "*.tsx", "*.cs", "*.py")
-    $excludeDirs = @("node_modules", ".git", "bin", "obj", "dist", ".forge", "vendor", "coverage")
-
-    $rules = @(
-        @{ id = "empty-catch";     pattern = 'catch\s*(?:\([^)]*\))?\s*\{\s*(?://[^\n]*)?\s*\}|catch\s*(?:\([^)]*\))?\s*\{\s*/\*[^*]*\*/\s*\}'; severity = "high";     label = "Empty catch block" },
-        @{ id = "any-type";        pattern = ':\s*any\b|<any>|as\s+any\b';                                  severity = "medium";   label = "Avoid 'any' type" },
-        @{ id = "sync-over-async"; pattern = '\.(Result|Wait\(\))\b';                                       severity = "high";     label = "Sync-over-async (.Result/.Wait())" },
-        @{ id = "sql-injection";   pattern = '`[^`]*\b(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^`]*\$\{';      severity = "critical"; label = "SQL string interpolation" },
-        @{ id = "deferred-work";   pattern = '\b(TODO|FIXME|HACK)\b';                                       severity = "low";      label = "Deferred work marker" }
-    )
-
-    $violations = [System.Collections.Generic.List[object]]::new()
-    $frameworkViolations = [System.Collections.Generic.List[object]]::new()
-    $filesScanned = 0
-
-    $excludeFilter = "($($excludeDirs -join '|'))"
-    $frameworkFilter = '^(pforge-mcp[/\\]|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
-
-    foreach ($ext in $extensions) {
-        $files = Get-ChildItem -Path $RepoRoot -Filter $ext -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch $excludeFilter }
-        foreach ($file in $files) {
-            $filesScanned++
-            try {
-                $content = Get-Content -Path $file.FullName -Raw -ErrorAction Stop
-                $relPath = $file.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
-                $isFramework = $relPath -match $frameworkFilter
-                foreach ($rule in $rules) {
-                    # Skip SQL injection rule for framework/dashboard code
-                    if ($isFramework -and $rule.id -eq 'sql-injection') { continue }
-                    $matches = [regex]::Matches($content, $rule.pattern)
-                    foreach ($m in $matches) {
-                        $lineNum = ($content.Substring(0, $m.Index) -split "`n").Count
-                        $entry = [PSCustomObject]@{
-                            file        = $relPath
-                            rule        = $rule.id
-                            severity    = $rule.severity
-                            line        = $lineNum
-                            description = $rule.label
-                        }
-                        if ($isFramework) {
-                            $frameworkViolations.Add($entry)
-                        } else {
-                            $violations.Add($entry)
-                        }
-                    }
-                }
-            } catch { }
-        }
-    }
-
-    $penaltyPerViolation = 2
-    $score = [Math]::Max(0, 100 - ($violations.Count * $penaltyPerViolation))
-
-    Write-Host "Files scanned:  $filesScanned" -ForegroundColor White
-    Write-Host "App violations: $($violations.Count)" -ForegroundColor $(if ($violations.Count -eq 0) { 'Green' } elseif ($violations.Count -le 5) { 'Yellow' } else { 'Red' })
-    if ($frameworkViolations.Count -gt 0) {
-        Write-Host "Framework:      $($frameworkViolations.Count) (informational, not scored)" -ForegroundColor DarkGray
-    }
-    Write-Host "Score:          $score/100" -ForegroundColor $(if ($score -ge 80) { 'Green' } elseif ($score -ge $threshold) { 'Yellow' } else { 'Red' })
-    Write-Host ""
-
-    if ($violations.Count -gt 0) {
-        Write-Host "Violations:" -ForegroundColor Cyan
-        foreach ($v in $violations | Select-Object -First 20) {
-            $color = switch ($v.severity) { 'critical' { 'Red' } 'high' { 'Red' } 'medium' { 'Yellow' } default { 'DarkYellow' } }
-            Write-Host "  [$($v.severity.ToUpper())] $($v.file):$($v.line) — $($v.description)" -ForegroundColor $color
-        }
-        if ($violations.Count -gt 20) {
-            Write-Host "  ... and $($violations.Count - 20) more violations" -ForegroundColor DarkYellow
-        }
-        Write-Host ""
-    }
-
-    # Load history and compute trend
-    $historyFile = Join-Path $RepoRoot ".forge\drift-history.json"
-    $history = @()
-    if (Test-Path $historyFile) {
-        try { $history = Get-Content $historyFile -Raw | ConvertFrom-Json } catch { }
-    }
-    $prev = if ($history.Count -gt 0) { $history[-1] } else { $null }
-    $delta = if ($prev) { $score - $prev.score } else { 0 }
-    $trend = if (-not $prev) { "stable" } elseif ($delta -gt 0) { "improving" } elseif ($delta -lt 0) { "degrading" } else { "stable" }
-
-    $record = @{
-        timestamp    = (Get-Date -Format "o")
-        score        = $score
-        violations   = @($violations | ForEach-Object { @{ file = $_.file; rule = $_.rule; severity = $_.severity; line = $_.line } })
-        filesScanned = $filesScanned
-        delta        = $delta
-        trend        = $trend
-    }
-
-    $forgeDir = Join-Path $RepoRoot ".forge"
-    if (-not (Test-Path $forgeDir)) { New-Item -ItemType Directory -Path $forgeDir -Force | Out-Null }
-    $record | ConvertTo-Json -Depth 5 -Compress | Add-Content -Path $historyFile
-
-    Write-Host "Trend:          $trend" -ForegroundColor $(if ($trend -eq 'improving') { 'Green' } elseif ($trend -eq 'degrading') { 'Red' } else { 'White' })
-    Write-Host "History:        $($history.Count + 1) record(s) in .forge/drift-history.json" -ForegroundColor White
-    Write-Host ""
-
-    if ($score -lt $threshold) {
-        Write-Host "⚠  DRIFT ALERT — score $score is below threshold $threshold" -ForegroundColor Red
-        exit 1
-    } else {
-        Write-Host "✅ Drift score within threshold ($score >= $threshold)" -ForegroundColor Green
-        exit 0
-    }
-}
-
 # ─── Command: smith ────────────────────────────────────────────────────
 function Invoke-Smith {
     # Phase AUTO-UPDATE-01 Slice 2 — --refresh-version-cache flag
@@ -2705,14 +2739,28 @@ function Invoke-Smith {
 
                 # Capability marker probe (workers only)
                 if (-not $isRuntime -and $spec.probe.capabilityMarkers -and $spec.probe.capabilityMarkers.Count -gt 0) {
-                    $helpArgs = @($spec.probe.helpArgs)
-                    $helpOut = try { & $cmdName @helpArgs 2>&1 | Out-String } catch { '' }
+                    # Filter out $null and empty strings — when JSON omits the
+                    # helpArgs property, $spec.probe.helpArgs is $null and bare
+                    # @($null) has Count == 1 (PowerShell array-of-one-null),
+                    # which would invoke gh with no args (general help banner)
+                    # and silently break the Issue #210 fallback below. The
+                    # Where-Object filter collapses null/empty entries so the
+                    # Count test correctly detects "no helpArgs declared".
+                    $helpArgs = @($spec.probe.helpArgs | Where-Object { $_ })
+                    # Issue #210: when helpArgs is omitted, reuse the versionArgs output so
+                    # auth-style probes (e.g. `gh auth status`) work without an extra exec.
+                    $helpOut = if ($helpArgs.Count -gt 0) {
+                        try { & $cmdName @helpArgs 2>&1 | Out-String } catch { '' }
+                    } else {
+                        $versionOut
+                    }
                     $missing = @()
                     foreach ($marker in $spec.probe.capabilityMarkers) {
                         if ($helpOut -notmatch [regex]::Escape($marker)) { $missing += $marker }
                     }
                     if ($missing.Count -gt 0) {
-                        Doctor-Fail "$name v$version lacks agentic flags: $($missing -join ', ') (issue #28)" $installHint
+                        $verLabel = if ($version) { "v$version" } else { "(version unknown)" }
+                        Doctor-Fail "$name $verLabel lacks agentic flags: $($missing -join ', ') (issue #28)" $installHint
                         return
                     }
                 }
@@ -3015,7 +3063,9 @@ function Invoke-Smith {
                 $cacheValid = $true
             }
         }
-        catch { }
+        catch {
+            Write-Verbose "Could not parse version-check cache (will refetch): $($_.Exception.Message)"
+        }
     }
 
     # Fetch from GitHub API if cache is stale or missing
@@ -3091,7 +3141,9 @@ function Invoke-Smith {
         try {
             $fj = Get-Content $forgeJsonPath -Raw | ConvertFrom-Json
             if ($fj.autoUpdate -and $fj.autoUpdate.enabled -eq $true) { $auEnabled = $true }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse .forge.json for autoUpdate setting: $($_.Exception.Message)"
+        }
     }
 
     $updateCacheFile = Join-Path $RepoRoot ".forge/update-check.json"
@@ -3106,7 +3158,9 @@ function Invoke-Smith {
             if ($auCheckedAt) {
                 $auCacheAge = [math]::Round(((Get-Date) - [datetime]$auCheckedAt).TotalMinutes)
             }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse update-check.json: $($_.Exception.Message)"
+        }
     }
 
     $enabledLabel = if ($auEnabled) { "enabled" } else { "disabled (opt-in)" }
@@ -3149,6 +3203,17 @@ function Invoke-Smith {
             } else {
                 Doctor-Warn ".vscode/mcp.json missing 'plan-forge' entry" "Re-run setup or add manually"
             }
+            # forge-master-chat is the second MCP server entry (Phase-29 chat
+            # bridge). It's only needed when pforge-master/server.mjs is
+            # present, so only warn if both conditions disagree.
+            $fmServerForMcpCheck = Join-Path $RepoRoot "pforge-master/server.mjs"
+            if (Test-Path $fmServerForMcpCheck) {
+                if ($mcpContent -match '"forge-master-chat"') {
+                    Doctor-Pass ".vscode/mcp.json has 'forge-master-chat' server entry"
+                } else {
+                    Doctor-Warn ".vscode/mcp.json missing 'forge-master-chat' entry" "Re-run setup or add manually — Forge-Master chat tab won't connect without it"
+                }
+            }
         } else {
             Doctor-Warn ".vscode/mcp.json not found" "Run setup to generate MCP config"
         }
@@ -3185,7 +3250,9 @@ function Invoke-Smith {
                     $secrets = Get-Content $secretsPath -Raw | ConvertFrom-Json
                     if (-not $hasXai -and $secrets.XAI_API_KEY) { $hasXai = $true; $secretsSrc = " (from .forge/secrets.json)" }
                     if (-not $hasOpenAi -and $secrets.OPENAI_API_KEY) { $hasOpenAi = $true; $secretsSrc = " (from .forge/secrets.json)" }
-                } catch { }
+                } catch {
+                    Write-Verbose "Could not parse .forge/secrets.json: $($_.Exception.Message)"
+                }
             }
         }
 
@@ -3203,7 +3270,9 @@ function Invoke-Smith {
                         if (-not $hasOpenAi -and $k -eq 'OPENAI_API_KEY' -and $v) { $script:_openAiFromEnv = $v; $hasOpenAi = $true; $secretsSrc = " (from .env)" }
                     }
                 }
-            } catch { }
+            } catch {
+                Write-Verbose "Could not parse .env file: $($_.Exception.Message)"
+            }
         }
 
         if ($hasXai -and $hasOpenAi) {
@@ -3243,16 +3312,28 @@ function Invoke-Smith {
         Write-Host "MCP Runtime:" -ForegroundColor Cyan
 
         # Granular dependency checks
+        # npm workspaces (root package.json declares pforge-mcp as a workspace) HOIST
+        # dependencies to <repo>/node_modules. Standalone installs (cd pforge-mcp && npm i)
+        # land them in pforge-mcp/node_modules. Probe both so smith works in either layout.
         $mcpDepsDir = Join-Path $RepoRoot "pforge-mcp/node_modules"
-        if (Test-Path $mcpDepsDir) {
+        $rootDepsDir = Join-Path $RepoRoot "node_modules"
+        $resolveDep = {
+            param($depName)
+            $local = Join-Path $mcpDepsDir $depName
+            if (Test-Path $local) { return $local }
+            $hoisted = Join-Path $rootDepsDir $depName
+            if (Test-Path $hoisted) { return $hoisted }
+            return $null
+        }
+        if ((Test-Path $mcpDepsDir) -or (Test-Path $rootDepsDir)) {
             $criticalDeps = @(
                 @{ Name = "@modelcontextprotocol/sdk"; Label = "MCP SDK (protocol layer)" },
                 @{ Name = "express"; Label = "Express (dashboard + REST API)" },
                 @{ Name = "ws"; Label = "ws (WebSocket hub for real-time events)" }
             )
             foreach ($dep in $criticalDeps) {
-                $depPath = Join-Path $mcpDepsDir $dep.Name
-                if (Test-Path $depPath) {
+                $depPath = & $resolveDep $dep.Name
+                if ($depPath) {
                     # Try to read version
                     $depPkgPath = Join-Path $depPath "package.json"
                     if (Test-Path $depPkgPath) {
@@ -3262,7 +3343,7 @@ function Invoke-Smith {
                         } catch { Doctor-Pass "$($dep.Label) installed" }
                     } else { Doctor-Pass "$($dep.Label) installed" }
                 } else {
-                    Doctor-Fail "$($dep.Label) missing" "Run: cd pforge-mcp && npm install"
+                    Doctor-Fail "$($dep.Label) missing" "Run: npm install (root) or cd pforge-mcp && npm install"
                 }
             }
 
@@ -3271,8 +3352,8 @@ function Invoke-Smith {
                 @{ Name = "playwright"; Label = "Playwright (screenshot capture)" }
             )
             foreach ($dep in $optionalDeps) {
-                $depPath = Join-Path $mcpDepsDir $dep.Name
-                if (Test-Path $depPath) {
+                $depPath = & $resolveDep $dep.Name
+                if ($depPath) {
                     Doctor-Pass "$($dep.Label)"
                 } else {
                     Doctor-Warn "$($dep.Label) not installed (optional)" "Run: cd pforge-mcp && npm install playwright"
@@ -3293,7 +3374,9 @@ function Invoke-Smith {
                 } else {
                     Doctor-Warn "MCP server v$mcpVer but VERSION file says v$repoVer" "Update version in pforge-mcp/package.json"
                 }
-            } catch { }
+            } catch {
+                Write-Verbose "Could not compare MCP package.json with VERSION file: $($_.Exception.Message)"
+            }
         }
 
         # Phase-29: Forge-Master subsystem (routes + client bridge)
@@ -3336,6 +3419,40 @@ function Invoke-Smith {
         if (Test-Path $forgeMasterLifecycle) { Doctor-Pass "pforge-master/src/lifecycle.mjs (status/logs backend)" }
         else { Doctor-Warn "pforge-master/src/lifecycle.mjs missing" "'pforge forge-master status|logs' will fail" }
 
+        # pforge-master declares @modelcontextprotocol/sdk + ws as RUNTIME deps
+        # (not just dev). setup.ps1/pforge.ps1 self-update both auto-run
+        # `npm install` here, but verify post-hoc — a stale install or skipped
+        # update will silently fail at server start.
+        $forgeMasterModules = Join-Path $forgeMasterDir "node_modules"
+        $forgeMasterPkg = Join-Path $forgeMasterDir "package.json"
+        if (Test-Path $forgeMasterPkg) {
+            if (Test-Path $forgeMasterModules) {
+                Doctor-Pass "pforge-master dependencies installed"
+            } else {
+                Doctor-Warn "pforge-master/node_modules missing" "Run: cd pforge-master && npm install"
+            }
+        }
+
+        Write-Host ""
+    }
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4d-iii. PFORGE-SDK (shared helper library)
+    # ═══════════════════════════════════════════════════════════════
+    # pforge-sdk is a helper library shipped alongside pforge-mcp. It has
+    # NO runtime deps (intentional) — code in pforge-mcp imports it via
+    # relative paths like '../../pforge-sdk/src/...'. Missing files here
+    # crash opt-in features (lattice, notifications, hallmark, memory-upgrade,
+    # forge-master chat). Validation is presence-only.
+    $forgeSdkDir = Join-Path $RepoRoot "pforge-sdk"
+    $forgeSdkClient = Join-Path $forgeSdkDir "src/client.mjs"
+    if (Test-Path $forgeSdkDir) {
+        Write-Host "pforge-sdk:" -ForegroundColor Cyan
+        if (Test-Path $forgeSdkClient) {
+            Doctor-Pass "pforge-sdk/src/client.mjs"
+        } else {
+            Doctor-Warn "pforge-sdk/src/client.mjs missing" "Re-run 'pforge update' to restore — deep imports from pforge-mcp will fail"
+        }
         Write-Host ""
     }
 
@@ -3408,7 +3525,9 @@ function Invoke-Smith {
         try {
             $cfgForHooks = Get-Content $configPath -Raw | ConvertFrom-Json
             if ($cfgForHooks.hooks) { $hookConfig = $cfgForHooks.hooks }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse .forge.json for hook config: $($_.Exception.Message)"
+        }
     }
 
     # Source 3: .github/hooks/plan-forge.json (shipped by `pforge update` from templates/)
@@ -3418,24 +3537,26 @@ function Invoke-Smith {
         try {
             $hooksJsonRaw = Get-Content $hooksJsonPath -Raw | ConvertFrom-Json
             if ($hooksJsonRaw.hooks) { $hooksJsonConfig = $hooksJsonRaw.hooks }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse .github/hooks/plan-forge.json: $($_.Exception.Message)"
+        }
     }
 
     if ($hasHookFiles -or $hookConfig -or $hooksJsonConfig) {
         Write-Host "Lifecycle Hooks:" -ForegroundColor Cyan
-        $coreHooks = @("SessionStart", "PreToolUse", "PostToolUse", "Stop")
-        $liveGuardHooks = @("PostSlice", "PreAgentHandoff", "PreDeploy")
-        $allExpectedHooks = $coreHooks + $liveGuardHooks
-
-        # camelCase mapping for .forge.json config keys
-        $configKeyMap = @{
-            "SessionStart"     = "sessionStart"
-            "PreToolUse"       = "preToolUse"
-            "PostToolUse"      = "postToolUse"
-            "Stop"             = "stop"
-            "PostSlice"        = "postSlice"
-            "PreAgentHandoff"  = "preAgentHandoff"
-            "PreDeploy"        = "preDeploy"
+        $enumsCli = Join-Path $RepoRoot "pforge-mcp/bin/enums-cli.mjs"
+        if (Test-Path $enumsCli) {
+            $allExpectedHooks = @(node $enumsCli --enum HOOK_PASCAL 2>$null)
+            $hookNamesJson = node $enumsCli --enum HOOK_NAMES --format json 2>$null
+            $hookNamesObj  = $hookNamesJson | ConvertFrom-Json
+            $configKeyMap  = @{}
+            foreach ($prop in $hookNamesObj.PSObject.Properties) {
+                $configKeyMap[$prop.Name] = $prop.Value
+            }
+        } else {
+            # Fallback when pforge-mcp/bin/enums-cli.mjs is not present
+            $allExpectedHooks = @("SessionStart","PreToolUse","PostToolUse","Stop","PreDeploy","PostSlice","PreAgentHandoff","PostRun")
+            $configKeyMap = @{ SessionStart="sessionStart"; PreToolUse="preToolUse"; PostToolUse="postToolUse"; Stop="stop"; PreDeploy="preDeploy"; PostSlice="postSlice"; PreAgentHandoff="preAgentHandoff"; PostRun="postRun" }
         }
 
         $hookFiles = @()
@@ -3584,21 +3705,23 @@ function Invoke-Smith {
                     Doctor-Warn "Quorum models not configured" "Add models array to .forge.json quorum block"
                 }
 
-                # Threshold sanity check
+                # Threshold sanity check (default raised to 5 on 2026-05-21)
                 if ($q.threshold -and ($q.threshold -lt 3 -or $q.threshold -gt 9)) {
-                    Doctor-Warn "Quorum threshold $($q.threshold) is unusual (recommended: 5-8)" "Most projects use threshold 6-8 for balanced cost/quality"
+                    Doctor-Warn "Quorum threshold $($q.threshold) is unusual (recommended: 5-8)" "Most projects use threshold 5-8 for balanced cost/quality"
                 }
 
                 # Reviewer model
                 if ($q.reviewerModel) {
                     Doctor-Pass "Reviewer model: $($q.reviewerModel)"
                 } else {
-                    Doctor-Pass "Reviewer model: default (claude-opus-4.6)"
+                    Doctor-Pass "Reviewer model: default (claude-opus-4.7)"
                 }
 
                 Write-Host ""
             }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse quorum config: $($_.Exception.Message)"
+        }
     }
 
     # ═══════════════════════════════════════════════════════════════
@@ -3795,7 +3918,9 @@ function Invoke-Smith {
                 $lgTools = $tools | Where-Object { $_.name -match 'drift|incident|dep_watch|regression|runbook|hotspot|health_trend|alert_triage|deploy_journal|secret_scan|env_diff|fix_proposal|quorum_analyze|liveguard_run' }
                 $lgCount = if ($lgTools) { @($lgTools).Count } else { 0 }
                 Doctor-Pass "$toolCount MCP tools ($lgCount LiveGuard) in tools.json"
-            } catch { }
+            } catch {
+                Write-Verbose "Could not parse .forge/tools.json: $($_.Exception.Message)"
+            }
         }
     }
 
@@ -3836,7 +3961,9 @@ function Invoke-Smith {
                     try {
                         $s = Get-Content $_.FullName -Raw | ConvertFrom-Json
                         if ($s.status -eq "in_progress") { $_ }
-                    } catch { }
+                    } catch {
+                        Write-Verbose "Could not parse smelt file $($_.FullName): $($_.Exception.Message)"
+                    }
                 })
             if ($stale.Count -gt 0) {
                 Doctor-Warn "$($stale.Count) in-progress smelt(s) idle for 7+ days" "Abandon them with 'forge_crucible_abandon' or resume via the dashboard"
@@ -3865,7 +3992,9 @@ function Invoke-Smith {
                 $claims = Get-Content $phaseClaims -Raw | ConvertFrom-Json
                 $claimCount = if ($claims.claims) { @($claims.claims).Count } else { 0 }
                 Doctor-Pass "$claimCount phase number(s) claimed atomically"
-            } catch { }
+            } catch {
+                Write-Verbose "Could not parse phase-claims.json: $($_.Exception.Message)"
+            }
         }
     } else {
         Doctor-Pass "Crucible inactive — no .forge/crucible/ directory yet"
@@ -3978,7 +4107,9 @@ function Invoke-Smith {
                     $sev = if ($bug.severity) { "$($bug.severity)".ToLower() } else { "" }
                     if ($sev -eq "critical") { $critical++ }
                     elseif ($sev -eq "high") { $high++ }
-                } catch { }
+                } catch {
+                    Write-Verbose "Could not parse bug file $($bf.FullName): $($_.Exception.Message)"
+                }
             }
             Doctor-Pass "$($bugFiles.Count) total; $open open, $resolved resolved ($critical critical, $high high)"
             if ($critical -gt 0) {
@@ -4162,6 +4293,18 @@ function Invoke-RunPlan {
         }
     }
 
+    if ($quorumArg -like '--quorum=*') {
+        $quorumVal = $quorumArg.Substring(9)
+        $enumsCli = Join-Path $RepoRoot "pforge-mcp/bin/enums-cli.mjs"
+        if (Test-Path $enumsCli) {
+            $validModes = @(node $enumsCli --enum QUORUM_MODES 2>$null)
+            if ($validModes.Count -gt 0 -and $quorumVal -notin $validModes) {
+                Write-Host "ERROR: Invalid --quorum mode '$quorumVal'. Valid: $($validModes -join ', ')" -ForegroundColor Red
+                exit 1
+            }
+        }
+    }
+
     $mode = if ($assisted) { 'assisted' } else { 'auto' }
 
     Write-ManualSteps "run-plan" @(
@@ -4250,7 +4393,9 @@ function Invoke-RunPlan {
         # can attach without scraping Write-Host output (which bypasses stdout).
         try {
             Set-Content -Path (Join-Path $pidDir 'last-orch.pid') -Value $proc.Id -NoNewline -Encoding ASCII
-        } catch {}
+        } catch {
+            Write-Verbose "Could not write .forge/last-orch.pid (non-fatal): $($_.Exception.Message)"
+        }
         Write-Host "Orchestrator running in background  PID: $($proc.Id)" -ForegroundColor Green
         Write-Host "Monitor : pforge status" -ForegroundColor DarkGray
         Write-Host "Logs    : .forge/runs/ (latest sub-directory)" -ForegroundColor DarkGray
@@ -5110,7 +5255,9 @@ function Test-OpenBrainConfigured([string]$cwd) {
                 if ($content -match 'openbrain' -or $content -match 'open-brain') {
                     return @{ Configured = $true; ConfigPath = $p }
                 }
-            } catch { }
+            } catch {
+                Write-Verbose "Could not read config file ${p} during OpenBrain detection: $($_.Exception.Message)"
+            }
         }
     }
     return @{ Configured = $false; ConfigPath = $null }
@@ -5229,7 +5376,9 @@ function Invoke-BrainTest {
         try {
             $cfg = Get-Content -LiteralPath $forgeConfig -Raw | ConvertFrom-Json
             if ($cfg.projectName) { $project = $cfg.projectName }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse .forge.json for project name: $($_.Exception.Message)"
+        }
     }
 
     $body = @{ project = $project } | ConvertTo-Json -Compress
@@ -5317,7 +5466,9 @@ function Invoke-BrainReplay {
             try {
                 $cfg = Get-Content -LiteralPath $forgeConfig -Raw | ConvertFrom-Json
                 if ($cfg.projectName) { $project = $cfg.projectName }
-            } catch { }
+            } catch {
+                Write-Verbose "Could not parse .forge.json for project name: $($_.Exception.Message)"
+            }
         }
     }
 
@@ -5433,7 +5584,9 @@ function Invoke-MigrateMemory {
             try {
                 $canonicalLines = Get-Content -LiteralPath $canonicalPath -ErrorAction Stop |
                     Where-Object { $_ -and $_.Trim().Length -gt 0 }
-            } catch {}
+            } catch {
+                Write-Verbose "Could not read canonical thoughts file ${canonicalPath}: $($_.Exception.Message)"
+            }
         }
 
         # Dedupe by exact line text (records are JSON; equal text == equal record)
@@ -5473,7 +5626,268 @@ function Invoke-MigrateMemory {
     }
 }
 
-# ─── Command: mcp-call ─────────────────────────────────────────────────
+# ─── Command: forge-home-cleanup (Issue #203) ──────────────────────────
+# Moves ephemeral .forge/ files (logs, tmp, release-notes, meta-bug drafts)
+# to .forge/archive/<YYYY-MM>/ and optionally prunes old archive slots.
+#
+# Usage:
+#   pforge forge-home-cleanup [--dry-run] [--no-confirm] [--max-age-days=90]
+function Invoke-ForgeHomeCleanup {
+    $scriptPath = Join-Path $PSScriptRoot "scripts\forge-home-cleanup.mjs"
+    if (-not (Test-Path $scriptPath)) {
+        Write-Host "ERROR: forge-home-cleanup.mjs not found at $scriptPath" -ForegroundColor Red
+        exit 1
+    }
+    $nodeArgs = @($scriptPath) + $Arguments
+    & node @nodeArgs
+    exit $LASTEXITCODE
+}
+
+# ─── Command: local-recall ──────────────────────────────────────────────
+# Manage and inspect the persistent TF-IDF index cache for forge_local_search.
+#
+# Usage:
+#   pforge local-recall status [--path=<dir>]
+#   pforge local-recall warm [--path=<dir>]
+#   pforge local-recall clear [--path=<dir>]
+#
+# Subcommands:
+#   status  Show TF-IDF index cache existence, corpus size, and freshness.
+#   warm    Pre-build the index so the first forge_local_search call has zero rebuild cost.
+#   clear   Delete the cache file to force a fresh rebuild on next search.
+function Invoke-LocalRecall {
+    $sub = if ($Arguments.Count -gt 0) { $Arguments[0] } else { "status" }
+    $rest = @($Arguments | Select-Object -Skip 1)
+
+    $pathArg = ""
+    foreach ($a in $rest) {
+        if ($a -match '^--path=(.+)$') { $pathArg = $Matches[1]; break }
+    }
+
+    $scriptDir = Join-Path $PSScriptRoot "pforge-mcp"
+
+    switch ($sub) {
+        'status' {
+            $statusScript = @"
+import { getIndexStatus } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+const s = getIndexStatus(cwd);
+const staleness = s.exists ? (s.stale === true ? 'stale' : s.stale === false ? 'fresh' : 'unknown') : 'n/a';
+console.log('');
+console.log('Local Recall Index Status');
+console.log('=========================');
+console.log('Index exists : ' + (s.exists ? 'yes' : 'no'));
+if (s.exists) {
+  console.log('Version      : ' + (s.version ?? 'unknown'));
+  console.log('Built at     : ' + (s.builtAt ?? 'unknown'));
+  console.log('Corpus size  : ' + (s.corpusSize ?? 0) + ' thoughts');
+  console.log('Freshness    : ' + staleness);
+  console.log('Cache file   : ' + s.cacheFile);
+} else {
+  console.log('');
+  console.log('Run "pforge local-recall warm" to pre-build the index,');
+  console.log('or run "pforge local-recall search <query>" to build it on demand.');
+}
+console.log('');
+"@
+            $tmpFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.mjs'
+            Set-Content -Path $tmpFile -Value $statusScript -Encoding UTF8
+            try {
+                Push-Location $scriptDir
+                & node $tmpFile $pathArg
+                $exitCode = $LASTEXITCODE
+                Pop-Location
+            } finally {
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            }
+            exit $exitCode
+        }
+        'warm' {
+            $warmScript = @"
+import { searchLocalThoughts, getIndexStatus } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+console.log('');
+console.log('Warming TF-IDF index cache...');
+await searchLocalThoughts('_warm_', { cwd, limit: 1, noCache: false });
+const s = getIndexStatus(cwd);
+if (s.exists) {
+  console.log('Index built. ' + (s.corpusSize ?? 0) + ' thought' + ((s.corpusSize ?? 0) === 1 ? '' : 's') + ' indexed.');
+  console.log('Cache file: ' + s.cacheFile);
+} else {
+  console.log('No thoughts found in .forge/ — index not built (empty corpus).');
+}
+console.log('');
+"@
+            $tmpFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.mjs'
+            Set-Content -Path $tmpFile -Value $warmScript -Encoding UTF8
+            try {
+                Push-Location $scriptDir
+                & node $tmpFile $pathArg
+                $exitCode = $LASTEXITCODE
+                Pop-Location
+            } finally {
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            }
+            exit $exitCode
+        }
+        'clear' {
+            $clearScript = @"
+import { clearPersistedIndex } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+clearPersistedIndex(cwd);
+console.log('');
+console.log('TF-IDF index cache cleared.');
+console.log('It will be rebuilt on the next forge_local_search call.');
+console.log('');
+"@
+            $tmpFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.mjs'
+            Set-Content -Path $tmpFile -Value $clearScript -Encoding UTF8
+            try {
+                Push-Location $scriptDir
+                & node $tmpFile $pathArg
+                $exitCode = $LASTEXITCODE
+                Pop-Location
+            } finally {
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            }
+            exit $exitCode
+        }
+        default {
+            Write-Host "Usage: pforge local-recall <subcommand>" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Subcommands:"
+            Write-Host "  status  Show TF-IDF index cache info (default)"
+            Write-Host "  warm    Pre-build the index for zero-cost first search"
+            Write-Host "  clear   Delete the cache to force a fresh rebuild"
+            Write-Host ""
+            exit 1
+        }
+    }
+}
+
+# Manage and inspect the local semantic-search embedding backend.
+#
+# Usage:
+#   pforge embeddings status [--path=<dir>]
+#   pforge embeddings install
+#
+# Subcommands:
+#   status   Report which backend (tfidf or neural) is active, whether
+#            @xenova/transformers is installed, and local corpus size.
+#   install  Install @xenova/transformers as an optional dependency and
+#            pre-download the all-MiniLM-L6-v2 model.
+function Invoke-Embeddings {
+    $sub = if ($Arguments.Count -gt 0) { $Arguments[0] } else { "status" }
+    $rest = @($Arguments | Select-Object -Skip 1)
+
+    switch ($sub) {
+        'status' {
+            # Resolve optional --path arg
+            $pathArg = ""
+            foreach ($a in $rest) {
+                if ($a -match '^--path=(.+)$') { $pathArg = $Matches[1]; break }
+            }
+            $scriptDir = Join-Path $PSScriptRoot "pforge-mcp"
+            $statusScript = @"
+import { isNeuralEmbeddingAvailable, readLocalThoughts } from './local-recall.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+const cwd = process.argv[2] || process.cwd();
+const neural = await isNeuralEmbeddingAvailable();
+let version = null;
+if (neural) {
+  try {
+    const p = join(cwd, 'node_modules', '@xenova', 'transformers', 'package.json');
+    if (existsSync(p)) version = JSON.parse(readFileSync(p,'utf-8')).version ?? null;
+  } catch { /* optional dep — version stays null */ }
+}
+const thoughts = readLocalThoughts(cwd);
+let configured = 'auto';
+try {
+  const fj = JSON.parse(readFileSync(resolve(cwd,'.forge','forge.json'),'utf-8'));
+  if (fj?.embeddingBackend) configured = fj.embeddingBackend;
+} catch { /* optional config — fall through to default 'auto' */ }
+const effective = configured === 'tfidf' ? 'tfidf'
+  : configured === 'neural' ? (neural ? 'neural' : 'tfidf')
+  : (neural ? 'neural' : 'tfidf');
+console.log('');
+console.log('Embedding Backend Status');
+console.log('========================');
+console.log('Active backend : ' + effective);
+console.log('Neural avail.  : ' + (neural ? 'yes (v' + (version ?? 'unknown') + ')' : 'no'));
+console.log('Model          : Xenova/all-MiniLM-L6-v2');
+console.log('Corpus size    : ' + thoughts.length + ' thoughts in .forge/');
+console.log('Configured     : ' + configured + ' (in .forge.json embeddingBackend)');
+if (!neural) {
+  console.log('');
+  console.log('To enable neural embeddings:');
+  console.log('  cd pforge-mcp && npm install --save-optional @xenova/transformers');
+}
+console.log('');
+"@
+            $tmpFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.mjs'
+            Set-Content -Path $tmpFile -Value $statusScript -Encoding UTF8
+            try {
+                $nodeArgs = @("--input-type=module")
+                if ($pathArg) { $nodeArgs += $pathArg }
+                Push-Location $scriptDir
+                $env:NODE_PATH = Join-Path $scriptDir "node_modules"
+                & node $tmpFile $pathArg
+                $exitCode = $LASTEXITCODE
+                Pop-Location
+            } finally {
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            }
+            exit $exitCode
+        }
+        'install' {
+            Write-Host "Installing @xenova/transformers as optional dependency..." -ForegroundColor Cyan
+            $mcpDir = Join-Path $PSScriptRoot "pforge-mcp"
+            Push-Location $mcpDir
+            & npm install --save-optional @xenova/transformers
+            $exitCode = $LASTEXITCODE
+            Pop-Location
+            if ($exitCode -ne 0) {
+                Write-Host "ERROR: npm install failed (exit $exitCode)" -ForegroundColor Red
+                exit $exitCode
+            }
+            Write-Host ""
+            Write-Host "Pre-downloading all-MiniLM-L6-v2 model..." -ForegroundColor Cyan
+            $warmupScript = @"
+import { pipeline } from '@xenova/transformers';
+const embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+const out = await embedder('test', { pooling: 'mean', normalize: true });
+console.log('Model ready. Embedding dim: ' + out.data.length);
+"@
+            $tmpFile2 = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.mjs'
+            Set-Content -Path $tmpFile2 -Value $warmupScript -Encoding UTF8
+            try {
+                Push-Location $mcpDir
+                & node $tmpFile2
+                $exitCode = $LASTEXITCODE
+                Pop-Location
+            } finally {
+                Remove-Item $tmpFile2 -Force -ErrorAction SilentlyContinue
+            }
+            if ($exitCode -eq 0) {
+                Write-Host "Neural embeddings installed and ready." -ForegroundColor Green
+                Write-Host "Run 'pforge embeddings status' to verify."
+            } else {
+                Write-Host "WARNING: Model warmup failed — embeddings may still work on first use." -ForegroundColor Yellow
+            }
+            exit 0
+        }
+        default {
+            Write-Host "Usage: pforge embeddings <subcommand>" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Subcommands:"
+            Write-Host "  status   Show active embedding backend and corpus size"
+            Write-Host "  install  Install @xenova/transformers for neural embeddings"
+            Write-Host ""
+            exit 1
+        }
+    }
+}
 # Generic proxy for any MCP tool exposed by the running pforge-mcp server
 # on :3100. Covers crucible-*, tempering-*, bug-*, generate-image,
 # run-skill, skill-status, and every future tool without needing a
@@ -5524,7 +5938,7 @@ function Invoke-McpCall {
         else { $response | ConvertTo-Json -Depth 10 }
     } catch {
         $status = $null
-        try { $status = $_.Exception.Response.StatusCode.value__ } catch { }
+        try { $status = $_.Exception.Response.StatusCode.value__ } catch { Write-Verbose "Could not extract HTTP status code from exception: $($_.Exception.Message)" }
         if ($status -eq 404) {
             Write-Host "ERROR: Unknown tool '$toolName'. The MCP server returned 404." -ForegroundColor Red
             Write-Host "  Tip: run 'pforge mcp-call forge_capabilities' to list available tools." -ForegroundColor Yellow
@@ -5658,11 +6072,13 @@ function Invoke-SelfUpdate {
         "Force-refresh the update check (bypass 24h cache)"
         "If a newer version exists, prompt for confirmation"
         "Delegate to 'pforge update --from-github --tag <latest>'"
+        "With --verify: run 'pforge check' + 'pforge smith' in subprocesses after a successful update"
     )
 
     $autoYes = $Arguments -contains '--yes' -or $Arguments -contains '-y'
     $dryRun = $Arguments -contains '--dry-run'
     $forceUpdate = $Arguments -contains '--force'
+    $verify = $Arguments -contains '--verify'
 
     # Read autoUpdate.enabled from .forge.json (default false)
     $autoUpdateEnabled = $false
@@ -5673,7 +6089,9 @@ function Invoke-SelfUpdate {
             if ($cfg.autoUpdate -and $cfg.autoUpdate.enabled -eq $true) {
                 $autoUpdateEnabled = $true
             }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not parse .forge.json for auto-update setting: $($_.Exception.Message)"
+        }
     }
     if (-not $autoUpdateEnabled) {
         Write-Host "  ℹ Auto-update is opt-in; this is a manual invocation." -ForegroundColor DarkGray
@@ -5757,7 +6175,7 @@ console.log(JSON.stringify(r === null ? { checkFailed: true } : r));
         if (-not ($currentVersion -match '-dev\b') -and $checkJson.latest) {
             $currentCore = ($currentVersion -split '-')[0]
             $latestCore  = ($checkJson.latest -split '-')[0]
-            try { $isRealDowngrade = [version]$currentCore -gt [version]$latestCore } catch { }
+            try { $isRealDowngrade = [version]$currentCore -gt [version]$latestCore } catch { Write-Verbose "Could not compare versions as [version] (treating as not-downgrade): $($_.Exception.Message)" }
         }
         if ($isRealDowngrade) {
             $allowDowngrade = $Arguments -contains '--downgrade'
@@ -5791,6 +6209,43 @@ console.log(JSON.stringify(r === null ? { checkFailed: true } : r));
     if ($forceUpdate) { $updateArgs += '--force' }
     $script:Arguments = $updateArgs
     Invoke-Update
+
+    # --verify: run 'pforge check' + 'pforge smith' in subprocesses so the
+    # just-updated wrapper code is exercised (the running session still has
+    # the OLD wrapper loaded in memory — see Issue #177 self-update note).
+    # Exits non-zero if either check or smith fail, so the verify request
+    # is honored end-to-end.
+    if ($verify) {
+        Write-Host ""
+        Write-Host "──────────────────────────────────────────────────────────────" -ForegroundColor DarkCyan
+        Write-Host "--verify: running 'pforge check' + 'pforge smith' (subprocess)" -ForegroundColor Cyan
+        Write-Host "──────────────────────────────────────────────────────────────" -ForegroundColor DarkCyan
+
+        $pforgeScript = Join-Path $RepoRoot "pforge.ps1"
+        if (-not (Test-Path $pforgeScript)) {
+            Write-Host "  ⚠ Cannot run --verify: pforge.ps1 not found at $pforgeScript" -ForegroundColor Yellow
+            exit 1
+        }
+
+        Write-Host ""
+        Write-Host "▶ pforge check" -ForegroundColor Cyan
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $pforgeScript check
+        $checkExit = $LASTEXITCODE
+
+        Write-Host ""
+        Write-Host "▶ pforge smith" -ForegroundColor Cyan
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $pforgeScript smith
+        $smithExit = $LASTEXITCODE
+
+        Write-Host ""
+        if ($checkExit -eq 0 -and $smithExit -eq 0) {
+            Write-Host "  ✅ --verify: check + smith both passed" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠ --verify: check exit=$checkExit, smith exit=$smithExit" -ForegroundColor Yellow
+            Write-Host "    The update completed, but verification reported issues. Review output above." -ForegroundColor Yellow
+            exit 1
+        }
+    }
 }
 
 # ─── Command: testbed-happypath ────────────────────────────────────────
@@ -5861,7 +6316,7 @@ function Invoke-Config {
     if ($action -eq 'list') {
         $current = @{}
         if (Test-Path $configPath) {
-            try { $current = Get-Content $configPath -Raw | ConvertFrom-Json } catch {}
+            try { $current = Get-Content $configPath -Raw | ConvertFrom-Json } catch { Write-Verbose "Could not parse .forge.json in 'config list': $($_.Exception.Message)" }
         }
         foreach ($k in $schema.Keys) {
             $jk = $schema[$k].jsonKey
@@ -6116,8 +6571,25 @@ function Invoke-ForgeMaster {
     switch ($sub) {
         'status' { node $lifecyclePath status }
         'logs'   { node $lifecyclePath logs }
+        'observe' {
+            $observeSub = if ($Arguments.Count -gt 1) { $Arguments[1] } else { "" }
+            $observerPath = Join-Path $RepoRoot "pforge-master/src/observer-loop.mjs"
+            if (-not (Test-Path $observerPath)) {
+                Write-Host "ERROR: observer-loop.mjs not found at $observerPath" -ForegroundColor Red
+                exit 1
+            }
+            switch ($observeSub) {
+                'start'  { node $observerPath start }
+                'stop'   { node $observerPath stop }
+                'status' { node $observerPath status }
+                default  {
+                    Write-Host "Usage: pforge forge-master observe <start|stop|status>" -ForegroundColor Yellow
+                    exit 1
+                }
+            }
+        }
         default  {
-            Write-Host "Usage: pforge forge-master <status|logs>" -ForegroundColor Yellow
+            Write-Host "Usage: pforge forge-master <status|logs|observe>" -ForegroundColor Yellow
             exit 1
         }
     }
@@ -7384,6 +7856,9 @@ switch ($Command) {
     'version-bump' { Invoke-VersionBump }
     'smith'        { Invoke-Smith }
     'testbed-happypath' { Invoke-TestbedHappypath }
+    'forge-home-cleanup' { Invoke-ForgeHomeCleanup }
+    'embeddings'   { Invoke-Embeddings }
+    'local-recall' { Invoke-LocalRecall }
     'migrate-memory' { Invoke-MigrateMemory }
     'drain-memory' { Invoke-DrainMemory }
     'brain'        { Invoke-Brain }
@@ -7402,13 +7877,61 @@ switch ($Command) {
                 Invoke-AuditExport
             }
             default {
-                Write-Host "Usage: pforge audit <subcommand>" -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "Subcommands:"
-                Write-Host "  export    Export audit events from .forge/runs/ as JSONL or CSV"
-                Write-Host ""
-                Write-Host "See also: pforge audit-loop"
-                exit 1
+                # Phase-43: `pforge audit` runs forge_master_audit.
+                # Flag forms (--since, --tier, --schedule, --on-incident) are
+                # parsed here; everything else falls through to old export help.
+                if ($sub -ne "" -and -not $sub.StartsWith("--")) {
+                    Write-Host "Usage: pforge audit [--since 7d] [--tier high|medium|low] [--schedule daily] [--on-incident]" -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "Subcommands:"
+                    Write-Host "  (default)  Run a Forge-Master audit (forge_master_audit)"
+                    Write-Host "  export     Export audit events from .forge/runs/ as JSONL or CSV"
+                    Write-Host ""
+                    Write-Host "Flags (default audit):"
+                    Write-Host "  --since <window>     Time window (e.g. 7d, 24h) — default: 7d"
+                    Write-Host "  --tier <tier>        Reasoning tier: high|medium|low — default: high"
+                    Write-Host "  --schedule <freq>    Print guidance for setting up a scheduled audit"
+                    Write-Host "  --on-incident        Print guidance for incident-triggered audits"
+                    Write-Host ""
+                    Write-Host "See also: pforge audit-loop, pforge audit export"
+                    exit 1
+                }
+                # Parse flags
+                $since = "7d"
+                $tier = "high"
+                $schedule = $null
+                $onIncident = $false
+                for ($i = 0; $i -lt $Arguments.Count; $i++) {
+                    $a = $Arguments[$i]
+                    if ($a -eq '--since' -and ($i + 1) -lt $Arguments.Count) { $since = $Arguments[$i + 1]; $i++ }
+                    elseif ($a -eq '--tier' -and ($i + 1) -lt $Arguments.Count) { $tier = $Arguments[$i + 1]; $i++ }
+                    elseif ($a -eq '--schedule' -and ($i + 1) -lt $Arguments.Count) { $schedule = $Arguments[$i + 1]; $i++ }
+                    elseif ($a -eq '--on-incident') { $onIncident = $true }
+                }
+                if ($schedule) {
+                    Write-Host ""
+                    Write-Host "To schedule '$schedule' audits, register a Windows scheduled task:" -ForegroundColor Cyan
+                    Write-Host "  schtasks /create /tn 'Plan Forge $schedule audit' /tr 'pforge audit --since 7d' /sc $schedule /st 09:00" -ForegroundColor Gray
+                    Write-Host "Or, on Linux/macOS, add to crontab:" -ForegroundColor Cyan
+                    Write-Host "  0 9 * * * cd $RepoRoot && pforge audit --since 7d >> .forge/audit.log 2>&1" -ForegroundColor Gray
+                    Write-Host ""
+                    exit 0
+                }
+                if ($onIncident) {
+                    Write-Host ""
+                    Write-Host "To trigger audits from incident channels, wire your alerting hook to:" -ForegroundColor Cyan
+                    Write-Host "  pforge audit --since 24h --tier high" -ForegroundColor Gray
+                    Write-Host "Examples:" -ForegroundColor Cyan
+                    Write-Host "  - PagerDuty webhook → pforge audit --since 24h"
+                    Write-Host "  - GitHub Actions on incident label → pforge audit --since 24h"
+                    Write-Host ""
+                    exit 0
+                }
+                # Run the audit via MCP
+                $script:Arguments = @("forge_master_audit",
+                                      "--tier=$tier",
+                                      "--since=$since")
+                Invoke-McpCall
             }
         }
     }

@@ -21,6 +21,7 @@ find_repo_root() {
 }
 
 REPO_ROOT="$(find_repo_root)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ─── Helpers ───────────────────────────────────────────────────────────
 print_manual_steps() {
@@ -33,6 +34,75 @@ print_manual_steps() {
         i=$((i + 1))
     done
     echo ""
+}
+
+# ─── .gitignore Manager (Issue #211) ───────────────────────────────────
+# Seed/refresh a marker-delimited managed block in the consumer's .gitignore
+# so runtime artifacts under .forge/ never get committed. Idempotent — user
+# content outside the markers is preserved. Twin of setup.sh's
+# pf_update_gitignore (and pforge.ps1's Update-PlanForgeGitignore).
+pf_update_gitignore() {
+    local repo_root="$1"
+    local gitignore="$repo_root/.gitignore"
+    local begin="# >>> plan-forge managed (do not edit between markers) >>>"
+    local end="# <<< plan-forge managed <<<"
+    local body
+    body="${begin}
+# Runtime / cache / telemetry produced by pforge — never commit.
+# This block is refreshed by setup + 'pforge self-update'. Issue #211.
+**/.forge/
+.forge/secrets.json
+pforge-mcp/node_modules/
+pforge-mcp/cli-schema.json
+pforge-mcp/.vitest-results.json
+pforge-master/node_modules/
+pforge-sdk/node_modules/
+${end}"
+
+    if [ -f "$gitignore" ]; then
+        if grep -qF "$begin" "$gitignore"; then
+            local tmp
+            tmp="$(mktemp)"
+            awk -v begin="$begin" -v end="$end" -v body="$body" '
+              BEGIN { in_block = 0 }
+              {
+                if (index($0, begin) == 1 && !in_block) { in_block = 1; print body; next }
+                if (index($0, end) == 1 && in_block) { in_block = 0; next }
+                if (!in_block) print
+              }
+            ' "$gitignore" > "$tmp"
+            if ! cmp -s "$gitignore" "$tmp"; then
+                mv "$tmp" "$gitignore"
+                echo "  ✅ Refreshed plan-forge managed block in .gitignore"
+            else
+                rm -f "$tmp"
+                echo "  ✓ .gitignore plan-forge block already current"
+            fi
+        else
+            if [ -s "$gitignore" ] && [ -n "$(tail -c 1 "$gitignore")" ]; then
+                echo "" >> "$gitignore"
+            fi
+            echo "" >> "$gitignore"
+            printf "%s\n" "$body" >> "$gitignore"
+            echo "  ✅ Appended plan-forge managed block to .gitignore"
+        fi
+    else
+        printf "%s\n" "$body" > "$gitignore"
+        echo "  ✅ Created .gitignore with plan-forge managed block"
+    fi
+
+    if [ -d "$repo_root/.git" ]; then
+        local tracked
+        tracked="$(cd "$repo_root" && git ls-files .forge 2>/dev/null | head -1)"
+        if [ -n "$tracked" ]; then
+            echo ""
+            echo "⚠  Files under .forge/ are currently tracked by git but the managed"
+            echo "   .gitignore now excludes them. Clean up with:"
+            echo "     git rm -r --cached .forge"
+            echo "     git commit -m \"chore(pforge): untrack .forge/ runtime artifacts\""
+            echo ""
+        fi
+    fi
 }
 
 show_help() {
@@ -56,6 +126,7 @@ COMMANDS:
   ext publish <p>   Validate and generate catalog entry for publishing
   update [source]   Update framework files from Plan Forge source (preserves customizations)
   self-update       Check for and install the latest Plan Forge release from GitHub
+                      Flags: --force (heal), --downgrade (with --force), --yes/-y, --dry-run, --verify (run check + smith after)
   analyze <plan>    Cross-artifact analysis — requirement traceability, test coverage, scope compliance
   run-plan <plan>   Execute a hardened plan — spawn CLI workers, validate at every boundary, track tokens
   org-rules export  Export org custom instructions from .github/instructions/ for GitHub org settings
@@ -113,6 +184,7 @@ COMMANDS:
   version-bump <v>  Update VERSION, package.json, docs/README/ROADMAP version badges to v<version>
   migrate-memory    Merge legacy *-history.json ledgers into canonical .jsonl siblings (idempotent)
   drain-memory      Drain pending OpenBrain queue records to the configured OpenBrain server
+  forge-home-cleanup Archive ephemeral .forge/ files (logs, tmp, release notes) and prune old archive slots
   mcp-call <tool>   Invoke any MCP tool by name (e.g. forge_crucible_list) via the local MCP server
   tour              Guided walkthrough of your installed Plan Forge files
   help              Show this help message
@@ -484,7 +556,7 @@ cmd_sweep() {
     local framework_total=0
     local fw_todo=0 fw_fixme=0 fw_hack=0 fw_placeholder=0 fw_stub=0 fw_other=0
     local pattern='TODO|FIXME|HACK|will be replaced|placeholder|stub|mock data|Simulate|Seed with sample'
-    local framework_pattern='^(pforge-mcp/|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
+    local framework_pattern='^(pforge-(mcp|sdk|master)/|pforge\.(ps1|sh)$|setup\.(ps1|sh)$|validate-setup\.(ps1|sh)$)'
 
     while IFS= read -r -d '' file; do
         local results
@@ -1483,11 +1555,22 @@ print(v if isinstance(v, str) else ','.join(v))
     fi
 
     # ─── Shared instructions ──────────────────────────────────────
+    # Source convention mirrors setup.sh Step 2:
+    #   $source_path/.github/instructions/                — Plan-Forge-internal files that ship as-is (no leakage)
+    #   $source_path/presets/shared/.github/instructions/ — consumer-facing genericized versions
+    # aci-design.instructions.md intentionally NOT in either list — MCP-tool-author guidance, not consumer-relevant.
     local src_instr="$source_path/.github/instructions"
+    local src_shared_instr="$source_path/presets/shared/.github/instructions"
     if [ -d "$src_instr" ]; then
         local instr_name
-        for instr_name in "architecture-principles.instructions.md" "git-workflow.instructions.md" "ai-plan-hardening-runbook.instructions.md" "self-repair-reporting.instructions.md" "status-reporting.instructions.md" "context-fuel.instructions.md"; do
+        for instr_name in "ai-plan-hardening-runbook.instructions.md" "context-fuel.instructions.md" "git-workflow.instructions.md" "security.instructions.md"; do
             _pf_check "$src_instr/$instr_name" "$REPO_ROOT/.github/instructions/$instr_name" ".github/instructions/$instr_name"
+        done
+    fi
+    if [ -d "$src_shared_instr" ]; then
+        local instr_name
+        for instr_name in "architecture-principles.instructions.md" "clean-code.instructions.md" "self-repair-reporting.instructions.md" "status-reporting.instructions.md" "testing.instructions.md"; do
+            _pf_check "$src_shared_instr/$instr_name" "$REPO_ROOT/.github/instructions/$instr_name" ".github/instructions/$instr_name"
         done
     fi
 
@@ -1561,11 +1644,50 @@ print(v if isinstance(v, str) else ','.join(v))
         fi
     done
 
+    # ─── Shared skills (add new, update existing shared-only) ────
+    # Mirrors pforge.ps1 — parity gap fixed: previously only PowerShell
+    # users picked up shared skills like clean-code-review on self-update.
+    local src_shared_skills="$source_path/presets/shared/skills"
+    if [ -d "$src_shared_skills" ]; then
+        local shared_dir shared_name shared_src shared_dst
+        for shared_dir in "$src_shared_skills"/*/; do
+            [ -d "$shared_dir" ] || continue
+            shared_name="$(basename "$shared_dir")"
+            shared_src="$shared_dir/SKILL.md"
+            shared_dst="$REPO_ROOT/.github/skills/$shared_name/SKILL.md"
+            [ -f "$shared_src" ] || continue
+
+            # If any per-stack preset has its own version of this skill,
+            # let the preset loop above handle it — don't overwrite.
+            local has_preset_version=false
+            local p
+            for p in "${_presets[@]}"; do
+                [ "$p" = "custom" ] && continue
+                if [ -f "$source_path/presets/$p/.github/skills/$shared_name/SKILL.md" ]; then
+                    has_preset_version=true
+                    break
+                fi
+            done
+            $has_preset_version && continue
+
+            if [ -f "$shared_dst" ]; then
+                if [ "$(_pf_sha256 "$shared_src")" != "$(_pf_sha256 "$shared_dst")" ]; then
+                    _updates+=("$shared_src|$shared_dst|.github/skills/$shared_name/SKILL.md (shared)")
+                fi
+            else
+                _new_files+=("$shared_src|$shared_dst|.github/skills/$shared_name/SKILL.md (shared)")
+            fi
+        done
+    fi
+
     unset -f _pf_check
 
-    # ─── Core root files (CLI scripts + VERSION) ─────────────────
+    # ─── Core root files (CLI + shim + VERSION + validators) ────
+    # Includes root `pforge` bash shim and validate-setup.{ps1,sh} so older
+    # installs that pre-date the installer-validators-and-shim fix can
+    # self-heal on `pforge self-update` (parity with pforge.ps1).
     local core_file
-    for core_file in "pforge.ps1" "pforge.sh" "VERSION"; do
+    for core_file in "pforge.ps1" "pforge.sh" "pforge" "VERSION" "validate-setup.ps1" "validate-setup.sh"; do
         local src_core="$source_path/$core_file"
         local dst_core="$REPO_ROOT/$core_file"
         if [ -f "$src_core" ]; then
@@ -1602,6 +1724,34 @@ print(v if isinstance(v, str) else ','.join(v))
             fi
         done < <(find "$src_mcp" -type f -not -path '*/node_modules/*' -print0 2>/dev/null)
     fi
+
+    # ─── pforge-sdk + pforge-master (same scan, parameterized) ──
+    # Consumer installs that skipped these crashed at runtime for opt-in
+    # features (lattice, notifications, hallmark, forge-master-chat).
+    local pkg src_pkg dst_pkg
+    for pkg in pforge-sdk pforge-master; do
+        src_pkg="$source_path/$pkg"
+        dst_pkg="$REPO_ROOT/$pkg"
+        [ -d "$src_pkg" ] || continue
+        while IFS= read -r -d '' f; do
+            local rel_path rel_name dst_f
+            rel_path="${f#"$src_pkg/"}"
+            rel_name="$pkg/$rel_path"
+            dst_f="$dst_pkg/$rel_path"
+            local _skip=false
+            for nu in "${_never_update[@]}"; do
+                [ "$nu" = "$rel_name" ] && _skip=true && break
+            done
+            $_skip && continue
+            if [ -f "$dst_f" ]; then
+                if [ "$(_pf_sha256 "$f")" != "$(_pf_sha256 "$dst_f")" ]; then
+                    _updates+=("$f|$dst_f|$rel_name")
+                fi
+            else
+                _new_files+=("$f|$dst_f|$rel_name")
+            fi
+        done < <(find "$src_pkg" -type f -not -path '*/node_modules/*' -not -path '*/.forge/*' -not -path '*/coverage/*' -print0 2>/dev/null)
+    done
 
     # ─── Report ───────────────────────────────────────────────────
     if [ "${#_updates[@]}" -eq 0 ] && [ "${#_new_files[@]}" -eq 0 ]; then
@@ -1673,6 +1823,9 @@ with open('$config_path', 'w') as f:
         echo "  ✅ Updated .forge.json templateVersion to $source_version"
     fi
 
+    # ─── Refresh consumer .gitignore managed block (Issue #211) ───────
+    pf_update_gitignore "$REPO_ROOT"
+
     echo ""
     echo "Update complete: v$current_version → v$source_version"
     echo "Run 'pforge check' to validate the updated setup."
@@ -1715,6 +1868,30 @@ writeFreshCache(process.argv[1], process.argv[2]);
             echo ""
             echo "⚠️  MCP server is running on port 3100 — restart it to pick up changes."
             echo "  Stop the current server, then: node pforge-mcp/server.mjs"
+        fi
+    fi
+
+    # Auto-install pforge-master dependencies if its files were updated.
+    # pforge-master declares @modelcontextprotocol/sdk + ws as runtime deps,
+    # so missing node_modules breaks the forge-master-chat MCP stdio server.
+    local fm_updated=false
+    for entry in "${_updates[@]}" "${_new_files[@]}"; do
+        local entry_name="${entry##*|}"
+        if [[ "$entry_name" == pforge-master/* ]]; then
+            fm_updated=true
+            break
+        fi
+    done
+    if [ "$fm_updated" = true ]; then
+        local fm_dir="$REPO_ROOT/pforge-master"
+        if [ -f "$fm_dir/package.json" ]; then
+            echo ""
+            echo "Installing pforge-master dependencies..."
+            if (cd "$fm_dir" && npm install --silent 2>/dev/null); then
+                echo "  ✅ npm install complete"
+            else
+                echo "  ⚠️  npm install failed — run manually: cd pforge-master && npm install"
+            fi
         fi
     fi
 
@@ -1957,143 +2134,21 @@ cmd_analyze() {
     fi
 }
 
-# ─── Command: drift ────────────────────────────────────────────────────
-cmd_drift() {
-    local threshold=70
-    for arg in "$@"; do
-        case "$arg" in
-            --threshold=*) threshold="${arg#*=}" ;;
-            --threshold)   shift; threshold="$1" ;;
-            [0-9]*)        threshold="$arg" ;;
-        esac
-    done
-
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║       Plan Forge — Drift Report                              ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "Scanning source files for architecture guardrail violations..."
-    echo "Threshold: $threshold/100"
-    echo ""
-
-    local files_scanned=0
-    local violation_count=0
-    local violations_json="["
-    local first_violation=true
-    local penalty_per_violation=2
-
-    # Scan source files for guardrail violations
-    while IFS= read -r -d '' file; do
-        files_scanned=$((files_scanned + 1))
-        local rel="${file#$REPO_ROOT/}"
-        local content
-        content=$(cat "$file" 2>/dev/null) || continue
-
-        check_rule() {
-            local rule_id="$1" pattern="$2" severity="$3" label="$4"
-            local line_num=1 found=false
-            while IFS= read -r line; do
-                if echo "$line" | grep -qE "$pattern" 2>/dev/null; then
-                    violation_count=$((violation_count + 1))
-                    if [ "$first_violation" = "true" ]; then
-                        first_violation=false
-                    else
-                        violations_json="$violations_json,"
-                    fi
-                    local escaped_rel escaped_label
-                    escaped_rel=$(printf '%s' "$rel" | sed 's/\\/\\\\/g; s/"/\\"/g')
-                    escaped_label=$(printf '%s' "$label" | sed 's/"/\\"/g')
-                    violations_json="$violations_json{\"file\":\"$escaped_rel\",\"rule\":\"$rule_id\",\"severity\":\"$severity\",\"line\":$line_num,\"description\":\"$escaped_label\"}"
-                fi
-                line_num=$((line_num + 1))
-            done <<< "$content"
-        }
-
-        check_rule "empty-catch"     'catch[[:space:]]*(\([^)]*\))?[[:space:]]*\{[[:space:]]*(//[^}]*)?[[:space:]]*\}'   "high"     "Empty catch block"
-        check_rule "any-type"        ':[[:space:]]*any[[:space:];|,>]|<any>|as[[:space:]]+any'  "medium"   "Avoid 'any' type"
-        check_rule "sync-over-async" '\.(Result|Wait\(\))'                                      "high"     "Sync-over-async"
-        check_rule "sql-injection"   'SELECT|INSERT|UPDATE|DELETE.*\$\{'                        "critical" "SQL string interpolation"
-        check_rule "deferred-work"   '\b(TODO|FIXME|HACK)\b'                                    "low"      "Deferred work marker"
-
-    done < <(find "$REPO_ROOT" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.ts" -o -name "*.tsx" -o -name "*.cs" -o -name "*.py" \) \
-        ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/bin/*' ! -path '*/obj/*' \
-        ! -path '*/dist/*' ! -path '*/.forge/*' ! -path '*/vendor/*' ! -path '*/coverage/*' \
-        -print0 2>/dev/null)
-
-    violations_json="$violations_json]"
-
-    local score=$(( 100 - violation_count * penalty_per_violation ))
-    [ "$score" -lt 0 ] && score=0
-
-    printf "Files scanned:  %d\n" "$files_scanned"
-    if [ "$violation_count" -eq 0 ]; then
-        printf "Violations:     \033[32m%d\033[0m\n" "$violation_count"
-    elif [ "$violation_count" -le 5 ]; then
-        printf "Violations:     \033[33m%d\033[0m\n" "$violation_count"
-    else
-        printf "Violations:     \033[31m%d\033[0m\n" "$violation_count"
-    fi
-    if [ "$score" -ge 80 ]; then
-        printf "Score:          \033[32m%d/100\033[0m\n" "$score"
-    elif [ "$score" -ge "$threshold" ]; then
-        printf "Score:          \033[33m%d/100\033[0m\n" "$score"
-    else
-        printf "Score:          \033[31m%d/100\033[0m\n" "$score"
-    fi
-    echo ""
-
-    # Append to drift-history.json
-    local forge_dir="$REPO_ROOT/.forge"
-    mkdir -p "$forge_dir"
-    local history_file="$forge_dir/drift-history.json"
-    local prev_score=""
-    local history_count=0
-    if [ -f "$history_file" ]; then
-        history_count=$(grep -c '"score"' "$history_file" 2>/dev/null || echo 0)
-        prev_score=$(grep -o '"score":[0-9]*' "$history_file" 2>/dev/null | tail -1 | grep -o '[0-9]*$')
-    fi
-
-    local delta=0 trend="stable"
-    if [ -n "$prev_score" ]; then
-        delta=$((score - prev_score))
-        if [ "$delta" -gt 0 ]; then trend="improving"
-        elif [ "$delta" -lt 0 ]; then trend="degrading"
-        fi
-    fi
-
-    local ts
-    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
-    local record="{\"timestamp\":\"$ts\",\"score\":$score,\"filesScanned\":$files_scanned,\"delta\":$delta,\"trend\":\"$trend\",\"violations\":$violations_json}"
-    echo "$record" >> "$history_file"
-
-    local history_length=$((history_count + 1))
-    printf "Trend:          %s\n" "$trend"
-    printf "History:        %d record(s) in .forge/drift-history.json\n" "$history_length"
-    echo ""
-
-    if [ "$score" -lt "$threshold" ]; then
-        printf "\033[31m⚠  DRIFT ALERT — score %d is below threshold %d\033[0m\n" "$score" "$threshold"
-        exit 1
-    else
-        printf "\033[32m✅ Drift score within threshold (%d >= %d)\033[0m\n" "$score" "$threshold"
-        exit 0
-    fi
-}
-
 # ─── Command: self-update (Phase AUTO-UPDATE-01 Slice 2) ──────────────
 cmd_self_update() {
     print_manual_steps "self-update" \
         "Force-refresh the update check (bypass 24h cache)" \
         "If a newer version exists, prompt for confirmation" \
-        "Delegate to 'pforge update --from-github --tag <latest>'"
+        "Delegate to 'pforge update --from-github --tag <latest>'" \
+        "With --verify: run 'pforge check' + 'pforge smith' in subprocesses after a successful update"
 
-    local auto_yes=false dry_run=false force_heal=false
+    local auto_yes=false dry_run=false force_heal=false verify=false
     for arg in "$@"; do
         case "$arg" in
             --yes|-y) auto_yes=true ;;
             --dry-run) dry_run=true ;;
             --force) force_heal=true ;;
+            --verify) verify=true ;;
         esac
     done
 
@@ -2226,6 +2281,39 @@ cmd_self_update() {
         cmd_update --from-github --tag "$latest_tag" --force
     else
         cmd_update --from-github --tag "$latest_tag"
+    fi
+
+    # --verify: run 'pforge check' + 'pforge smith' in subprocesses so the
+    # just-updated wrapper code is exercised. Exits non-zero if either fails.
+    if $verify; then
+        echo ""
+        echo "──────────────────────────────────────────────────────────────"
+        echo "--verify: running 'pforge check' + 'pforge smith' (subprocess)"
+        echo "──────────────────────────────────────────────────────────────"
+
+        local pforge_script="$REPO_ROOT/pforge.sh"
+        if [ ! -f "$pforge_script" ]; then
+            echo "  ⚠ Cannot run --verify: pforge.sh not found at $pforge_script" >&2
+            exit 1
+        fi
+
+        local check_exit=0 smith_exit=0
+        echo ""
+        echo "▶ pforge check"
+        bash "$pforge_script" check || check_exit=$?
+
+        echo ""
+        echo "▶ pforge smith"
+        bash "$pforge_script" smith || smith_exit=$?
+
+        echo ""
+        if [ "$check_exit" -eq 0 ] && [ "$smith_exit" -eq 0 ]; then
+            echo "  ✅ --verify: check + smith both passed"
+        else
+            echo "  ⚠ --verify: check exit=$check_exit, smith exit=$smith_exit" >&2
+            echo "    The update completed, but verification reported issues. Review output above." >&2
+            exit 1
+        fi
     fi
 }
 
@@ -2657,6 +2745,16 @@ cmd_doctor() {
             else
                 doctor_warn ".vscode/mcp.json missing 'plan-forge' entry" "Re-run setup or add manually"
             fi
+            # forge-master-chat is the second MCP server entry (Phase-29
+            # chat bridge). Only required when pforge-master/server.mjs is
+            # present — only warn if both conditions disagree.
+            if [ -f "$REPO_ROOT/pforge-master/server.mjs" ]; then
+                if grep -q '"forge-master-chat"' "$REPO_ROOT/.vscode/mcp.json" 2>/dev/null; then
+                    doctor_pass ".vscode/mcp.json has 'forge-master-chat' server entry"
+                else
+                    doctor_warn ".vscode/mcp.json missing 'forge-master-chat' entry" "Re-run setup or add manually — Forge-Master chat tab won't connect without it"
+                fi
+            fi
         else
             doctor_warn ".vscode/mcp.json not found" "Run setup to generate MCP config"
         fi
@@ -2732,15 +2830,29 @@ cmd_doctor() {
         echo "MCP Runtime:"
 
         # Granular dependency checks
+        # npm workspaces (root package.json declares pforge-mcp as a workspace) HOIST
+        # dependencies to <repo>/node_modules. Standalone installs (cd pforge-mcp && npm i)
+        # land them in pforge-mcp/node_modules. Probe both so smith works in either layout.
         local mcp_deps_dir="$REPO_ROOT/pforge-mcp/node_modules"
-        if [ -d "$mcp_deps_dir" ]; then
+        local root_deps_dir="$REPO_ROOT/node_modules"
+        _resolve_mcp_dep() {
+            # echoes resolved path or nothing
+            local dep_name="$1"
+            if [ -d "$mcp_deps_dir/$dep_name" ]; then
+                echo "$mcp_deps_dir/$dep_name"
+            elif [ -d "$root_deps_dir/$dep_name" ]; then
+                echo "$root_deps_dir/$dep_name"
+            fi
+        }
+        if [ -d "$mcp_deps_dir" ] || [ -d "$root_deps_dir" ]; then
             # Critical deps
             local critical_deps=("@modelcontextprotocol/sdk:MCP SDK (protocol layer)" "express:Express (dashboard + REST API)" "ws:ws (WebSocket hub for real-time events)")
             for entry in "${critical_deps[@]}"; do
                 local dep_name="${entry%%:*}"
                 local dep_label="${entry#*:}"
-                local dep_path="$mcp_deps_dir/$dep_name"
-                if [ -d "$dep_path" ]; then
+                local dep_path
+                dep_path=$(_resolve_mcp_dep "$dep_name")
+                if [ -n "$dep_path" ]; then
                     local dep_pkg="$dep_path/package.json"
                     if [ -f "$dep_pkg" ]; then
                         local dep_ver
@@ -2751,12 +2863,14 @@ cmd_doctor() {
                         doctor_pass "$dep_label installed"
                     fi
                 else
-                    doctor_fail "$dep_label missing" "Run: cd pforge-mcp && npm install"
+                    doctor_fail "$dep_label missing" "Run: npm install (root) or cd pforge-mcp && npm install"
                 fi
             done
 
             # Optional deps
-            if [ -d "$mcp_deps_dir/playwright" ]; then
+            local pw_path
+            pw_path=$(_resolve_mcp_dep "playwright")
+            if [ -n "$pw_path" ]; then
                 doctor_pass "Playwright (screenshot capture)"
             else
                 doctor_warn "Playwright (screenshot capture) not installed (optional)" "Run: cd pforge-mcp && npm install playwright"
@@ -2818,6 +2932,37 @@ cmd_doctor() {
             doctor_warn "pforge-master/src/lifecycle.mjs missing" "'pforge forge-master status|logs' will fail"
         fi
 
+        # pforge-master declares @modelcontextprotocol/sdk + ws as RUNTIME
+        # deps. setup.sh + pforge.sh self-update both auto-run npm install
+        # here, but verify post-hoc — a stale install or skipped update will
+        # silently fail at server start.
+        if [ -f "$forge_master_dir/package.json" ]; then
+            if [ -d "$forge_master_dir/node_modules" ]; then
+                doctor_pass "pforge-master dependencies installed"
+            else
+                doctor_warn "pforge-master/node_modules missing" "Run: cd pforge-master && npm install"
+            fi
+        fi
+
+        echo ""
+    fi
+
+    # ═══════════════════════════════════════════════════════════════
+    # 4d-iii. PFORGE-SDK (shared helper library)
+    # ═══════════════════════════════════════════════════════════════
+    # pforge-sdk is a helper library shipped alongside pforge-mcp. It has
+    # NO runtime deps (intentional) — code in pforge-mcp imports it via
+    # relative paths like '../../pforge-sdk/src/...'. Missing files here
+    # crash opt-in features (lattice, notifications, hallmark, memory-upgrade,
+    # forge-master chat). Validation is presence-only.
+    local forge_sdk_dir="$REPO_ROOT/pforge-sdk"
+    if [ -d "$forge_sdk_dir" ]; then
+        echo "pforge-sdk:"
+        if [ -f "$forge_sdk_dir/src/client.mjs" ]; then
+            doctor_pass "pforge-sdk/src/client.mjs"
+        else
+            doctor_warn "pforge-sdk/src/client.mjs missing" "Re-run 'pforge update' to restore — deep imports from pforge-mcp will fail"
+        fi
         echo ""
     fi
 
@@ -2888,21 +3033,58 @@ cmd_doctor() {
     # 4f. LIFECYCLE HOOKS
     # ═══════════════════════════════════════════════════════════════
     local hooks_dir="$REPO_ROOT/.github/hooks"
-    if [ -d "$hooks_dir" ]; then
+    local hooks_json="$hooks_dir/plan-forge.json"
+    local forge_config="$REPO_ROOT/.forge.json"
+    local hook_config_present=0 hooks_json_present=0
+    if [ -f "$forge_config" ]; then
+        local hooks_cfg_raw
+        hooks_cfg_raw="$(_json_field "$forge_config" "hooks")"
+        if [ -n "$hooks_cfg_raw" ] && [ "$hooks_cfg_raw" != "false" ] && [ "$hooks_cfg_raw" != "null" ]; then
+            hook_config_present=1
+        fi
+    fi
+    if [ -f "$hooks_json" ]; then
+        local hooks_json_raw
+        hooks_json_raw="$(_json_field "$hooks_json" "hooks")"
+        if [ -n "$hooks_json_raw" ] && [ "$hooks_json_raw" != "false" ] && [ "$hooks_json_raw" != "null" ]; then
+            hooks_json_present=1
+        fi
+    fi
+    if [ -d "$hooks_dir" ] || [ $hook_config_present -eq 1 ] || [ $hooks_json_present -eq 1 ]; then
         echo "Lifecycle Hooks:"
-        local expected_hooks=("SessionStart" "PreToolUse" "PostToolUse" "Stop")
+        local enums_cli="$REPO_ROOT/pforge-mcp/bin/enums-cli.mjs"
+        local expected_hooks=()
+        if command -v node >/dev/null 2>&1 && [ -f "$enums_cli" ]; then
+            mapfile -t expected_hooks < <(node "$enums_cli" --enum HOOK_PASCAL 2>/dev/null)
+        fi
+        if [ ${#expected_hooks[@]} -eq 0 ]; then
+            expected_hooks=("SessionStart" "PreToolUse" "PostToolUse" "Stop" "PreDeploy" "PostSlice" "PreAgentHandoff" "PostRun")
+        fi
+        # Build PascalCase->camelCase map for .forge.json config key lookup
+        declare -A hook_cfg_keys
+        local forge_json="$REPO_ROOT/.forge.json"
+        if command -v node >/dev/null 2>&1 && [ -f "$enums_cli" ] && command -v jq >/dev/null 2>&1; then
+            while IFS='=' read -r key val; do
+                hook_cfg_keys["$key"]="$val"
+            done < <(node "$enums_cli" --enum HOOK_NAMES --format json 2>/dev/null | jq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null)
+        fi
         local hook_count=0 hook_missing=""
-        # plan-forge.json (shipped by `pforge update` from templates/) declares core hooks in PascalCase.
-        local hooks_json="$hooks_dir/plan-forge.json"
         for hook in "${expected_hooks[@]}"; do
-            local found=0
-            # Source 1: hook file matching the name (e.g. SessionStart.md, SessionStart.ps1)
-            if ls "$hooks_dir"/*"$hook"* >/dev/null 2>&1; then
+            local found=0 cfg_key cfg_val hook_json_val
+            cfg_key="${hook,}${hook:1}"
+            if [ -d "$hooks_dir" ] && find "$hooks_dir" -type f -name "*$hook*" -print -quit 2>/dev/null | grep -q .; then
                 found=1
             fi
-            # Source 2: .github/hooks/plan-forge.json declares this hook
+            # Source 2: .github/hooks/plan-forge.json declares this hook (PascalCase key)
             if [ $found -eq 0 ] && [ -f "$hooks_json" ] && command -v jq >/dev/null 2>&1; then
                 if jq -e ".hooks.\"$hook\"" "$hooks_json" >/dev/null 2>&1; then
+                    found=1
+                fi
+            fi
+            # Source 3: .forge.json -> hooks.<camelCase> (config-based hooks)
+            cfg_key="${hook_cfg_keys[$hook]:-$cfg_key}"
+            if [ $found -eq 0 ] && [ -n "$cfg_key" ] && [ -f "$forge_json" ] && command -v jq >/dev/null 2>&1; then
+                if jq -e ".hooks.\"$cfg_key\"" "$forge_json" >/dev/null 2>&1; then
                     found=1
                 fi
             fi
@@ -2997,7 +3179,7 @@ cmd_doctor() {
             echo "Quorum Mode:"
             quorum_enabled=$(jq -r '.quorum.enabled // false' "$config_path" 2>/dev/null || echo false)
             quorum_auto=$(jq -r '.quorum.auto // true' "$config_path" 2>/dev/null || echo true)
-            quorum_threshold=$(jq -r '.quorum.threshold // 7' "$config_path" 2>/dev/null || echo 7)
+            quorum_threshold=$(jq -r '.quorum.threshold // 5' "$config_path" 2>/dev/null || echo 5)
             quorum_models=$(jq -r '.quorum.models // [] | join(", ")' "$config_path" 2>/dev/null || echo "")
             quorum_reviewer=$(jq -r '.quorum.reviewerModel // "claude-opus-4.6"' "$config_path" 2>/dev/null || echo "claude-opus-4.6")
 
@@ -3464,6 +3646,25 @@ cmd_run_plan() {
         esac
         shift
     done
+
+    if [[ "$quorum_arg" == --quorum=* ]]; then
+        local quorum_val="${quorum_arg#--quorum=}"
+        local enums_cli_qm="$REPO_ROOT/pforge-mcp/bin/enums-cli.mjs"
+        if command -v node >/dev/null 2>&1 && [ -f "$enums_cli_qm" ]; then
+            local valid_qmodes=()
+            mapfile -t valid_qmodes < <(node "$enums_cli_qm" --enum QUORUM_MODES 2>/dev/null)
+            if [ ${#valid_qmodes[@]} -gt 0 ]; then
+                local qm_valid=false
+                for qm in "${valid_qmodes[@]}"; do
+                    if [ "$quorum_val" = "$qm" ]; then qm_valid=true; break; fi
+                done
+                if [ "$qm_valid" = false ]; then
+                    printf "ERROR: Invalid --quorum mode '%s'. Valid: %s\n" "$quorum_val" "$(IFS=', '; echo "${valid_qmodes[*]}")" >&2
+                    exit 1
+                fi
+            fi
+        fi
+    fi
 
     local mode="auto"
     if [ "$assisted" = true ]; then mode="assisted"; fi
@@ -4192,6 +4393,45 @@ cmd_drift() {
     "
 }
 
+# ─── Command: dep-watch ────────────────────────────────────────────────
+# Bash mirror of Invoke-DepWatch in pforge.ps1 (parity gap closed in Phase
+# `installer-validators-and-shim`). MCP API client — server must be running
+# on localhost:3100.
+cmd_dep_watch() {
+    print_manual_steps "dep-watch" \
+        "Run npm audit / pip-audit to scan dependencies" \
+        "Diff against previous snapshot (.forge/dep-watch.json)" \
+        "Report new and resolved vulnerabilities"
+
+    local port=3100
+    local response
+    response=$(curl -sf -X POST "http://localhost:${port}/api/deps/watch/run") || {
+        echo "ERROR: MCP server not running on port ${port}. Start with: node pforge-mcp/server.mjs" >&2
+        exit 1
+    }
+    echo "$response" | node -e "
+      const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+      console.log('\n\u{1F50D} Dependency Watch');
+      console.log('   Total:    ' + d.total);
+      const newColor = d.new_count > 0 ? '\x1b[31m' : '\x1b[32m';
+      console.log('   New:      ' + newColor + d.new_count + '\x1b[0m');
+      console.log('   Resolved: \x1b[32m' + d.resolved_count + '\x1b[0m');
+      if (d.new_vulnerabilities && d.new_vulnerabilities.length > 0) {
+        console.log('\n   \x1b[31mNew Vulnerabilities:\x1b[0m');
+        d.new_vulnerabilities.forEach(v => {
+          console.log('   - ' + v.package + ' (' + v.severity + '): ' + v.title);
+        });
+      }
+      if (d.resolved && d.resolved.length > 0) {
+        console.log('\n   \x1b[32mResolved:\x1b[0m');
+        d.resolved.forEach(v => {
+          console.log('   - ' + v.package + ': ' + v.title);
+        });
+      }
+      console.log('\n   Snapshot: .forge/dep-watch.json');
+    "
+}
+
 # ─── Command: regression-guard ──────────────────────────────────────────
 cmd_regression_guard() {
     local files=""
@@ -4894,7 +5134,231 @@ else console.log(`\x1b[36m─── migrate-memory complete: ${migrated} migrate
 '
 }
 
-# ─── Command: mcp-call ─────────────────────────────────────────────────
+# ─── Command: forge-home-cleanup (Issue #203) ──────────────────────────
+# Moves ephemeral .forge/ files to .forge/archive/<YYYY-MM>/ and optionally
+# prunes old archive slots. Mirrors Invoke-ForgeHomeCleanup in pforge.ps1.
+#
+# Usage:
+#   pforge forge-home-cleanup [--dry-run] [--no-confirm] [--max-age-days=90]
+cmd_forge_home_cleanup() {
+    local script_path
+    script_path="$(dirname "$0")/scripts/forge-home-cleanup.mjs"
+    if [ ! -f "$script_path" ]; then
+        printf "\033[31mERROR: forge-home-cleanup.mjs not found at %s\033[0m\n" "$script_path" >&2
+        exit 1
+    fi
+    node "$script_path" "$@"
+    exit $?
+}
+
+# ─── Command: local-recall ──────────────────────────────────────────────
+# Manage and inspect the persisted TF-IDF index used by forge_local_search.
+# Mirrors Invoke-LocalRecall in pforge.ps1.
+#
+# Usage:
+#   pforge local-recall status [--path=<dir>]
+#   pforge local-recall warm   [--path=<dir>]
+#   pforge local-recall clear  [--path=<dir>]
+cmd_local_recall() {
+    local sub="${1:-status}"
+    shift 2>/dev/null || true
+
+    local path_arg=""
+    for a in "$@"; do
+        case "$a" in --path=*) path_arg="${a#--path=}";; esac
+    done
+
+    local mcp_dir
+    mcp_dir="$(dirname "$0")/pforge-mcp"
+
+    case "$sub" in
+        status)
+            local status_script
+            status_script="$(mktemp /tmp/pforge-lr-XXXXXX.mjs)"
+            cat > "$status_script" <<'EOJS'
+import { getIndexStatus } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+const s = getIndexStatus(cwd);
+const staleness = s.exists ? (s.stale === true ? 'stale' : s.stale === false ? 'fresh' : 'unknown') : 'n/a';
+console.log('');
+console.log('Local Recall Index Status');
+console.log('=========================');
+console.log('Index exists : ' + (s.exists ? 'yes' : 'no'));
+if (s.exists) {
+  console.log('Version      : ' + (s.version ?? 'unknown'));
+  console.log('Built at     : ' + (s.builtAt ?? 'unknown'));
+  console.log('Corpus size  : ' + (s.corpusSize ?? 0) + ' thoughts');
+  console.log('Freshness    : ' + staleness);
+  console.log('Cache file   : ' + s.cacheFile);
+} else {
+  console.log('');
+  console.log('Run "pforge local-recall warm" to pre-build the index,');
+  console.log('or run forge_local_search to build it on demand.');
+}
+console.log('');
+EOJS
+            (cd "$mcp_dir" && node "$status_script" "$path_arg")
+            local rc=$?
+            rm -f "$status_script"
+            exit $rc
+            ;;
+        warm)
+            local warm_script
+            warm_script="$(mktemp /tmp/pforge-lr-warm-XXXXXX.mjs)"
+            cat > "$warm_script" <<'EOJS'
+import { searchLocalThoughts, getIndexStatus } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+console.log('');
+console.log('Warming TF-IDF index cache...');
+await searchLocalThoughts('_warm_', { cwd, limit: 1, noCache: false });
+const s = getIndexStatus(cwd);
+if (s.exists) {
+  console.log('Index built. ' + (s.corpusSize ?? 0) + ' thought' + ((s.corpusSize ?? 0) === 1 ? '' : 's') + ' indexed.');
+  console.log('Cache file: ' + s.cacheFile);
+} else {
+  console.log('No thoughts found in .forge/ — index not built (empty corpus).');
+}
+console.log('');
+EOJS
+            (cd "$mcp_dir" && node "$warm_script" "$path_arg")
+            local rc=$?
+            rm -f "$warm_script"
+            exit $rc
+            ;;
+        clear)
+            local clear_script
+            clear_script="$(mktemp /tmp/pforge-lr-clear-XXXXXX.mjs)"
+            cat > "$clear_script" <<'EOJS'
+import { clearPersistedIndex } from './local-recall.mjs';
+const cwd = process.argv[2] || process.cwd();
+clearPersistedIndex(cwd);
+console.log('');
+console.log('TF-IDF index cache cleared.');
+console.log('It will be rebuilt on the next forge_local_search call.');
+console.log('');
+EOJS
+            (cd "$mcp_dir" && node "$clear_script" "$path_arg")
+            local rc=$?
+            rm -f "$clear_script"
+            exit $rc
+            ;;
+        *)
+            printf "\033[33mUsage: pforge local-recall <subcommand>\033[0m\n"
+            printf "\n"
+            printf "Subcommands:\n"
+            printf "  status  Show TF-IDF index cache info (default)\n"
+            printf "  warm    Pre-build the index for zero-cost first search\n"
+            printf "  clear   Delete the cache to force a fresh rebuild\n"
+            printf "\n"
+            exit 1
+            ;;
+    esac
+}
+
+# ─── Command: embeddings ────────────────────────────────────────────────
+# Manage and inspect the local semantic-search embedding backend.
+# Mirrors Invoke-Embeddings in pforge.ps1.
+#
+# Usage:
+#   pforge embeddings status [--path=<dir>]
+#   pforge embeddings install
+cmd_embeddings() {
+    local sub="${1:-status}"
+    shift 2>/dev/null || true
+
+    case "$sub" in
+        status)
+            local path_arg=""
+            for a in "$@"; do
+                case "$a" in --path=*) path_arg="${a#--path=}";; esac
+            done
+            local mcp_dir
+            mcp_dir="$(dirname "$0")/pforge-mcp"
+            local status_script
+            status_script="$(mktemp /tmp/pforge-emb-XXXXXX.mjs)"
+            cat > "$status_script" <<'EOJS'
+import { isNeuralEmbeddingAvailable, readLocalThoughts } from './local-recall.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+const cwd = process.argv[2] || process.cwd();
+const neural = await isNeuralEmbeddingAvailable();
+let version = null;
+if (neural) {
+  try {
+    const p = join(cwd, 'node_modules', '@xenova', 'transformers', 'package.json');
+    if (existsSync(p)) version = JSON.parse(readFileSync(p,'utf-8')).version ?? null;
+  } catch {}
+}
+const thoughts = readLocalThoughts(cwd);
+let configured = 'auto';
+try {
+  const fj = JSON.parse(readFileSync(resolve(cwd,'.forge','forge.json'),'utf-8'));
+  if (fj?.embeddingBackend) configured = fj.embeddingBackend;
+} catch {}
+const effective = configured === 'tfidf' ? 'tfidf'
+  : configured === 'neural' ? (neural ? 'neural' : 'tfidf')
+  : (neural ? 'neural' : 'tfidf');
+console.log('');
+console.log('Embedding Backend Status');
+console.log('========================');
+console.log('Active backend : ' + effective);
+console.log('Neural avail.  : ' + (neural ? 'yes (v' + (version ?? 'unknown') + ')' : 'no'));
+console.log('Model          : Xenova/all-MiniLM-L6-v2');
+console.log('Corpus size    : ' + thoughts.length + ' thoughts in .forge/');
+console.log('Configured     : ' + configured + ' (in .forge.json embeddingBackend)');
+if (!neural) {
+  console.log('');
+  console.log('To enable neural embeddings:');
+  console.log('  cd pforge-mcp && npm install --save-optional @xenova/transformers');
+}
+console.log('');
+EOJS
+            (cd "$mcp_dir" && node "$status_script" "$path_arg")
+            local rc=$?
+            rm -f "$status_script"
+            exit $rc
+            ;;
+        install)
+            printf "\033[36mInstalling @xenova/transformers as optional dependency...\033[0m\n"
+            local mcp_dir
+            mcp_dir="$(dirname "$0")/pforge-mcp"
+            (cd "$mcp_dir" && npm install --save-optional @xenova/transformers)
+            local rc=$?
+            if [ $rc -ne 0 ]; then
+                printf "\033[31mERROR: npm install failed (exit %d)\033[0m\n" "$rc" >&2
+                exit $rc
+            fi
+            printf "\n\033[36mPre-downloading all-MiniLM-L6-v2 model...\033[0m\n"
+            local warmup_script
+            warmup_script="$(mktemp /tmp/pforge-emb-warm-XXXXXX.mjs)"
+            cat > "$warmup_script" <<'EOJS'
+import { pipeline } from '@xenova/transformers';
+const embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+const out = await embedder('test', { pooling: 'mean', normalize: true });
+console.log('Model ready. Embedding dim: ' + out.data.length);
+EOJS
+            (cd "$mcp_dir" && node "$warmup_script")
+            local rc2=$?
+            rm -f "$warmup_script"
+            if [ $rc2 -eq 0 ]; then
+                printf "\033[32mNeural embeddings installed and ready.\033[0m\n"
+                printf "Run 'pforge embeddings status' to verify.\n"
+            else
+                printf "\033[33mWARNING: Model warmup failed — embeddings may still work on first use.\033[0m\n"
+            fi
+            exit 0
+            ;;
+        *)
+            printf "\033[33mUsage: pforge embeddings <subcommand>\033[0m\n"
+            printf "\n"
+            printf "Subcommands:\n"
+            printf "  status   Show active embedding backend and corpus size\n"
+            printf "  install  Install @xenova/transformers for neural embeddings\n"
+            printf "\n"
+            exit 1
+            ;;
+    esac
+}
 # Generic proxy for any MCP tool exposed by the running pforge-mcp server
 # on :3100. Covers crucible-*, tempering-*, bug-*, generate-image,
 # run-skill, skill-status, and every future tool without needing a
@@ -5286,8 +5750,25 @@ cmd_forge_master() {
     case "$sub" in
         status) node "$lifecycle_path" status ;;
         logs)   node "$lifecycle_path" logs ;;
+        observe)
+            local observe_sub="${2:-}"
+            local observer_path="$REPO_ROOT/pforge-master/src/observer-loop.mjs"
+            if [[ ! -f "$observer_path" ]]; then
+                echo "ERROR: observer-loop.mjs not found at $observer_path" >&2
+                exit 1
+            fi
+            case "$observe_sub" in
+                start)  node "$observer_path" start ;;
+                stop)   node "$observer_path" stop ;;
+                status) node "$observer_path" status ;;
+                *)
+                    echo "Usage: pforge forge-master observe <start|stop|status>" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
         *)
-            echo "Usage: pforge forge-master <status|logs>" >&2
+            echo "Usage: pforge forge-master <status|logs|observe>" >&2
             exit 1
             ;;
     esac
@@ -6514,11 +6995,6 @@ try {
         exit $node_exit
     fi
 
-
-        echo "ERROR: unknown subcommand 'pforge github $sub'. Try 'pforge github --help'." >&2
-        exit 1
-    fi
-
     local script="${REPO_ROOT}/pforge-mcp/github-introspect.mjs"
     if [[ ! -f "$script" ]]; then
         echo "ERROR: github-introspect.mjs not found at $script" >&2
@@ -6585,6 +7061,7 @@ case "$COMMAND" in
     runbook)      cmd_runbook "$@" ;;
     hotspot)      cmd_hotspot "$@" ;;
     secret-scan)  cmd_secret_scan "$@" ;;
+    dep-watch)    cmd_dep_watch "$@" ;;
     env-diff)     cmd_env_diff "$@" ;;
     fix-proposal)    cmd_fix_proposal "$@" ;;
     quorum-analyze)  cmd_quorum_analyze "$@" ;;
@@ -6595,6 +7072,9 @@ case "$COMMAND" in
     version-bump) cmd_version_bump "$@" ;;
     migrate-memory) cmd_migrate_memory "$@" ;;
     drain-memory) cmd_drain_memory "$@" ;;
+    forge-home-cleanup) cmd_forge_home_cleanup "$@" ;;
+    embeddings)   cmd_embeddings "$@" ;;
+    local-recall) cmd_local_recall "$@" ;;
     brain)        cmd_brain "$@" ;;
     mcp-call)     cmd_mcp_call "$@" ;;
     tour)         cmd_tour ;;
@@ -6607,13 +7087,56 @@ case "$COMMAND" in
         sub="${1:-}"
         case "$sub" in
             export) shift; cmd_audit_export "$@" ;;
+            ""|--*)
+                # Phase-43: `pforge audit` runs forge_master_audit.
+                since="7d"
+                tier="high"
+                schedule=""
+                on_incident=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        --since) since="$2"; shift 2 ;;
+                        --tier) tier="$2"; shift 2 ;;
+                        --schedule) schedule="$2"; shift 2 ;;
+                        --on-incident) on_incident="1"; shift ;;
+                        *) shift ;;
+                    esac
+                done
+                if [ -n "$schedule" ]; then
+                    echo ""
+                    echo "To schedule '$schedule' audits, add to crontab:"
+                    echo "  0 9 * * * cd $(pwd) && pforge audit --since 7d >> .forge/audit.log 2>&1"
+                    echo "Or, on Windows, register a scheduled task:"
+                    echo "  schtasks /create /tn 'Plan Forge $schedule audit' /tr 'pforge audit --since 7d' /sc $schedule /st 09:00"
+                    echo ""
+                    exit 0
+                fi
+                if [ -n "$on_incident" ]; then
+                    echo ""
+                    echo "To trigger audits from incident channels, wire your alerting hook to:"
+                    echo "  pforge audit --since 24h --tier high"
+                    echo "Examples:"
+                    echo "  - PagerDuty webhook → pforge audit --since 24h"
+                    echo "  - GitHub Actions on incident label → pforge audit --since 24h"
+                    echo ""
+                    exit 0
+                fi
+                cmd_mcp_call forge_master_audit "--tier=$tier" "--since=$since"
+                ;;
             *)
-                echo "Usage: pforge audit <subcommand>"
+                echo "Usage: pforge audit [--since 7d] [--tier high|medium|low] [--schedule daily] [--on-incident]"
                 echo ""
                 echo "Subcommands:"
-                echo "  export    Export audit events from .forge/runs/ as JSONL or CSV"
+                echo "  (default)  Run a Forge-Master audit (forge_master_audit)"
+                echo "  export     Export audit events from .forge/runs/ as JSONL or CSV"
                 echo ""
-                echo "See also: pforge audit-loop"
+                echo "Flags (default audit):"
+                echo "  --since <window>     Time window (e.g. 7d, 24h) — default: 7d"
+                echo "  --tier <tier>        Reasoning tier: high|medium|low — default: high"
+                echo "  --schedule <freq>    Print guidance for setting up a scheduled audit"
+                echo "  --on-incident        Print guidance for incident-triggered audits"
+                echo ""
+                echo "See also: pforge audit-loop, pforge audit export"
                 exit 1
                 ;;
         esac

@@ -19,6 +19,8 @@
  */
 
 import { inferRepoCommands } from "./crucible-infer.mjs";
+import { getQuestionBank } from "./crucible-interview.mjs";
+import { getMode } from "./crucible/registry.mjs";
 
 const TBD_REGEX = /\{\{TBD:\s*([a-z0-9-]+)\s*\}\}/gi;
 
@@ -99,16 +101,13 @@ export function synthesizeSliceBlock({ smelt, repoCommands }) {
   const title = titleBase.slice(0, 60);
 
   return [
-    `### Slice 1 — ${title}`,
+    `### Slice 1 — ${title} [scope: ${scopeRaw.split(/[\r\n,]/).map((s) => s.trim()).filter(Boolean).join(", ")}]`,
     "",
     `Build command: ${repoCommands.buildCommand}`,
     `Test command:  ${repoCommands.testCommand}`,
     "",
     "**Files**:",
     filesBullet,
-    "",
-    "**Acceptance Criteria**:",
-    gatesLines.join("\n"),
   ].join("\n");
 }
 
@@ -127,171 +126,187 @@ export function synthesizeSliceBlock({ smelt, repoCommands }) {
  * @param {{ cwd?: string }} [options]
  * @returns {string} markdown body (trailing newline included)
  */
-export function renderDraft(smelt, options = {}) {
-  if (!smelt) throw new Error("smelt required");
-  const cwd = options && options.cwd;
-  const ans = indexAnswers(smelt);
-  const lane = smelt.lane || "feature";
-  const rawIdea = (smelt.rawIdea || "").trim();
-  const firstLine = rawIdea.split(/\r?\n/)[0].slice(0, 80).trim();
-  const title = firstAnswer(ans, "feature-name") || firstLine || "Untitled smelt";
+function fallbackField(value, tbdId) {
+  return value || `{{TBD: ${tbdId}}}`;
+}
+
+function buildDraftContent(ans, lane) {
+  const bankIds = new Set(getQuestionBank(lane).map((q) => q.id));
+
+  function maybeField(value, tbdId, ...altIds) {
+    const inBank = bankIds.has(tbdId) || altIds.some((id) => bankIds.has(id));
+    if (!inBank) return value || null;
+    return fallbackField(value, tbdId);
+  }
 
   const scopeInRaw = firstAnswer(ans, "scope-in", "scope-files", "scope-file", "goal");
-  const scopeIn = asBulletList(scopeInRaw) || `{{TBD: ${lane === "full" ? "scope-in" : "scope-files"}}}`;
+  return {
+    scopeIn: fallbackField(asBulletList(scopeInRaw), lane === "full" ? "scope-in" : "scope-files"),
+    outOfScope: maybeField(asBulletList(firstAnswer(ans, "scope-out", "out-of-scope")), "out-of-scope", "scope-out"),
+    validationGates: maybeField(firstAnswer(ans, "validation-gates", "validation"), "validation-gates", "validation"),
+    rollback: fallbackField(firstAnswer(ans, "rollback-plan", "rollback"), lane === "full" ? "rollback-plan" : "rollback"),
+    forbidden: fallbackField(asBulletList(firstAnswer(ans, "forbidden-actions")), "forbidden-actions"),
+    tests: maybeField(firstAnswer(ans, "tests"), "tests"),
+    changeManifest: fallbackField(asBulletList(firstAnswer(ans, "scope-files", "scope-file", "scope-in")), "change-manifest"),
+    sliceCount: firstAnswer(ans, "slice-count"),
+  };
+}
 
-  const outOfScope = asBulletList(firstAnswer(ans, "scope-out", "out-of-scope"))
-    || `{{TBD: ${lane === "full" ? "scope-out" : "out-of-scope"}}}`;
-
-  const validationGates =
-    firstAnswer(ans, "validation-gates", "validation")
-    || `{{TBD: ${lane === "tweak" ? "validation" : "validation-gates"}}}`;
-
-  const rollback =
-    firstAnswer(ans, "rollback-plan", "rollback")
-    || `{{TBD: ${lane === "full" ? "rollback-plan" : "rollback"}}}`;
-
-  const forbidden = asBulletList(firstAnswer(ans, "forbidden-actions"))
-    || `{{TBD: forbidden-actions}}`;
-
-  const tests = firstAnswer(ans, "tests") || `{{TBD: tests}}`;
-
-  const changeManifest = asBulletList(firstAnswer(ans, "scope-files", "scope-file", "scope-in"))
-    || `{{TBD: change-manifest}}`;
-
-  const sliceCount = firstAnswer(ans, "slice-count");
-
-  const lines = [];
+function appendDraftPreamble(lines, { smelt, lane, title, rawIdea }) {
   lines.push(`# ${smelt.phaseName ? `${smelt.phaseName}: ` : ""}${title}`);
   lines.push("");
   lines.push(`> **Lane**: ${lane}  `);
   lines.push(`> **Source**: ${smelt.source || "human"}  `);
   lines.push(`> **Status**: ${smelt.status || "in-progress"}`);
   lines.push("");
-
   lines.push("## Raw Idea");
   lines.push("");
   lines.push(rawIdea || `{{TBD: ${lane === "full" ? "user-problem" : "goal"}}}`);
   lines.push("");
+}
 
-  if (lane === "full") {
-    const problem = firstAnswer(ans, "user-problem") || `{{TBD: user-problem}}`;
-    const metric = firstAnswer(ans, "success-metric") || `{{TBD: success-metric}}`;
-    const stack = firstAnswer(ans, "stack-boundary") || `{{TBD: stack-boundary}}`;
-    const dataModel = firstAnswer(ans, "data-model") || `{{TBD: data-model}}`;
-    const apiSurface = firstAnswer(ans, "api-surface") || `{{TBD: api-surface}}`;
-    const security = firstAnswer(ans, "security-posture") || `{{TBD: security-posture}}`;
+function appendFullLaneSections(lines, ans) {
+  const problem = fallbackField(firstAnswer(ans, "user-problem"), "user-problem");
+  const metric = fallbackField(firstAnswer(ans, "success-metric"), "success-metric");
+  const stack = fallbackField(firstAnswer(ans, "stack-boundary"), "stack-boundary");
+  const dataModel = fallbackField(firstAnswer(ans, "data-model"), "data-model");
+  const apiSurface = fallbackField(firstAnswer(ans, "api-surface"), "api-surface");
+  const security = fallbackField(firstAnswer(ans, "security-posture"), "security-posture");
 
-    lines.push("## Problem & Success Metric");
-    lines.push("");
-    lines.push(`**Problem**: ${problem}`);
-    lines.push("");
-    lines.push(`**Success metric**: ${metric}`);
-    lines.push("");
+  lines.push("## Problem & Success Metric");
+  lines.push("");
+  lines.push(`**Problem**: ${problem}`);
+  lines.push("");
+  lines.push(`**Success metric**: ${metric}`);
+  lines.push("");
+  lines.push("## Stack Boundary");
+  lines.push("");
+  lines.push(stack);
+  lines.push("");
+  lines.push("## Data Model");
+  lines.push("");
+  lines.push(dataModel);
+  lines.push("");
+  lines.push("## API Surface");
+  lines.push("");
+  lines.push(apiSurface);
+  lines.push("");
+  lines.push("## Security Posture");
+  lines.push("");
+  lines.push(security);
+  lines.push("");
+}
 
-    lines.push("## Stack Boundary");
-    lines.push("");
-    lines.push(stack);
-    lines.push("");
-
-    lines.push("## Data Model");
-    lines.push("");
-    lines.push(dataModel);
-    lines.push("");
-
-    lines.push("## API Surface");
-    lines.push("");
-    lines.push(apiSurface);
-    lines.push("");
-
-    lines.push("## Security Posture");
-    lines.push("");
-    lines.push(security);
-    lines.push("");
-  }
-
-  // Block 1: Slices
+function appendScopeContract(lines, content) {
   lines.push("## Scope Contract");
   lines.push("");
-  lines.push("**In scope**:");
+  lines.push("### In Scope");
   lines.push("");
-  lines.push(scopeIn);
+  lines.push(content.scopeIn);
   lines.push("");
-  lines.push("**Out of scope**:");
+  if (content.outOfScope !== null && content.outOfScope !== undefined) {
+    lines.push("### Out of Scope");
+    lines.push("");
+    lines.push(content.outOfScope);
+    lines.push("");
+  }
+  lines.push("### Forbidden");
   lines.push("");
-  lines.push(outOfScope);
+  lines.push(content.forbidden);
   lines.push("");
+}
 
+function appendSliceTemplate(lines) {
+  lines.push("> Slice template:");
+  lines.push(">");
+  lines.push("> ```");
+  lines.push("> ### Slice N — <name>");
+  lines.push("> Build command: <cmd>");
+  lines.push("> Test command:  <cmd>");
+  lines.push("> Tasks:         <list>");
+  lines.push("> Files:         <manifest>");
+  lines.push("> ```");
+}
+
+function appendSlicesSection(lines, sliceCount, synthesized) {
   lines.push("## Slices");
   lines.push("");
-  if (sliceCount) {
-    lines.push(`_Estimated: ${sliceCount} slices. Expand each below during Plan Hardener step._`);
-  } else {
-    lines.push("_Slice breakdown is authored during the Plan Hardener step (Session 1, Step 2)._");
-  }
+  lines.push(
+    sliceCount
+      ? `_Estimated: ${sliceCount} slices. Expand each below during Plan Hardener step._`
+      : "_Slice breakdown is authored during the Plan Hardener step (Session 1, Step 2)._"
+  );
   lines.push("");
-
-  const synthesized = cwd
-    ? synthesizeSliceBlock({ smelt, repoCommands: inferRepoCommands(cwd) })
-    : null;
-
-  if (synthesized) {
-    lines.push(synthesized);
-  } else {
-    lines.push("> Slice template:");
-    lines.push(">");
-    lines.push("> ```");
-    lines.push("> ### Slice N — <name>");
-    lines.push("> Build command: <cmd>");
-    lines.push("> Test command:  <cmd>");
-    lines.push("> Tasks:         <list>");
-    lines.push("> Files:         <manifest>");
-    lines.push("> ```");
-  }
+  if (synthesized) lines.push(synthesized);
+  else appendSliceTemplate(lines);
   lines.push("");
+}
 
-  // Block 2: Validation Gates
+function appendStandardBlocks(lines, content) {
   lines.push("## Validation Gates");
   lines.push("");
-  lines.push(validationGates);
-  lines.push("");
-  lines.push(`**Tests**: ${tests}`);
-  lines.push("");
-
-  // Block 3: Stop Conditions (boilerplate — universal, lane-neutral)
+  if (content.validationGates) {
+    lines.push(content.validationGates);
+    lines.push("");
+  }
+  if (content.tests) {
+    lines.push(`**Tests**: ${content.tests}`);
+    lines.push("");
+  }
   lines.push("## Stop Conditions");
   lines.push("");
   lines.push("- Validation gate fails and root cause is not identified within 30 minutes");
   lines.push("- A slice drifts past its declared Scope Contract");
-  lines.push("- A forbidden action (see Anti-patterns) is about to be introduced");
+  lines.push("- A forbidden action (see Scope Contract → Forbidden) is about to be introduced");
   lines.push("- Token budget for this phase is exceeded by more than 25%");
   lines.push("");
-
-  // Block 4: Rollback
   lines.push("## Rollback");
   lines.push("");
-  lines.push(rollback);
+  lines.push(content.rollback);
   lines.push("");
-
-  // Block 5: Anti-patterns
-  lines.push("## Anti-patterns & Forbidden Actions");
-  lines.push("");
-  lines.push(forbidden);
-  lines.push("");
-
-  // Block 6: Change Manifest
   lines.push("## Change Manifest");
   lines.push("");
-  lines.push(changeManifest);
+  lines.push(content.changeManifest);
   lines.push("");
+}
 
-  if (Array.isArray(smelt.answers) && smelt.answers.length > 0) {
-    lines.push("## Interview Log");
-    lines.push("");
-    smelt.answers.forEach((a, i) => {
-      lines.push(`${i + 1}. **${a.questionId}** — ${a.answer}`);
-    });
-    lines.push("");
-  }
+function appendInterviewLog(lines, answers) {
+  if (!Array.isArray(answers) || answers.length === 0) return;
+  lines.push("## Interview Log");
+  lines.push("");
+  answers.forEach((answer, i) => {
+    lines.push(`${i + 1}. **${answer.questionId}** — ${answer.answer}`);
+  });
+  lines.push("");
+}
+
+export function renderDraft(smelt, options = {}) {
+  if (!smelt) throw new Error("smelt required");
+
+  // Phase-59 S4: delegate to mode-specific renderer when available.
+  try {
+    const mode = getMode(smelt.lane);
+    if (mode && typeof mode.renderBody === "function") {
+      return mode.renderBody(smelt, options);
+    }
+  } catch { /* unregistered lane — fall through to standard renderer */ }
+
+  const cwd = options && options.cwd;
+  const ans = indexAnswers(smelt);
+  const lane = smelt.lane || "feature";
+  const rawIdea = (smelt.rawIdea || "").trim();
+  const firstLine = rawIdea.split(/\r?\n/)[0].slice(0, 80).trim();
+  const title = firstAnswer(ans, "feature-name") || firstLine || "Untitled smelt";
+  const content = buildDraftContent(ans, lane);
+  const synthesized = cwd ? synthesizeSliceBlock({ smelt, repoCommands: inferRepoCommands(cwd) }) : null;
+  const lines = [];
+
+  appendDraftPreamble(lines, { smelt, lane, title, rawIdea });
+  if (lane === "full") appendFullLaneSections(lines, ans);
+  appendScopeContract(lines, content);
+  appendSlicesSection(lines, content.sliceCount, synthesized);
+  appendStandardBlocks(lines, content);
+  appendInterviewLog(lines, smelt.answers);
 
   return lines.join("\n");
 }
@@ -326,10 +341,10 @@ export function extractUnresolvedFields(markdown) {
  */
 export const MANDATORY_BLOCKS = Object.freeze([
   "## Scope Contract",
+  "### Forbidden",
   "## Slices",
   "## Validation Gates",
   "## Stop Conditions",
   "## Rollback",
-  "## Anti-patterns & Forbidden Actions",
   "## Change Manifest",
 ]);

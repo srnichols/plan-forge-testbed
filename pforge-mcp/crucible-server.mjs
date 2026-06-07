@@ -13,18 +13,10 @@
  *                   for backwards-compatible imports in tests.
  */
 
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { loadCrucibleConfig } from "./crucible-config.mjs";
-import { inferRepoCommands } from "./crucible-infer.mjs";
-
-import {
-  claimPhaseNumber,
-  isValidPhaseName,
-  listClaims,
-  nextPhaseNumber,
-} from "./crucible.mjs";
 import {
   abandonSmelt,
   createSmelt,
@@ -33,6 +25,7 @@ import {
   updateSmelt,
 } from "./crucible-store.mjs";
 import {
+  buildRecommendedDefault,
   getNextQuestion as interviewGetNextQuestion,
   totalQuestions as interviewTotalQuestions,
 } from "./crucible-interview.mjs";
@@ -40,6 +33,33 @@ import {
   renderDraft,
   extractUnresolvedFields,
 } from "./crucible-draft.mjs";
+import {
+  CRITICAL_FIELDS,
+  CrucibleFinalizeRefusedError,
+  CruciblePlanExistsError,
+  CrucibleAskMismatchError,
+  handleFinalize,
+  buildFrontmatter,
+  collectExistingPhaseNames,
+  resolveCriticalFields,
+} from "./crucible/core/finalize.mjs";
+import { getMode } from "./crucible/registry.mjs";
+
+export {
+  CRITICAL_FIELDS,
+  CrucibleFinalizeRefusedError,
+  CruciblePlanExistsError,
+  CrucibleAskMismatchError,
+  handleFinalize,
+  buildFrontmatter,
+  collectExistingPhaseNames,
+  resolveCriticalFields,
+};
+
+import "./crucible/modes/tweak.mjs";
+import "./crucible/modes/feature.mjs";
+import "./crucible/modes/full.mjs";
+import "./crucible/modes/bug-batch.mjs";
 
 /**
  * Compute "stale defaults" warnings for a smelt. Fires when the files
@@ -82,75 +102,6 @@ export function computeStaleDefaultsWarnings(smelt, projectDir) {
   return warnings;
 }
 
-// ─── Finalize refusal ────────────────────────────────────────────────
-
-/**
- * Thrown by handleFinalize when the rendered draft still contains unresolved
- * markers for fields that are required before a plan can be executed.
- *
- * `payload.criticalGaps` lists the question IDs that must be answered.
- */
-export class CrucibleFinalizeRefusedError extends Error {
-  constructor(payload) {
-    super(payload.hint || "finalize refused");
-    this.name = "CrucibleFinalizeRefusedError";
-    this.payload = payload;
-  }
-}
-
-/**
- * Issue #137 — thrown by handleFinalize when `docs/plans/Phase-NN.md` already
- * exists and the caller did not pass `overwrite: true`. Carries the existing
- * path plus the side-by-side draft path that was written instead.
- */
-export class CruciblePlanExistsError extends Error {
-  constructor({ phaseName, planPath, draftPath }) {
-    super(`Plan already exists at ${planPath}. Pass overwrite:true to replace, or use the side-by-side draft at ${draftPath}.`);
-    this.name = "CruciblePlanExistsError";
-    this.code = "PLAN_ALREADY_EXISTS";
-    this.phaseName = phaseName;
-    this.planPath = planPath;
-    this.draftPath = draftPath;
-  }
-}
-
-/**
- * Issue #138 — thrown by handleAsk when the client supplies an explicit `id`
- * that does not match the question the server has pending. Prevents silent
- * answer corruption when client and server fall out of sync.
- */
-export class CrucibleAskMismatchError extends Error {
-  constructor({ expected, got }) {
-    super(`Question id mismatch: server expected '${expected}' but client sent '${got}'. Re-fetch the next question and retry.`);
-    this.name = "CrucibleAskMismatchError";
-    this.code = "ASK_QUESTION_MISMATCH";
-    this.expected = expected;
-    this.got = got;
-  }
-}
-
-/**
- * Fields whose absence blocks finalization entirely. A plan that still has
- * {{TBD: <any of these>}} cannot be executed by the orchestrator.
- */
-const CRITICAL_FIELDS = new Set([
-  "scope-in",
-  "scope-files",
-  "validation-gates",
-  "validation",
-  "forbidden-actions",
-  // Issue #118: build/test commands are required to make a slice executable.
-  // Without them the orchestrator hits the "no executable gates → rubber-stamp"
-  // path and the slice passes without doing anything.
-  "build-command",
-  "test-command",
-]);
-
-// ─── Lane inference ──────────────────────────────────────────────────
-
-// Keyword order: FULL wins over FEATURE wins over TWEAK so that a phrase
-// like "add new phase" (contains both "add" and "new phase") routes to
-// "full" instead of "feature".
 const FULL_PATTERNS = /\b(new phase|major (rewrite|overhaul|redesign)|redesign|overhaul|rearchitect|migrate (to|from))\b/i;
 const FEATURE_PATTERNS = /\b(add|implement|support|enable|introduce)\b/i;
 const TWEAK_PATTERNS = /\b(typo|rename|bump|config|hotfix|tweak|adjust|patch)\b/i;
@@ -170,13 +121,11 @@ export function inferLane(rawIdea) {
   return "feature";
 }
 
-// ─── Interview (Slice 01.3 — real engine) ────────────────────────────
-
 /**
  * Return the next unanswered question for a smelt, or null if done.
  * Thin wrapper so existing callers keep importing from crucible-server.
  * @param {object} smelt
- * @param {{projectDir?: string}} [context]
+ * @param {{projectDir?: string, questionBank?: Array<object>}} [context]
  */
 export function getNextQuestion(smelt, context = {}) {
   return interviewGetNextQuestion(smelt, context);
@@ -192,10 +141,7 @@ export function renderDraftStub(smelt) {
   return renderDraft(smelt);
 }
 
-// Re-export the real renderer for convenience.
 export { renderDraft, extractUnresolvedFields };
-
-// ─── Hub event helper ────────────────────────────────────────────────
 
 function emit(hub, type, data) {
   if (!hub || typeof hub.broadcast !== "function") return;
@@ -204,48 +150,52 @@ function emit(hub, type, data) {
   } catch { /* best-effort */ }
 }
 
-// ─── Phase-number discovery ──────────────────────────────────────────
-
-/**
- * Collect existing decimal-style phase names from:
- *   - active phase-claims.json (in-progress finalizations)
- *   - docs/plans/Phase-*.md file names (already-finalized phases)
- * Non-decimal names (e.g. Phase-CRUCIBLE-01) are ignored — they get
- * grandfathered in Slice 4.
- * @returns {string[]}
- */
-export function collectExistingPhaseNames(projectDir) {
-  const names = new Set();
-  for (const c of listClaims(projectDir)) {
-    if (isValidPhaseName(c.phaseName)) names.add(c.phaseName);
-  }
-  const plansDir = resolve(projectDir, "docs", "plans");
+function _getModeBank(smelt) {
   try {
-    for (const entry of readdirSync(plansDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.endsWith(".md")) continue;
-      const base = entry.name.replace(/\.md$/, "");
-      if (isValidPhaseName(base)) names.add(base);
-    }
-  } catch { /* plans dir may not exist yet */ }
-  return [...names];
+    const mode = getMode(smelt.lane);
+    return mode && typeof mode.questionBank === "function" ? mode.questionBank() : null;
+  } catch {
+    return null;
+  }
 }
 
-// ─── Handlers ────────────────────────────────────────────────────────
+function _questionContext(smelt, projectDir) {
+  const questionBank = _getModeBank(smelt);
+  return questionBank ? { projectDir, questionBank } : { projectDir };
+}
+
+function _applyQuestionDefaults(smelt, question, projectDir) {
+  if (!question) return null;
+  if (question.id !== "linked-bugs") return question;
+  const bugDefault = typeof smelt.bugId === "string" && smelt.bugId.trim() ? smelt.bugId.trim() : null;
+  return {
+    ...question,
+    recommendedDefault: bugDefault
+      || buildRecommendedDefault(question.id, { projectDir, defaultSource: null })
+      || question.recommendedDefault
+      || null,
+  };
+}
 
 /**
  * forge_crucible_submit
+ *
+ * Phase-59 S4: accepts optional `mode` (takes precedence over `lane`).
+ * Enables `mode: "bug-batch"` without changing the existing `lane` enum.
  */
-export function handleSubmit({ rawIdea, lane, source, parentSmeltId, projectDir, hub }) {
+export function handleSubmit({ rawIdea, lane, mode, source, parentSmeltId, bugId, projectDir, hub }) {
   if (typeof rawIdea !== "string" || !rawIdea.trim()) {
     throw new Error("rawIdea is required");
   }
   const recommendedLane = inferLane(rawIdea);
+  // mode takes precedence over lane; both fall back to heuristic.
+  const resolvedLane = mode || lane || recommendedLane;
   const smelt = createSmelt({
-    lane: lane || recommendedLane,
+    lane: resolvedLane,
     rawIdea,
     source: source || "human",
     parentSmeltId: parentSmeltId || null,
+    bugId: bugId || null,
     projectDir,
   });
   emit(hub, "crucible-smelt-started", {
@@ -257,18 +207,16 @@ export function handleSubmit({ rawIdea, lane, source, parentSmeltId, projectDir,
   return {
     id: smelt.id,
     recommendedLane,
-    firstQuestion: interviewGetNextQuestion(smelt, { projectDir }),
+    firstQuestion: _applyQuestionDefaults(
+      smelt,
+      interviewGetNextQuestion(smelt, _questionContext(smelt, projectDir)),
+      projectDir,
+    ),
   };
 }
 
 /**
  * forge_crucible_ask
- *
- * The caller sends the answer to whatever question was last returned by
- * getNextQuestion. We look up that "pending" question on the server so
- * the questionId recorded in the smelt matches the bank id exactly —
- * not a client-supplied string — and so the interview cannot record
- * answers for nonexistent questions.
  */
 export function handleAsk({ id, answer, questionId, projectDir, hub }) {
   const smelt = loadSmelt(id, projectDir);
@@ -278,12 +226,12 @@ export function handleAsk({ id, answer, questionId, projectDir, hub }) {
   }
 
   let current = smelt;
-  const pending = interviewGetNextQuestion(smelt, { projectDir });
+  const pending = _applyQuestionDefaults(
+    smelt,
+    interviewGetNextQuestion(smelt, _questionContext(smelt, projectDir)),
+    projectDir,
+  );
 
-  // Issue #138 — if the caller supplied a `questionId` (the schema field
-  // formerly mistaken for the smelt `id`), validate it matches the pending
-  // question. Refuse mismatched answers so a confused client can't silently
-  // record the wrong answer against the wrong question.
   if (typeof questionId === "string" && questionId.length > 0 && pending && questionId !== pending.id) {
     throw new CrucibleAskMismatchError({ expected: pending.id, got: questionId });
   }
@@ -303,7 +251,11 @@ export function handleAsk({ id, answer, questionId, projectDir, hub }) {
     });
   }
 
-  const nextQuestion = interviewGetNextQuestion(current, { projectDir });
+  const nextQuestion = _applyQuestionDefaults(
+    current,
+    interviewGetNextQuestion(current, _questionContext(current, projectDir)),
+    projectDir,
+  );
   const markdown = renderDraft(current);
   return {
     done: nextQuestion === null,
@@ -324,121 +276,6 @@ export function handlePreview({ id, projectDir }) {
     markdown,
     phaseName: smelt.phaseName,
     unresolvedFields: extractUnresolvedFields(markdown),
-  };
-}
-
-/**
- * forge_crucible_finalize
- *
- * @param {object} params
- * @param {string} params.id
- * @param {string} params.projectDir
- * @param {object} [params.hub]
- * @param {boolean} [params.overwrite=false] — Issue #137: when false (default),
- *   refuses to overwrite an existing `docs/plans/Phase-NN.md` and instead
- *   writes a side-by-side `Phase-NN.crucible-draft.md` plus throws a
- *   `CruciblePlanExistsError` so the caller can decide.
- */
-export function handleFinalize({ id, projectDir, hub, overwrite = false }) {
-  const smelt = loadSmelt(id, projectDir);
-  if (!smelt) throw new Error(`smelt not found: ${id}`);
-  if (smelt.status !== "in-progress") {
-    throw new Error(`smelt is ${smelt.status}, cannot finalize`);
-  }
-
-  // Render a preview draft (no phaseName yet) to detect critical TBD gaps
-  // before committing to a phase number or writing any file.
-  const previewBody = renderDraft(smelt, { cwd: projectDir });
-  const allUnresolved = extractUnresolvedFields(previewBody);
-  const criticalGaps = allUnresolved.filter((f) => CRITICAL_FIELDS.has(f));
-
-  if (criticalGaps.length > 0) {
-    throw new CrucibleFinalizeRefusedError({
-      id,
-      criticalGaps,
-      hint: "Run forge_crucible_ask with these question IDs to fill the gaps before finalizing.",
-    });
-  }
-
-  const existing = collectExistingPhaseNames(projectDir);
-  const phaseName = nextPhaseNumber(existing);
-
-  const planDir = resolve(projectDir, "docs", "plans");
-  mkdirSync(planDir, { recursive: true });
-  const planPath = join(planDir, `${phaseName}.md`);
-
-  const frontmatter =
-    `---\n` +
-    `crucibleId: ${id}\n` +
-    `lane: ${smelt.lane}\n` +
-    `source: ${smelt.source}\n` +
-    `---\n\n`;
-  const bodySmelt = { ...smelt, phaseName };
-  const body = renderDraft(bodySmelt, { cwd: projectDir });
-  const markdown = frontmatter + body;
-
-  // Issue #137 — don't overwrite a hand-authored plan. If the path already
-  // exists and is non-empty, write a side-by-side `.crucible-draft.md` and
-  // refuse with a CruciblePlanExistsError that surfaces both paths.
-  const planExists = existsSync(planPath);
-  let planFileExistedAndNonEmpty = false;
-  if (planExists) {
-    try {
-      const stat = statSync(planPath);
-      planFileExistedAndNonEmpty = stat.size > 0;
-    } catch { /* treat unreadable as non-existent */ }
-  }
-
-  if (planFileExistedAndNonEmpty && !overwrite) {
-    const draftPath = join(planDir, `${phaseName}.crucible-draft.md`);
-    writeFileSync(draftPath, markdown, "utf-8");
-    // Do NOT claim the phase number, do NOT mutate the smelt status — the
-    // caller has to re-finalize with overwrite:true (or pick a new phase).
-    throw new CruciblePlanExistsError({ phaseName, planPath, draftPath });
-  }
-
-  claimPhaseNumber(projectDir, phaseName, id);
-  writeFileSync(planPath, markdown, "utf-8");
-
-  updateSmelt(id, {
-    phaseName,
-    status: "finalized",
-    draftMarkdown: markdown,
-  }, projectDir);
-
-  emit(hub, "crucible-smelt-finalized", {
-    id,
-    phaseName,
-    planPath,
-  });
-
-  // v2.37 Slice 01.6 — emit the Hardener handoff event. The dashboard
-  // listens for this and shows a "Hardener ready" action; the MCP
-  // agent can subscribe and auto-invoke `step2-harden-plan.prompt.md`.
-  // We do not block finalize on hardening — the plan is already on
-  // disk and enforcement-compatible by virtue of the frontmatter
-  // written above.
-  emit(hub, "crucible-handoff-to-hardener", {
-    id,
-    phaseName,
-    planPath,
-    nextStep: "step2-harden-plan.prompt.md",
-  });
-
-  const inferred = inferRepoCommands(projectDir);
-  const unresolvedFields = allUnresolved.filter((f) => !CRITICAL_FIELDS.has(f));
-
-  return {
-    phaseName,
-    planPath,
-    unresolvedFields,
-    inferred,
-    hardenerInvoked: false, // Slice 6 wires the Plan Hardener handoff
-    hardenerHandoff: {
-      event: "crucible-handoff-to-hardener",
-      nextStep: "step2-harden-plan.prompt.md",
-      hint: "Run `/step2-harden-plan` against this plan, or attach it to the Plan Hardener agent.",
-    },
   };
 }
 

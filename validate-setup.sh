@@ -108,9 +108,16 @@ CONFIG_PATH="$PROJECT_PATH/.forge.json"
 if [[ -f "$CONFIG_PATH" ]]; then
     # Simple JSON parse — extract preset value
     PRESET="$(grep '"preset"' "$CONFIG_PATH" | sed 's/.*: *"\([^"]*\)".*/\1/')"
-    cyan "  INFO  Detected preset: $PRESET"
+    # Treat missing/empty preset the same as 'custom' — projects that haven't
+    # declared a stack preset shouldn't trigger stack-specific file checks
+    # (e.g. requiring database.instructions.md on a tooling-only repo).
+    if [[ -z "$PRESET" ]]; then
+        cyan "  INFO  No preset declared in .forge.json — treating as 'custom'"
+    else
+        cyan "  INFO  Detected preset: $PRESET"
+    fi
 
-    if [[ "$PRESET" != "custom" ]]; then
+    if [[ -n "$PRESET" && "$PRESET" != "custom" ]]; then
         check_file "AGENTS.md" || true
         check_file ".github/instructions/testing.instructions.md" || true
         check_file ".github/instructions/security.instructions.md" || true
@@ -130,7 +137,7 @@ if [[ -f "$CONFIG_PATH" ]]; then
     echo ""
     cyan "Agentic files (prompts, agents, skills):"
 
-    if [[ "$PRESET" != "custom" ]]; then
+    if [[ -n "$PRESET" && "$PRESET" != "custom" ]]; then
         PROMPTS_DIR="$PROJECT_PATH/.github/prompts"
         AGENTS_DIR="$PROJECT_PATH/.github/agents"
         SKILLS_DIR="$PROJECT_PATH/.github/skills"
@@ -357,6 +364,32 @@ if [[ -f "$PROJECT_PATH/pforge-mcp/server.mjs" ]] && [[ -f "$PROJECT_PATH/pforge
     PASS=$((PASS+1))
 else
     yellow "  WARN  MCP server: pforge-mcp/ not found (optional — only required in Plan Forge source repo)"
+    WARN=$((WARN+1))
+fi
+
+# Forge-Master Studio (Phase-29 chat bridge — imported by pforge-mcp via
+# relative paths and registered as second MCP server in .vscode/mcp.json)
+if [[ -f "$PROJECT_PATH/pforge-master/server.mjs" ]] && [[ -f "$PROJECT_PATH/pforge-master/package.json" ]]; then
+    FM_VER="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$PROJECT_PATH/pforge-master/package.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+    if [[ -d "$PROJECT_PATH/pforge-master/node_modules" ]]; then
+        green "  PASS  Forge-Master: pforge-master v${FM_VER} (deps installed)"
+    else
+        yellow "  WARN  Forge-Master: pforge-master v${FM_VER} — run 'npm install' in pforge-master/"
+        WARN=$((WARN+1))
+    fi
+    PASS=$((PASS+1))
+else
+    yellow "  WARN  Forge-Master: pforge-master/ not found (optional — chat bridge unavailable)"
+    WARN=$((WARN+1))
+fi
+
+# pforge-sdk (shared helper library — NO runtime deps, imported via
+# relative paths from pforge-mcp; missing files crash opt-in features)
+if [[ -f "$PROJECT_PATH/pforge-sdk/src/client.mjs" ]]; then
+    green "  PASS  pforge-sdk: src/client.mjs found"
+    PASS=$((PASS+1))
+else
+    yellow "  WARN  pforge-sdk: src/client.mjs not found (deep imports from pforge-mcp will fail)"
     WARN=$((WARN+1))
 fi
 
