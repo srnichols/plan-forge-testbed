@@ -9,7 +9,17 @@ builder.Services.AddControllers()
 builder.Services.AddOpenApi();
 
 builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(connectionString))
+    {
+        options.UseNpgsql(connectionString);
+    }
+    else
+    {
+        options.UseInMemoryDatabase("TimeTracker");
+    }
+});
 
 builder.Services.AddScoped<IClientService, ClientService>();
 
@@ -21,6 +31,7 @@ if (app.Environment.IsDevelopment())
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<TimeTrackerDbContext>();
     db.Database.EnsureCreated();
+    await DbSeeder.SeedAsync(db);
 }
 
 app.UseHttpsRedirection();
