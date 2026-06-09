@@ -21,6 +21,7 @@ public class TimeTrackerDbContext : DbContext
             e.Property(c => c.Name).IsRequired().HasMaxLength(200);
             e.Property(c => c.Email).HasMaxLength(200);
             e.Property(c => c.HourlyRate).HasPrecision(10, 2);
+            e.Property(c => c.TaxRate).HasPrecision(5, 4);
         });
 
         modelBuilder.Entity<Project>(e =>
