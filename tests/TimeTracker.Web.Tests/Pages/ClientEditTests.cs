@@ -56,5 +56,12 @@ public class ClientEditTests : TestContext
 
         // Button label changes to "Saving…" while the API call is in-flight
         Assert.Contains("Saving", cut.Markup);
+
+        // Structural harden (Slice 6 §3): both submit and cancel buttons must
+        // render with the `disabled` attribute while _submitting=true, so the
+        // user cannot double-submit or cancel mid-flight. Label-only assertions
+        // would silently pass if Disabled binding regressed.
+        var disabledButtons = cut.FindAll("fluent-button[disabled]");
+        Assert.Equal(2, disabledButtons.Count);
     }
 }
