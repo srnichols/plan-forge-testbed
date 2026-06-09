@@ -1,0 +1,151 @@
+@page "/invoices/{Id:int}"
+@rendermode InteractiveServer
+@using TimeTracker.Core.Models
+
+<PageTitle>@(_invoice is null ? "Invoice" : _invoice.InvoiceNumber)</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+    <FluentBreadcrumb>
+        <FluentBreadcrumbItem Href="/invoices">Invoices</FluentBreadcrumbItem>
+        <FluentBreadcrumbItem>@(_invoice?.InvoiceNumber ?? "Invoice")</FluentBreadcrumbItem>
+    </FluentBreadcrumb>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading invoice" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load invoice">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else if (_invoice is null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Warning" Title="Not found">
+            That invoice doesn't exist.
+        </FluentMessageBar>
+    }
+    else
+    {
+        <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Center">
+            <FluentLabel Typo="Typography.PageTitle">@_invoice.InvoiceNumber</FluentLabel>
+            <FluentBadge Appearance="@GetStatusAppearance(_invoice.Status)" aria-label="@_invoice.Status.ToString()">
+                @_invoice.Status
+            </FluentBadge>
+            <FluentSpacer />
+            @foreach (InvoiceAction action in AvailableActions())
+            {
+                <FluentButton Appearance="@action.Appearance"
+                              OnClick="@action.Invoke"
+                              Disabled="@_working"
+                              aria-label="@action.Label">
+                    @action.Label
+                </FluentButton>
+            }
+        </FluentStack>
+
+        @if (_actionError is not null)
+        {
+            <FluentMessageBar Intent="MessageIntent.Error" Title="Action failed">
+                @_actionError
+            </FluentMessageBar>
+        }
+
+        @if (_showVoidForm)
+        {
+            <FluentCard>
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+                    <FluentLabel Typo="Typography.H6">Void invoice</FluentLabel>
+                    <FluentTextArea @bind-Value="_voidReason"
+                                    Label="Reason"
+                                    Required="true"
+                                    Placeholder="Why is this invoice being voided?"
+                                    Style="width: 100%; max-width: 480px;" />
+                    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                        <FluentButton Appearance="Appearance.Accent"
+                                      OnClick="@ConfirmVoidAsync"
+                                      Disabled="@(_working || string.IsNullOrWhiteSpace(_voidReason))">
+                            Confirm Void
+                        </FluentButton>
+                        <FluentButton Appearance="Appearance.Neutral"
+                                      OnClick="@CancelVoid"
+                                      Disabled="@_working">
+                            Cancel
+                        </FluentButton>
+                    </FluentStack>
+                </FluentStack>
+            </FluentCard>
+        }
+
+        <FluentGrid>
+            <FluentGridItem xs="12" sm="6">
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Body"><strong>Period</strong></FluentLabel>
+                    <FluentLabel>@_invoice.PeriodStart.ToString("yyyy-MM-dd") — @_invoice.PeriodEnd.ToString("yyyy-MM-dd")</FluentLabel>
+                </FluentStack>
+            </FluentGridItem>
+            <FluentGridItem xs="12" sm="6">
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Body"><strong>Created</strong></FluentLabel>
+                    <FluentLabel>@_invoice.CreatedAt.ToString("yyyy-MM-dd")</FluentLabel>
+                </FluentStack>
+            </FluentGridItem>
+        </FluentGrid>
+
+        <FluentLabel Typo="Typography.H6">Line items</FluentLabel>
+        @if (_invoice.InvoiceLines.Count == 0)
+        {
+            <FluentLabel>No line items on this invoice.</FluentLabel>
+        }
+        else
+        {
+            <FluentDataGrid Items="@_invoice.InvoiceLines.AsQueryable()"
+                            GridTemplateColumns="2fr 3fr 1fr 1fr 1fr 1fr"
+                            aria-label="Invoice line items">
+                <TemplateColumn Title="Project">@ProjectName(context.ProjectId)</TemplateColumn>
+                <PropertyColumn Property="@(l => l.Description)" Title="Description" />
+                <PropertyColumn Property="@(l => l.Hours)" Title="Hours" Format="0.##" />
+                <PropertyColumn Property="@(l => l.HourlyRate)" Title="Rate" Format="C2" />
+                <PropertyColumn Property="@(l => l.RateType)" Title="Rate Type" />
+                <PropertyColumn Property="@(l => l.LineTotal)" Title="Line Total" Format="C2" />
+            </FluentDataGrid>
+        }
+
+        <FluentStack Orientation="Orientation.Horizontal" HorizontalAlignment="HorizontalAlignment.End">
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="4" Style="min-width: 260px;">
+                <FluentStack Orientation="Orientation.Horizontal">
+                    <FluentLabel>Subtotal</FluentLabel>
+                    <FluentSpacer />
+                    <FluentLabel>@_invoice.Subtotal.ToString("C2")</FluentLabel>
+                </FluentStack>
+                @if (_invoice.DiscountAmount > 0)
+                {
+                    <FluentStack Orientation="Orientation.Horizontal">
+                        <FluentLabel>Discount (@_invoice.DiscountPercent.ToString("0.##")%)</FluentLabel>
+                        <FluentSpacer />
+                        <FluentLabel>-@_invoice.DiscountAmount.ToString("C2")</FluentLabel>
+                    </FluentStack>
+                }
+                <FluentStack Orientation="Orientation.Horizontal">
+                    <FluentLabel>Tax (@_invoice.TaxRate.ToString("0.##")%)</FluentLabel>
+                    <FluentSpacer />
+                    <FluentLabel>@_invoice.TaxAmount.ToString("C2")</FluentLabel>
+                </FluentStack>
+                <FluentDivider />
+                <FluentStack Orientation="Orientation.Horizontal">
+                    <FluentLabel Typo="Typography.Body"><strong>Total</strong></FluentLabel>
+                    <FluentSpacer />
+                    <FluentLabel Typo="Typography.Body"><strong>@_invoice.Total.ToString("C2")</strong></FluentLabel>
+                </FluentStack>
+            </FluentStack>
+        </FluentStack>
+
+        @if (_invoice.Status == InvoiceStatus.Void && !string.IsNullOrWhiteSpace(_invoice.VoidReason))
+        {
+            <FluentMessageBar Intent="MessageIntent.Info" Title="Void reason">
+                @_invoice.VoidReason
+            </FluentMessageBar>
+        }
+    }
+</FluentStack>
