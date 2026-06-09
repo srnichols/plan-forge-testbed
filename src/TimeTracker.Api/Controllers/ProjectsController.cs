@@ -1,111 +1,107 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using TimeTracker.Api.Data;
+using TimeTracker.Api.Services;
 using TimeTracker.Core.Models;
 
 namespace TimeTracker.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class ProjectsController(TimeTrackerDbContext dbContext) : ControllerBase
+public class ProjectsController(IProjectService projectService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IEnumerable<object>>> GetAll([FromQuery] int? clientId, CancellationToken cancellationToken)
     {
-        var query = dbContext.Projects.Where(p => p.IsActive);
-
-        if (clientId.HasValue)
-        {
-            query = query.Where(p => p.ClientId == clientId.Value);
-        }
-
-        var projects = await query
-            .OrderBy(p => p.Name)
-            .Select(p => new
-            {
-                p.Id,
-                p.Name,
-                p.Description,
-                p.ClientId,
-                p.IsActive,
-                p.CreatedAt
-            })
-            .ToListAsync(cancellationToken);
-
-        return Ok(projects);
+        var projects = await projectService.GetAllAsync(clientId, cancellationToken);
+        return Ok(projects.Select(ToResponse));
     }
 
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id, CancellationToken cancellationToken)
     {
-        var project = await dbContext.Projects
-            .Where(p => p.Id == id && p.IsActive)
-            .Select(p => new
-            {
-                p.Id,
-                p.Name,
-                p.Description,
-                p.ClientId,
-                p.IsActive,
-                p.CreatedAt
-            })
-            .FirstOrDefaultAsync(cancellationToken);
-
+        var project = await projectService.GetByIdAsync(id, cancellationToken);
         if (project is null) return NotFound();
-        return Ok(project);
+        return Ok(ToResponse(project));
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] ProjectCreateRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Name))
-            return BadRequest(new ProblemDetails { Title = "Validation Error", Detail = "Name is required" });
-
-        var project = new Project
+        try
         {
-            Name = request.Name,
-            ClientId = request.ClientId,
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow
-        };
+            var project = new Project
+            {
+                Name = request.Name,
+                Description = request.Description,
+                ClientId = request.ClientId
+            };
 
-        dbContext.Projects.Add(project);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        return CreatedAtAction(nameof(GetById), new { id = project.Id }, new
+            var created = await projectService.CreateAsync(project, cancellationToken);
+            return CreatedAtAction(nameof(GetById), new { id = created.Id }, ToResponse(created));
+        }
+        catch (ArgumentException ex)
         {
-            project.Id,
-            project.Name,
-            project.Description,
-            project.ClientId,
-            project.IsActive,
-            project.CreatedAt
-        });
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Validation Error",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
     }
 
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] ProjectCreateRequest request, CancellationToken cancellationToken)
     {
-        var project = await dbContext.Projects.FirstOrDefaultAsync(p => p.Id == id && p.IsActive, cancellationToken);
-        if (project is null) return NotFound();
+        try
+        {
+            var project = new Project
+            {
+                Name = request.Name,
+                Description = request.Description,
+                ClientId = request.ClientId
+            };
 
-        project.Name = request.Name;
-        project.ClientId = request.ClientId;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        return Ok(new { project.Id, project.Name, project.Description, project.ClientId, project.IsActive, project.CreatedAt });
+            var updated = await projectService.UpdateAsync(id, project, cancellationToken);
+            return Ok(ToResponse(updated));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Validation Error",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
     }
 
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
-        var project = await dbContext.Projects.FirstOrDefaultAsync(p => p.Id == id && p.IsActive, cancellationToken);
-        if (project is null) return NotFound();
-
-        project.IsActive = false;
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return NoContent();
+        try
+        {
+            await projectService.DeactivateAsync(id, cancellationToken);
+            return NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
+
+    private static object ToResponse(Project project) => new
+    {
+        project.Id,
+        project.Name,
+        project.Description,
+        project.ClientId,
+        project.IsActive,
+        project.CreatedAt
+    };
 }
 
 public record ProjectCreateRequest(string Name, string? Description, int ClientId);
