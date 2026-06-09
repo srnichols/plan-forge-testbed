@@ -43,6 +43,7 @@ Add CRUD operations for the `Project` entity — API endpoints linked to clients
 - Do NOT modify `TimeEntriesController.cs` or `BillingController.cs`
 - Do NOT modify `Client.cs` model
 - Do NOT change `docker-compose.yml`
+- Do NOT inject `TimeTrackerDbContext` into `ProjectsController` — the controller is HTTP-only and must depend on the `IProjectService` abstraction (Controller → Service → data access)
 
 ---
 
@@ -90,7 +91,7 @@ dotnet test --verbosity quiet
 **Test command**: `dotnet test --verbosity quiet`
 
 **Tasks**:
-1. Create `ProjectsController.cs` with `[ApiController]` and `[Route("api/[controller]")]`
+1. Create `ProjectsController.cs` with `[ApiController]` and `[Route("api/[controller]")]`, injecting `IProjectService` via constructor DI — the controller must NOT use `TimeTrackerDbContext` directly (HTTP-only layer; all data access goes through the service)
 2. Implement `GET /api/projects` — return all active projects, optional `?clientId=N` filter
 3. Implement `GET /api/projects/{id}` — return single project or 404
 4. Implement `POST /api/projects` — create with validation (name required, clientId required)
@@ -102,6 +103,8 @@ dotnet test --verbosity quiet
 dotnet build
 dotnet test --verbosity quiet
 ```
+
+> **Layer check**: `ProjectsController` must declare a constructor parameter of type `IProjectService` and reference no `TimeTrackerDbContext` — confirm before closing the slice.
 
 ---
 
