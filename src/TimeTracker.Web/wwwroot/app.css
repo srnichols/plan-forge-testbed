@@ -5,3 +5,33 @@
     --app-spacing-md: 16px;
     --app-spacing-lg: 24px;
 }
+
+/*
+ * Full-height layout chain.
+ *
+ * Without an explicit height on html/body the Fluent layout collapses to its
+ * content height. That leaves FluentBodyContent (overflow: auto) only as tall
+ * as its content, which clips overlay surfaces such as FluentSelect dropdowns
+ * after the first option. Establishing the height chain lets the body content
+ * fill the viewport and scroll internally, so popups render in full.
+ */
+html, body {
+    height: 100%;
+    margin: 0;
+}
+
+/* FluentLayout root — fill the viewport. */
+.layout {
+    min-height: 100vh;
+}
+
+/* Header + body row — grow to fill the remaining height below the header. */
+.layout > .main {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* FluentBodyContent — fill its row so dropdowns have room to open. */
+.layout > .main > .body-content {
+    height: 100%;
+}
