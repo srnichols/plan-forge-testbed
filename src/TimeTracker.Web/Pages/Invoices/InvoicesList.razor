@@ -4,7 +4,15 @@
 <PageTitle>Invoices</PageTitle>
 
 <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
-    <FluentLabel Typo="Typography.PageTitle">Invoices</FluentLabel>
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Center">
+        <FluentLabel Typo="Typography.PageTitle">Invoices</FluentLabel>
+        <FluentSpacer />
+        <FluentButton Appearance="Appearance.Accent"
+                      OnClick="@NavigateToCreate"
+                      aria-label="Create new invoice">
+            New Invoice
+        </FluentButton>
+    </FluentStack>
 
     <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Bottom">
         <FluentSelect TOption="string"
@@ -37,7 +45,7 @@
     }
     else
     {
-        <FluentDataGrid Items="@_invoices" GridTemplateColumns="1fr 1fr 1fr 1fr 1fr 1fr" aria-label="Invoices">
+        <FluentDataGrid Items="@_invoices" GridTemplateColumns="1fr 1fr 1fr 1fr 1fr 1fr auto" aria-label="Invoices">
             <PropertyColumn Property="@(i => i.InvoiceNumber)" Title="Invoice #" Sortable="true" />
             <PropertyColumn Property="@(i => i.PeriodStart)" Title="Period Start" Format="yyyy-MM-dd" Sortable="true" />
             <PropertyColumn Property="@(i => i.PeriodEnd)" Title="Period End" Format="yyyy-MM-dd" Sortable="true" />
@@ -49,6 +57,13 @@
                 </FluentBadge>
             </TemplateColumn>
             <PropertyColumn Property="@(i => i.CreatedAt)" Title="Created" Format="yyyy-MM-dd" Sortable="true" />
+            <TemplateColumn Title="Actions">
+                <FluentButton Appearance="Appearance.Lightweight"
+                              OnClick="@(() => NavigateToView(context.Id))"
+                              aria-label="@($"View invoice {context.InvoiceNumber}")">
+                    View
+                </FluentButton>
+            </TemplateColumn>
         </FluentDataGrid>
     }
 </FluentStack>

@@ -10,6 +10,7 @@ public partial class InvoicesList : ComponentBase, IDisposable
 {
     [Inject] private IInvoicesApi InvoicesApi { get; set; } = default!;
     [Inject] private IClientsApi ClientsApi { get; set; } = default!;
+    [Inject] private NavigationManager Nav { get; set; } = default!;
     [Inject] private ILogger<InvoicesList> Logger { get; set; } = default!;
 
     private readonly CancellationTokenSource _cts = new();
@@ -75,6 +76,10 @@ public partial class InvoicesList : ComponentBase, IDisposable
             _loading = false;
         }
     }
+
+    private void NavigateToCreate() => Nav.NavigateTo("/invoices/new");
+
+    private void NavigateToView(int id) => Nav.NavigateTo($"/invoices/{id}");
 
     private static Appearance GetStatusAppearance(InvoiceStatus status) => status switch
     {
