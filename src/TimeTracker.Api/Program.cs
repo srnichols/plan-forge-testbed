@@ -14,6 +14,7 @@ builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
 builder.Services.AddScoped<IClientService, ClientService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+builder.Services.AddScoped<ITimeEntryReportService, TimeEntryReportService>();
 
 var app = builder.Build();
 
