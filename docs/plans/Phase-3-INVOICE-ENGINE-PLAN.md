@@ -35,6 +35,7 @@ The TimeTracker app can track time and produce simple billing summaries, but has
 - `src/TimeTracker.Api/Services/InvoiceService.cs` — generation logic with rate tiers, discounts, tax
 - `src/TimeTracker.Api/Controllers/InvoicesController.cs` — HTTP endpoints
 - `src/TimeTracker.Api/Data/TimeTrackerDbContext.cs` — add Invoice + InvoiceLine DbSets
+- `src/TimeTracker.Api/Data/DbSeeder.cs` — dev-only demo seed data (added in Slice 5; depends on all entity types existing)
 - `tests/TimeTracker.Tests/InvoiceServiceTests.cs` — comprehensive unit tests
 
 ### Out of Scope
@@ -152,6 +153,37 @@ dotnet build src/TimeTracker.Api
 dotnet test tests/TimeTracker.Tests
 ```
 
+### Slice 5: Demo seed data (dev-only) [depends: Slice 1, Slice 2] [scope: src/TimeTracker.Api/Data/**, src/TimeTracker.Api/Program.cs]
+
+> **Why this phase**: the seeder writes Client, Project, TimeEntry, Invoice, and InvoiceLine. Phase 3 is the earliest phase where every one of those entity types exists, so the seeder can only compile from here. It is wired to run **only in the Development environment** — production builds start with an empty database.
+
+**Build command**: `dotnet build src/TimeTracker.Api`
+**Test command**: `dotnet test tests/TimeTracker.Tests`
+
+**Tasks**:
+1. Create `static DbSeeder.SeedAsync(TimeTrackerDbContext db, CancellationToken ct = default)`. Idempotent: if `db.Clients.AnyAsync()` returns true, return immediately (safe to call on every startup).
+2. Seed two demo clients via private helpers, saving once at the end with `db.SaveChangesAsync(ct)`:
+   - **Contoso Ltd** (`demo@contoso.com`, $150/hr): projects *Website Redesign* + *Mobile App*; five 2026-06-01→05 time entries (four billable totaling 29.5h, one 4h non-billable); invoice `INV-2026-0001` with one line (Website Redesign 29.5h).
+   - **Adventure Works** (`demo@adventure-works.test`, $175/hr): projects *Azure Integration* + *Teams Bot* + *Copilot Plugin*; six 2026-06-08→12 time entries (billable: Azure 14h, Teams 12h, Copilot 8h; one 3h non-billable); invoice `INV-2026-0002` with three lines.
+3. Build invoices with shared helpers: `BuildLine` (RateType.Standard, `LineTotal = hours * hourlyRate`) and `BuildInvoice` (status Issued, no discount, `TaxRate = 8.5%`, `TaxAmount = Round(subtotal * 0.085, 2)`, `Total = subtotal + taxAmount`, `IssuedAt = UtcNow`). Attach entities by navigation property so EF assigns FK ids on save.
+4. Wire up in `Program.cs`, **Development only**, after the app is built:
+   ```csharp
+   if (app.Environment.IsDevelopment())
+   {
+       using var scope = app.Services.CreateScope();
+       var db = scope.ServiceProvider.GetRequiredService<TimeTrackerDbContext>();
+       db.Database.EnsureCreated();
+       await DbSeeder.SeedAsync(db);
+   }
+   ```
+
+**Validation Gate**:
+```
+dotnet build src/TimeTracker.Api
+dotnet test tests/TimeTracker.Tests
+```
+Manual (dev run): `GET /api/clients` returns exactly two clients (Contoso Ltd, Adventure Works); `GET /api/clients/2` → Adventure Works with 3 projects; `GET /api/invoices/2` → `INV-2026-0002` with 3 line items. Re-running startup does not duplicate data (idempotency).
+
 ---
 
 ## Definition of Done
@@ -163,6 +195,7 @@ dotnet test tests/TimeTracker.Tests
 - [ ] Status lifecycle: Draft → Issued → Paid → Void
 - [ ] InvoicesController with 6 endpoints
 - [ ] 14+ unit tests covering all tiers, discounts, tax, edge cases, transitions
+- [ ] Dev-only `DbSeeder` with two demo clients (idempotent, Development environment only)
 - [ ] All existing tests still pass (zero regressions)
 - [ ] `dotnet build` + `dotnet test` pass at every slice boundary
 
