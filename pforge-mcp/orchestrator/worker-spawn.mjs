@@ -1,7 +1,7 @@
 /** Plan Forge — Phase-53 (ORCHESTRATOR-SPLIT) S2: worker-spawn sub-module */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { spawn, execSync } from "node:child_process";
+import { spawn, execSync, execFileSync } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -802,7 +802,7 @@ export function detectPackageManager() {
   const candidates = matrix.packageManagers?.[os] || [];
   for (const pm of candidates) {
     try {
-      execSync(`${pm} --version`, { encoding: "utf-8", timeout: 3_000, stdio: "pipe" });
+      execFileSync(pm, ["--version"], { encoding: "utf-8", timeout: 3_000, stdio: "pipe" });
       return { os, packageManager: pm };
     } catch { /* try next */ }
   }
@@ -954,7 +954,7 @@ function attemptProbe(name, spec, probe, result) {
 
   let versionOut = "";
   try {
-    versionOut = execSync(`${probe.command} ${(probe.versionArgs || []).join(" ")}`, {
+    versionOut = execFileSync(probe.command, [...(probe.versionArgs || [])], {
       encoding: "utf-8", timeout: 10_000, stdio: "pipe",
     });
   } catch (err) {
@@ -984,7 +984,7 @@ function attemptProbe(name, spec, probe, result) {
     const helpArgs = probe.helpArgs || [];
     if (helpArgs.length > 0) {
       try {
-        helpOut = execSync(`${probe.command} ${helpArgs.join(" ")}`, {
+        helpOut = execFileSync(probe.command, [...helpArgs], {
           encoding: "utf-8", timeout: 10_000, stdio: "pipe",
         });
       } catch (err) {
@@ -1059,6 +1059,71 @@ export function detectWorkers(_projectDir) {
   }
 
   return results;
+}
+
+/**
+ * Preflight gate: confirm at least one usable execution backend exists before a
+ * Full-Auto run dispatches workers. When the only candidate worker(s) failed
+ * authentication, return a clean, actionable failure descriptor instead of
+ * letting the orchestrator dispatch doomed workers — which (before the
+ * UV_HANDLE_CLOSING fix) aborted the process on a libuv assertion, and even
+ * after it produces N identical opaque slice failures.
+ *
+ * Returns `null` when a backend is available (the run may proceed). Otherwise
+ * returns a structured failure object suitable for returning directly from
+ * runPlan / surfacing as an estimate warning.
+ *
+ * Scope: only governs CLI worker auth. Direct-API models are validated
+ * elsewhere (spawnWorker throws a clean "API key not set" error), so they are
+ * skipped here.
+ *
+ * @param {object} opts
+ * @param {string|null} opts.model     resolved effective model (may be null)
+ * @param {string|null} [opts.worker]  explicit --worker override, if any
+ * @param {string}   [opts.cwd]        project dir (for API-key lookup)
+ * @param {Function} [opts.detect]     injectable detectWorkers (tests)
+ * @param {Function} [opts.resolveApiProvider] injectable detectApiProvider (tests)
+ * @returns {{ status:"failed", code:string, error:string, failureCategory?:string }|null}
+ */
+export function assertWorkerBackendReady({ model = null, worker = null, cwd = process.cwd(), detect = detectWorkers, resolveApiProvider = detectApiProvider } = {}) {
+  // Direct-API models are validated by spawnWorker's own key check.
+  if (isDirectApiOnlyModel(model)) return null;
+
+  const workers = detect(cwd);
+  const cliWorkers = workers.filter((w) => w.type === "cli");
+
+  // An explicit --worker override narrows the candidate set to that worker.
+  const candidates = worker ? cliWorkers.filter((w) => w.name === worker) : cliWorkers;
+
+  // Any usable CLI worker → proceed unchanged.
+  if (candidates.some((w) => w.available)) return null;
+
+  // No usable CLI worker, but the model routes to a configured direct API
+  // (resolveApiProvider returns a provider only when the key is present) →
+  // proceed. Skipped when the caller demanded a specific CLI worker.
+  if (!worker && resolveApiProvider(model)) return null;
+
+  // Nothing usable. Prefer the actionable auth message when auth is the blocker.
+  if (candidates.some((w) => w.failureCategory === "auth")) {
+    return {
+      status: "failed",
+      code: "WORKER_AUTH_REQUIRED",
+      failureCategory: "auth",
+      error:
+        "worker failed: no GitHub auth — run `gh auth login` " +
+        "(or set COPILOT_GITHUB_TOKEN / GH_TOKEN), then retry.",
+    };
+  }
+
+  const reason =
+    candidates.find((w) => w.reason)?.reason ||
+    cliWorkers.find((w) => w.reason)?.reason ||
+    "no CLI worker is installed (gh copilot, claude, or codex).";
+  return {
+    status: "failed",
+    code: "NO_WORKER_AVAILABLE",
+    error: `worker failed: ${reason}`,
+  };
 }
 
 // ─── Execution Runtime Detection ──────────────────────────────────────
@@ -1746,6 +1811,56 @@ function registerSpawnedChild(child) {
   child.on("close", () => global.__pforgeChildren?.delete(child));
 }
 
+let _childShutdownInvoked = false;
+
+/**
+ * Terminate every tracked CLI worker child exactly once.
+ *
+ * MUST NOT be wired to the Node `"exit"` event. The `"exit"` handler runs after
+ * the libuv event loop has drained, when child-process handles are already in
+ * the closing state — calling `child.kill()` (a libuv handle operation) at that
+ * point trips `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` in
+ * `src/win/async.c` and aborts the process. Wire it to actual signals only
+ * (SIGINT/SIGTERM/SIGHUP), which fire while the loop is still alive.
+ *
+ * @returns {number} count of children signalled
+ */
+export function killTrackedChildren() {
+  if (_childShutdownInvoked) return 0;
+  _childShutdownInvoked = true;
+  const children = global.__pforgeChildren;
+  if (!children) return 0;
+  let count = 0;
+  for (const child of children) {
+    try {
+      child.kill("SIGTERM");
+      count++;
+    } catch { /* child already exited — handle gone */ }
+  }
+  return count;
+}
+
+/** Test-only: reset the one-shot shutdown guard so killTrackedChildren can run again. */
+export function __resetChildShutdownGuard() {
+  _childShutdownInvoked = false;
+}
+
+/**
+ * Install signal handlers that terminate tracked worker children on interactive
+ * interrupt / termination signals. Deliberately excludes the `"exit"` event —
+ * see {@link killTrackedChildren} for why killing handles during exit teardown
+ * is unsafe on Windows.
+ *
+ * @param {NodeJS.Process} [proc=process] injectable for tests
+ */
+export function installChildCleanupHandlers(proc = process) {
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    proc.once(sig, () => {
+      killTrackedChildren();
+    });
+  }
+}
+
 function attachWorkerStreamHandlers(child, state) {
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -1847,6 +1962,7 @@ function spawnCliWorkerExecution({ prompt, model, cwd, timeout, worker, runPlanA
     });
 
     child.on("error", (err) => {
+      clearInterval(heartbeat);
       clearTimeout(timer);
       workerReject(new Error(`Failed to spawn ${cmd}: ${err.message} (code: ${err.code || "unknown"})`));
     });

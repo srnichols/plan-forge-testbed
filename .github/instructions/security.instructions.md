@@ -1,191 +1,140 @@
 ---
-description: .NET security patterns — authentication, authorization, input validation, secrets
-applyTo: '**/*.cs,**/*.razor'
+description: Security rules for Plan Forge — input validation, command-injection avoidance, secret handling, and the "mutate user repo" contract. Auto-loads broadly because every file is a potential boundary.
+applyTo: '**'
+priority: HIGH
 ---
 
-# .NET Security Patterns
+# Security Instructions
 
-## Authentication & Authorization
+> **Plan Forge runs with the user's full shell privileges** and orchestrates writes into the user's repository. Every `forge_*` tool handler, every CLI command, every spawn, and every file write is a security boundary. This file rules the boundaries.
 
-### JWT Validation
-```csharp
-// ✅ Always validate JWT claims
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.Authority = builder.Configuration["Auth:Authority"];
-        options.Audience = builder.Configuration["Auth:Audience"];
-        options.RequireHttpsMetadata = true;
-    });
+---
+
+## The 6 Rules
+
+### 1. Use `spawn(cmd, [arg, arg])` — never `exec(stringWithInput)`
+
+`exec` parses its argument as a shell command. Any user-supplied substring becomes a shell injection vector. `spawn` with an args array passes each argument literally to the kernel, no shell involved.
+
+```js
+// ✅ correct
+import { spawn } from 'node:child_process';
+const child = spawn('gh', ['issue', 'create', '--title', userTitle, '--body', userBody]);
+
+// ❌ injection vector
+import { exec } from 'node:child_process';
+exec(`gh issue create --title "${userTitle}" --body "${userBody}"`);
 ```
 
-### Authorization Attributes
-```csharp
-[Authorize(Roles = "Admin")]
-[HttpGet("admin/users")]
-public async Task<IActionResult> GetUsers(CancellationToken ct) { ... }
-```
+`userTitle = '"; rm -rf ~ #'` exploits the `exec` form. The `spawn` form passes it as a literal title containing punctuation.
 
-## Input Validation
+**Same rule applies to `spawnSync`, `execFile`, and PowerShell `Start-Process` / `Invoke-Expression`.** Use args arrays. If you need shell features (pipes, redirects), pipe the data in code, not via the shell.
 
-### Always validate at system boundaries
-```csharp
-// ❌ NEVER: Trust input
-public async Task<User> CreateUser(string email) { ... }
+### 2. No `eval`, no `new Function(string)`, no dynamic `require(userInput)`
 
-// ✅ ALWAYS: Validate
-public async Task<User> CreateUser(CreateUserRequest request, CancellationToken ct)
-{
-    ArgumentException.ThrowIfNullOrWhiteSpace(request.Email);
-    if (!EmailRegex().IsMatch(request.Email))
-        throw new ValidationException("Invalid email format");
-    ...
+These accept code from a string and execute it. There is no input value sanitisation that makes this safe.
+
+Common smells caught at review:
+- `eval(json)` — use `JSON.parse(json)`
+- `new Function('return ' + expr)` — use a parser library or a small DSL
+- `require(path.join(userDir, file))` — use `import()` with a validated allowlist of paths
+
+### 3. Validate input at the `forge_*` handler boundary
+
+Every MCP tool handler is a system boundary. Validate before doing any work:
+
+```js
+function handle_forge_thing({ projectPath, mode }) {
+  if (typeof projectPath !== 'string' || !projectPath) {
+    return { ok: false, error: 'projectPath required' };
+  }
+  if (mode !== 'fast' && mode !== 'thorough') {
+    return { ok: false, error: 'mode must be "fast" or "thorough"' };
+  }
+  const resolved = path.resolve(projectPath);
+  if (!resolved.startsWith(allowedRoot)) {
+    return { ok: false, error: 'projectPath escapes allowed root' };
+  }
+  // ...real work below this line
 }
 ```
 
-## Secrets Management
+The `inputSchema` declared in the tool registration is a hint to the agent, **not** a runtime enforcement. The handler is the runtime enforcement.
 
-```csharp
-// ❌ NEVER: Hardcoded secrets
-var connectionString = "Server=db;Password=secret123";
+### 4. Path inputs must resist directory traversal
 
-// ✅ ALWAYS: Configuration / Secret Manager
-var connectionString = builder.Configuration.GetConnectionString("Default");
+Any path that came from outside the process (tool arg, CLI arg, config file, HTTP body) must be:
 
-// ✅ BEST: Managed Identity (Azure)
-var credential = new DefaultAzureCredential();
+1. Resolved via `path.resolve()` (canonicalises `..` and symlinks)
+2. Checked against an allowed root: `resolved.startsWith(allowedRoot)`
+3. Rejected if it escapes — return an error, do not silently fall back
+
+```js
+const allowedRoot = path.resolve(workspaceRoot);
+const target = path.resolve(workspaceRoot, userPath);
+if (!target.startsWith(allowedRoot + path.sep) && target !== allowedRoot) {
+  throw new Error(`path escapes workspace: ${userPath}`);
+}
 ```
 
-## SQL Injection Prevention
+Beware: on Windows `C:\Foo` and `c:\foo` are the same directory but compare unequal. Lowercase both sides on Windows or use `path.relative()` and check the result doesn't start with `..`.
 
-```csharp
-// ❌ NEVER: String interpolation
-var sql = $"SELECT * FROM users WHERE id = '{id}'";
+### 5. Secrets live in `.forge/secrets.json` or env vars — never in code or git
 
-// ✅ ALWAYS: Parameterized
-const string sql = "SELECT * FROM users WHERE id = @Id";
-```
+| Where it can live | Notes |
+|-------------------|-------|
+| `.forge/secrets.json` | Gitignored by `setup.ps1/sh`. Read at startup. Plan Forge's own pattern. |
+| `process.env.*` | CI secrets, GitHub Actions, hosted runs. |
+| OS keychain via `keytar` / `wincred` | Acceptable for desktop tools; overkill for CLI. |
+| **Source code** | **Never.** Even commented-out. Even in tests. Even "just for now." |
+| **Tracked config (`.forge.json`, `package.json`)** | **Never.** These ship to consumers. |
+| **Plan files (`Phase-*-PLAN.md`)** | **Never.** Plans are committed. |
 
-## CORS
+Run `forge_secret_scan` before every release. The pre-deploy LiveGuard hook runs it automatically — do not bypass it with `--no-verify`.
 
-```csharp
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("Production", policy =>
-    {
-        policy.WithOrigins("https://yourdomain.com")
-              .AllowAnyHeader()
-              .AllowAnyMethod();
-    });
-});
-```
+### 6. Mutating the user's repo requires dry-run + confirmation
 
-## Rate Limiting
+A `forge_*` tool that writes to the user's workspace (not Plan Forge's own `.forge/` directory) MUST:
 
-```csharp
-// Built-in rate limiter (.NET 7+)
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+1. Default to `dryRun: true` in its `inputSchema`
+2. Return the list of intended changes (paths + diff stats) on dry-run
+3. Require the caller to explicitly pass `dryRun: false` to actually mutate
+4. Log every mutation to the audit trail at `.forge/runs/<id>/audit.jsonl`
 
-    // Fixed window per tenant
-    options.AddPolicy("per-tenant", context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.GetTenantId(),
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 100,
-                Window = TimeSpan.FromMinutes(1),
-            }));
+This is a Plan Forge **Project Principle forbidden pattern** (PROJECT-PRINCIPLES.md): silent mutation of the user's repo. Never collapse the dry-run/confirm step "just for this one tool."
 
-    // Global rate limit
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(
-        context => RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 1000,
-                Window = TimeSpan.FromMinutes(1),
-            }));
-});
-
-app.UseRateLimiter();
-
-// Apply to specific endpoints
-app.MapGet("/api/search", Search).RequireRateLimiting("per-tenant");
-```
-
-## Security Headers
-
-```csharp
-// Middleware to add security headers
-app.Use(async (context, next) =>
-{
-    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
-    context.Response.Headers.Append("X-Frame-Options", "DENY");
-    context.Response.Headers.Append("X-XSS-Protection", "0"); // Modern browsers: use CSP instead
-    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-    context.Response.Headers.Append("Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
-    context.Response.Headers.Append("Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains"); // HSTS
-    await next();
-});
-```
-
-## Common Vulnerabilities to Prevent
-
-| Vulnerability | Prevention |
-|--------------|------------|
-| SQL Injection | Parameterized queries, EF Core, Dapper `@param` |
-| XSS | Razor auto-encoding, CSP headers |
-| CSRF | `[ValidateAntiForgeryToken]`, SameSite cookies |
-| Mass Assignment | Use DTOs, never bind directly to entities |
-| SSRF | Validate/allowlist outbound URLs |
-| Insecure Deserialization | Use `System.Text.Json` with typed models |
-| Path Traversal | `Path.GetFullPath()` validation, never trust user paths |
-
-## OWASP Top 10 (2021) Alignment
-
-| OWASP Category | How This File Addresses It |
-|----------------|----------------------------|
-| A01: Broken Access Control | `[Authorize]` attributes, role-based policies |
-| A02: Cryptographic Failures | `DefaultAzureCredential`, no hardcoded secrets |
-| A03: Injection | Parameterized queries, never string-interpolated SQL |
-| A04: Insecure Design | Input validation at system boundaries |
-| A05: Security Misconfiguration | CORS policy, HTTPS metadata enforcement |
-| A07: Identification & Auth Failures | JWT validation with Authority + Audience |
-
-## See Also
-
-- `auth.instructions.md` — JWT/OIDC, policy-based authorization, multi-tenant isolation, API keys
-- `graphql.instructions.md` — GraphQL authorization, multi-tenant resolvers
-- `dapr.instructions.md` — Dapr secrets management, component scoping, mTLS
-- `database.instructions.md` — SQL injection prevention, parameterized queries
-- `api-patterns.instructions.md` — Auth middleware, request validation
-- `deploy.instructions.md` — Secrets management, TLS configuration
+The audit trail is what makes `forge_diagnose` and `forge_drift_report` useful — if the mutation isn't logged, the orchestrator can't reason about it later.
 
 ---
 
-## Temper Guards
+## What Plan Forge specifically does NOT face
 
-| Shortcut | Why It Breaks |
-|----------|--------------|
-| "This endpoint is internal-only, no auth needed" | Internal endpoints get exposed through misconfiguration, reverse proxies, or future refactors. Apply auth everywhere — remove it explicitly when proven unnecessary. |
-| "Input validation is overkill for this field" | Every unvalidated input is an injection vector. Validate at system boundaries always — it's a single line that prevents a category of vulnerabilities. |
-| "We'll add authentication later" | Unauthenticated endpoints get discovered and exploited. Security is not a feature to add — it's a constraint present from line one. |
-| "No real users yet, security can wait" | Attackers scan for unprotected endpoints automatically. The window between "no real users" and "compromised" is often hours, not months. |
-| "I'll use `AllowAnonymous` temporarily for testing" | Temporary `[AllowAnonymous]` attributes become permanent. Use test-specific auth configuration instead. |
-| "Hardcoding this key is fine for development" | Hardcoded secrets leak via git history, logs, and error messages. Use user-secrets or environment variables even in development. |
+For perspective — these are common application-security concerns that Plan Forge does NOT have because of its deployment model. Don't write defensive code for them:
+
+- **SQL injection** — Plan Forge has no SQL surface. OpenBrain (Postgres) is an optional remote service accessed through a typed client; the user manages its own auth.
+- **XSS in the dashboard** — the dashboard renders only data the user's own machine produced; no untrusted HTML is ever inserted.
+- **CSRF** — the dashboard listens on localhost only; no cross-origin browser context can reach it.
+- **Authn/Authz for tools** — MCP runs inside the user's editor session; the trust boundary is the OS user.
+
+This list is here so we don't waste time inventing protections we don't need. If Plan Forge ever grows a hosted surface, this list gets revisited.
 
 ---
 
-## Warning Signs
+## Pre-merge security checklist (`/code-review` Step 4)
 
-- Route handlers missing `[Authorize]` attribute or auth middleware
-- String interpolation or concatenation used in SQL queries (`$"SELECT ... {id}"`)
-- Secrets assigned as string literals (`var key = "abc123"`)
-- CORS configured with wildcard origin (`"*"`)
-- Missing `[ValidateAntiForgeryToken]` on state-changing form endpoints
-- `AllowAnonymous` attribute without a comment explaining why
-- Error responses expose stack traces or internal paths in non-development mode
+- [ ] Every new `spawn`/`execFile` call uses an args array, not a constructed string
+- [ ] No new `eval` / `Function` / dynamic require of user input
+- [ ] Every new `forge_*` handler validates its inputs before any work
+- [ ] Every new path input is resolved + checked against an allowed root
+- [ ] No secrets in the diff (`git diff | grep -iE 'api[_-]?key|secret|password|token'` shows only test fixtures)
+- [ ] Any new mutating tool defaults `dryRun: true` and logs to the audit trail
+
+---
+
+## See also
+
+- [architecture-principles.instructions.md](architecture-principles.instructions.md) — Dependency Rule (security boundaries are layer boundaries)
+- [aci-design.instructions.md](aci-design.instructions.md) — ACI rules govern *agent* safety; this file governs *system* safety
+- `docs/plans/PROJECT-PRINCIPLES.md` — forbidden patterns (mutating user repos without dry-run)
+- `forge_secret_scan` — pre-deploy gate; run before every release
+- `forge_env_diff` — pre-deploy gate; surfaces env-var changes that might leak secrets to the wrong scope

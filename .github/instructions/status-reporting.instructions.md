@@ -1,6 +1,6 @@
 ---
 description: Standard output templates for orchestration status updates, progress reports, blockers, completions, handoffs, and failure reports. Use these formats during plan execution, multi-agent runs, and autonomous operations.
-applyTo: 'docs/plans/**,pforge-mcp/**,.forge/**'
+applyTo: 'docs/plans/**,.forge/**'
 ---
 
 # Status Reporting Templates
@@ -29,12 +29,12 @@ Use during long-running operations to report current state. Send every 2–3 sli
 ```
 ## Progress Update
 
-**Run:** Phase-22-COPILOT-PLATFORM-v2.15
-**Current:** Slice 3 — `forge_export_plan`
+**Run:** Phase-3-User-Auth
+**Current:** Slice 3 — `OAuth callback handler`
 **Status:** Running (~10 min so far)
 **Completed:** 2/8 slices passed
 **Failed:** 0
-**Next:** Slice 4 — `forge_sync_memories`
+**Next:** Slice 4 — `Session storage`
 **ETA:** ~35 minutes remaining
 ```
 
@@ -170,4 +170,4 @@ Status icons:
 
 ## Reading Test Output
 
-> **Moved to [testing.instructions.md](testing.instructions.md) § Rule 3** — the rule auto-loads now when you edit a test file, which is where it actually matters. The Issue #198 field bug, the vitest-summary anchor, the `Test Sweep` template — all live there.
+> **See [testing.instructions.md](testing.instructions.md) § Rule 3** — the rule auto-loads when you edit a test file, which is where it actually matters. The vitest-summary anchor and the `Test Sweep` template live there.
