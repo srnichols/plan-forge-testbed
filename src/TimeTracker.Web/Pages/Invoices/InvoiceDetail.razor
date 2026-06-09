@@ -29,7 +29,10 @@
     else
     {
         <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Center">
-            <FluentLabel Typo="Typography.PageTitle">@_invoice.InvoiceNumber</FluentLabel>
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="2" Width="auto">
+                <FluentLabel Typo="Typography.PageTitle">@_invoice.InvoiceNumber</FluentLabel>
+                <FluentLabel Typo="Typography.Body" Color="Color.Neutral">@(_clientName ?? $"Client #{_invoice.ClientId}")</FluentLabel>
+            </FluentStack>
             <FluentBadge Appearance="@GetStatusAppearance(_invoice.Status)" aria-label="@_invoice.Status.ToString()">
                 @_invoice.Status
             </FluentBadge>
@@ -79,6 +82,12 @@
         }
 
         <FluentGrid>
+            <FluentGridItem xs="12" sm="6">
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
+                    <FluentLabel Typo="Typography.Body"><strong>Client</strong></FluentLabel>
+                    <FluentLabel>@(_clientName ?? $"Client #{_invoice.ClientId}")</FluentLabel>
+                </FluentStack>
+            </FluentGridItem>
             <FluentGridItem xs="12" sm="6">
                 <FluentStack Orientation="Orientation.Vertical" VerticalGap="4">
                     <FluentLabel Typo="Typography.Body"><strong>Period</strong></FluentLabel>

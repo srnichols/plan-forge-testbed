@@ -12,10 +12,12 @@ public partial class InvoiceDetail : ComponentBase, IDisposable
 
     [Inject] private IInvoicesApi InvoicesApi { get; set; } = default!;
     [Inject] private IProjectsApi ProjectsApi { get; set; } = default!;
+    [Inject] private IClientsApi ClientsApi { get; set; } = default!;
     [Inject] private ILogger<InvoiceDetail> Logger { get; set; } = default!;
 
     private readonly CancellationTokenSource _cts = new();
     private InvoiceDto? _invoice;
+    private string? _clientName;
     private Dictionary<int, string> _projectNames = [];
     private bool _loading = true;
     private bool _working;
@@ -40,6 +42,9 @@ public partial class InvoiceDetail : ComponentBase, IDisposable
 
             if (_invoice is not null)
             {
+                ClientDto? client = await ClientsApi.GetByIdAsync(_invoice.ClientId, _cts.Token);
+                _clientName = client?.Name;
+
                 List<ProjectDto> projects = await ProjectsApi.GetAllAsync(_invoice.ClientId, _cts.Token);
                 _projectNames = projects.ToDictionary(p => p.Id, p => p.Name);
             }
