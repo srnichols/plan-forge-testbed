@@ -5,6 +5,7 @@
 > **Author**: AI Agent (Step 0 — Specifier, Step 2 — Hardener)
 > **Created**: 2026-05-05
 > **Hardened**: 2026-05-05
+> **Amended**: 2026-06-09 — Slice 8 added (Invoice detail / generate / status actions + full-height layout fix)
 > **Feature Branch**: `feature/phase-6-web-ui`
 
 ---
@@ -28,7 +29,7 @@ The new guardrails it relies on (added to the `dotnet` preset in Plan-Forge v2.8
 - New project `src/TimeTracker.Web` — Blazor Server host with Microsoft Fluent UI 4.x
 - New project `src/TimeTracker.Web.Client` — typed HttpClient SDK over the REST API (NOT a Blazor WASM project; it's a plain `Microsoft.NET.Sdk` class library)
 - New test project `tests/TimeTracker.Web.Tests` — bUnit + xUnit
-- Pages: Dashboard, Clients (list + edit), Projects (list + edit), Time Entries (list + create), Invoices (list view)
+- Pages: Dashboard, Clients (list + edit), Projects (list + edit), Time Entries (list + create), Invoices (list + detail + generate + status transitions)
 - Layout shell: `MainLayout.razor`, `NavMenu.razor`, `App.razor`, `Routes.razor`, page title, breadcrumbs
 - Solution wiring (`TimeTracker.slnx` updated)
 - README quick-start updated with `dotnet run --project src/TimeTracker.Web`
@@ -65,7 +66,7 @@ The new guardrails it relies on (added to the `dotnet` preset in Plan-Forge v2.8
 | `src/TimeTracker.Web/_Imports.razor` | Common usings |
 | `src/TimeTracker.Web/App.razor` | Root component |
 | `src/TimeTracker.Web/Routes.razor` | Router |
-| `src/TimeTracker.Web/wwwroot/app.css` | Minimal app-level CSS (theme tokens only) |
+| `src/TimeTracker.Web/wwwroot/app.css` | App-level CSS: theme tokens + full-height layout chain (html/body 100%, `.layout` min-height 100vh, `.main` flex-fill, `.body-content` 100%) so overlay surfaces (FluentSelect dropdowns) are not clipped by a collapsed `FluentBodyContent` |
 | `src/TimeTracker.Web.Client/TimeTracker.Web.Client.csproj` | Class library SDK (typed HttpClient) |
 
 #### Typed client
@@ -77,7 +78,7 @@ The new guardrails it relies on (added to the `dotnet` preset in Plan-Forge v2.8
 | `src/TimeTracker.Web.Client/Models/ProjectFormModel.cs` | Form DTO |
 | `src/TimeTracker.Web.Client/Models/TimeEntryListItem.cs` | DTO |
 | `src/TimeTracker.Web.Client/Models/TimeEntryFormModel.cs` | Form DTO |
-| `src/TimeTracker.Web.Client/Models/InvoiceListItem.cs` | DTO |
+| `src/TimeTracker.Web.Client/Models/InvoiceDto.cs` | DTOs: `InvoiceDto` (full invoice incl. `InvoiceLineDto` list), `GenerateInvoiceFormModel` (ClientId + period, DataAnnotations), `VoidInvoiceFormModel` (Reason) |
 | `src/TimeTracker.Web.Client/Models/DashboardSummaryDto.cs` | DTO mirroring `DashboardSummary` record |
 | `src/TimeTracker.Web.Client/IClientsApi.cs` | Interface |
 | `src/TimeTracker.Web.Client/ClientsApi.cs` | Implementation |
@@ -85,7 +86,7 @@ The new guardrails it relies on (added to the `dotnet` preset in Plan-Forge v2.8
 | `src/TimeTracker.Web.Client/ProjectsApi.cs` | Implementation |
 | `src/TimeTracker.Web.Client/ITimeEntriesApi.cs` | Interface |
 | `src/TimeTracker.Web.Client/TimeEntriesApi.cs` | Implementation |
-| `src/TimeTracker.Web.Client/IInvoicesApi.cs` | Interface |
+| `src/TimeTracker.Web.Client/IInvoicesApi.cs` | Interface (`GetByClientAsync`, `GetByIdAsync`, `GenerateAsync`, `IssueAsync`, `MarkPaidAsync`, `VoidAsync`) |
 | `src/TimeTracker.Web.Client/InvoicesApi.cs` | Implementation |
 | `src/TimeTracker.Web.Client/IDashboardApi.cs` | Interface |
 | `src/TimeTracker.Web.Client/DashboardApi.cs` | Implementation |
@@ -118,8 +119,12 @@ The new guardrails it relies on (added to the `dotnet` preset in Plan-Forge v2.8
 | `src/TimeTracker.Web/Pages/TimeEntries/TimeEntriesList.razor.cs` | Code-behind |
 | `src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor` | Create form |
 | `src/TimeTracker.Web/Pages/TimeEntries/TimeEntryCreate.razor.cs` | Code-behind |
-| `src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor` | List page |
+| `src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor` | List page (client picker, grid, New Invoice button, per-row View action) |
 | `src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor.cs` | Code-behind |
+| `src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor` | Detail page (line items, totals/tax breakdown, status badge, Issue/Mark Paid/Void actions) |
+| `src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor.cs` | Code-behind |
+| `src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor` | Generate page (client picker + period date range) |
+| `src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor.cs` | Code-behind |
 
 #### Tests
 | File | Purpose |
@@ -159,6 +164,11 @@ The TimeTracker REST API has full CRUD + reporting + invoicing capabilities, but
 - [ ] `/clients/new` and `/clients/{id}/edit` render an `EditForm` bound to `ClientFormModel` (NOT to `Client` entity)
 - [ ] Client create/update/delete go through `POST/PUT/DELETE /api/clients`
 - [ ] `/projects`, `/time-entries`, `/invoices` parallel structure
+- [ ] `/invoices` lists invoices for a selected client; "New Invoice" navigates to `/invoices/new`; row "View" navigates to `/invoices/{id}`
+- [ ] `/invoices/new` generates a draft invoice via `POST /api/invoices/generate` then redirects to the detail page
+- [ ] `/invoices/{id}` shows line items, subtotal/tax/total breakdown, and status-appropriate actions: Issue (Draft→Issued), Mark Paid (Issued→Paid), Void with reason (Draft/Issued→Void); Paid and Void are terminal (no actions)
+- [ ] `/invoices/{id}` shows the client name (header subtitle + info grid), not just the numeric client id
+- [ ] FluentSelect dropdowns render their full option list (not clipped) — verified by the full-height layout CSS in `wwwroot/app.css`
 - [ ] Every page has `<PageTitle>` and a `PageHeader` with breadcrumb
 - [ ] Every async lifecycle method propagates a `CancellationToken`
 - [ ] Every page implements `IDisposable` with a `CancellationTokenSource` cancelled in `Dispose`
@@ -178,7 +188,7 @@ The TimeTracker REST API has full CRUD + reporting + invoicing capabilities, but
 - Authentication / authorization (no user model in the testbed yet)
 - Real-time updates via SignalR (Blazor Server uses SignalR for transport, but no app-level pub/sub)
 - Reports page (Phase 7 candidate)
-- Invoice creation / state transitions (read-only list only this phase)
+- Invoice line-item editing / discounts UI (invoices are generated, issued, paid, or voided via the existing API state machine — line items are computed server-side, not edited in the UI)
 - Mobile-optimized layouts (responsive defaults from Fluent UI are sufficient)
 
 ### Open Questions
@@ -362,7 +372,7 @@ node -e "const f=require('fs'),p=require('path');['src/TimeTracker.Web/Pages/Cli
 **Tasks**:
 1. `Pages/Projects/ProjectsList.razor` + `ProjectEdit.razor` (and code-behinds) — same shape as Clients but with project fields (Name, Description, ClientId via `<FluentSelect>`, IsActive). Project edit form binds to `ProjectFormModel`.
 2. `Pages/TimeEntries/TimeEntriesList.razor` + `TimeEntryCreate.razor` (and code-behinds) — list filterable by ProjectId; create form has Date (`<FluentDatePicker>`), Hours, Description, IsBillable. Bound to `TimeEntryFormModel`.
-3. `Pages/Invoices/InvoicesList.razor` (and code-behind) — read-only list with status badges; no edit page this phase.
+3. `Pages/Invoices/InvoicesList.razor` (and code-behind) — client-filtered list with status badges, a "New Invoice" button, and a per-row "View" action. Detail / generate / status-transition pages are built in Slice 8.
 
 **Validation Gate**:
 ```bash
@@ -424,8 +434,52 @@ node -e "const f=require('fs');const r=f.readFileSync('README.md','utf8');if(!r.
 
 ---
 
+### Slice 8: Invoice detail / generate / status actions + full-height layout fix [depends: Slice 5] [scope: src/TimeTracker.Web/Pages/Invoices/**, src/TimeTracker.Web/wwwroot/app.css]
+
+**Goal**: Promote Invoices from a read-only list to a full management surface — view an invoice's line items and totals, generate a new draft, and drive the status state machine (Issue → Mark Paid / Void) — all through the existing `IInvoicesApi` typed client. Also fix the app-wide layout-height collapse that clips FluentSelect dropdowns.
+
+**Background**: The REST API already exposes the full invoice state machine (`POST /api/invoices/generate`, `/{id}/issue`, `/{id}/pay`, `/{id}/void`) and `IInvoicesApi` already wraps all six operations (built in Slice 1). This slice adds only the UI surface plus a CSS fix. The line-item totals, tax, and discounts are computed server-side; the UI never edits them.
+
+**Layout bug being fixed**: `html`/`body` had no height, so `FluentLayout` collapsed to content height and `FluentBodyContent` (which has `overflow: auto`) shrank to ~124px. That short scroll box clipped the FluentSelect popup after the first option (clients were in the DOM but hidden below the fold). The fix establishes the full-height chain in `wwwroot/app.css`.
+
+**Tasks**:
+1. Create `Pages/Invoices/InvoiceDetail.razor` + `.razor.cs`:
+   - `@page "/invoices/{Id:int}"`, `@rendermode InteractiveServer`, `@using TimeTracker.Core.Models` (needed for `InvoiceStatus` in markup)
+   - `[Parameter] public int Id { get; set; }`; load via `IInvoicesApi.GetByIdAsync` in `OnParametersSetAsync`
+   - Inject `IClientsApi` to resolve the client name (`GetByIdAsync(invoice.ClientId)`); show it as a subtitle under the invoice number in the header **and** as a dedicated "Client" field in the info grid (fall back to `Client #{id}` if unresolved)
+   - Inject `IProjectsApi` to resolve project names for the line-item grid (`ProjectName(projectId)` lookup dictionary)
+   - Render: status badge, period, created date, `FluentDataGrid` of line items (project, description, hours, rate, rate type, line total), and a right-aligned subtotal / discount (if any) / tax / total summary
+   - Status-appropriate action buttons (computed in code-behind, never as a chain of `@if` in markup): **Draft** → Issue, Void; **Issued** → Mark Paid, Void; **Paid**/**Void** → none
+   - Void uses an inline form (`FluentTextArea` reason, required) with Confirm / Cancel; on confirm calls `IInvoicesApi.VoidAsync(Id, new VoidInvoiceFormModel { Reason })`
+   - All actions go through a shared `RunActionAsync(Func<CancellationToken,Task>, errorMessage)` helper that toggles `_working`, reloads on success, and surfaces failures as a `FluentMessageBar`
+   - Three-branch loading / error / not-found rendering; `IDisposable` + `CancellationTokenSource`
+2. Create `Pages/Invoices/InvoiceGenerate.razor` + `.razor.cs`:
+   - `@page "/invoices/new"`, `@rendermode InteractiveServer`, `@using TimeTracker.Web.Client.Models` (needed for `ClientDto` in markup)
+   - `EditForm` bound to `GenerateInvoiceFormModel` with `DataAnnotationsValidator`
+   - Client `FluentSelect` + two `FluentDatePicker`s (period start / end); validate end ≥ start before submit
+   - On success: `IInvoicesApi.GenerateAsync` then `Nav.NavigateTo($"/invoices/{created.Id}")`
+3. Update `Pages/Invoices/InvoicesList.razor` (+ code-behind):
+   - Add a "New Invoice" header button → `/invoices/new`
+   - Add a per-row "View" action column → `/invoices/{id}`
+   - Inject `NavigationManager`; add `NavigateToGenerate()` / `NavigateToDetail(int id)`
+4. Fix `wwwroot/app.css` — append the full-height layout chain so dropdowns are not clipped:
+   ```css
+   html, body { height: 100%; margin: 0; }
+   .layout { min-height: 100vh; }
+   .layout > .main { flex: 1 1 auto; min-height: 0; }
+   .layout > .main > .body-content { height: 100%; }
+   ```
+
+**Validation Gate**:
+```bash
+dotnet build src/TimeTracker.Web/TimeTracker.Web.csproj
+node -e "const f=require('fs'),p=require('path');['src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor','src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor.cs','src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor','src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor.cs'].forEach(x=>f.statSync(x));const det=f.readFileSync('src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor','utf8');const detcs=f.readFileSync('src/TimeTracker.Web/Pages/Invoices/InvoiceDetail.razor.cs','utf8');if(!det.includes('@page \"/invoices/{Id:int}\"'))throw new Error('detail @page route missing');if(!detcs.includes('IssueAsync')||!detcs.includes('MarkPaidAsync')||!detcs.includes('VoidAsync'))throw new Error('status actions missing');if(!detcs.includes('IClientsApi'))throw new Error('client-name lookup missing from detail page');const gen=f.readFileSync('src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor','utf8');if(!gen.includes('@page \"/invoices/new\"'))throw new Error('generate @page route missing');if(!f.readFileSync('src/TimeTracker.Web/Pages/Invoices/InvoiceGenerate.razor.cs','utf8').includes('GenerateInvoiceFormModel'))throw new Error('GenerateInvoiceFormModel binding missing');const list=f.readFileSync('src/TimeTracker.Web/Pages/Invoices/InvoicesList.razor','utf8');if(!list.includes('/invoices/new'))throw new Error('New Invoice button missing');const css=f.readFileSync('src/TimeTracker.Web/wwwroot/app.css','utf8');if(!css.includes('100vh'))throw new Error('full-height layout CSS missing from app.css');for(const fn of f.readdirSync('src/TimeTracker.Web/Pages/Invoices').filter(x=>x.endsWith('.razor.cs'))){const t=f.readFileSync(p.join('src/TimeTracker.Web/Pages/Invoices',fn),'utf8');if(/DbContext|EntityFrameworkCore|TimeTracker\\.Api\\./.test(t))throw new Error('layer violation in '+fn)}console.log('OK')"
+```
+
+---
+
 ## Definition of Done
-- [ ] All 7 slices pass their validation gates
+- [ ] All 8 slices pass their validation gates
 - [ ] `dotnet build TimeTracker.slnx` produces 0 errors and 0 warnings
 - [ ] `dotnet test TimeTracker.slnx` reports 0 failures across both test projects
 - [ ] `dotnet run --project src/TimeTracker.Web` starts the app (manual smoke test post-execution)
