@@ -32,6 +32,14 @@
 
 ---
 
+### Phase 2.5: Time Entry CRUD
+**Goal**: CRUD API for time entries (`ITimeEntryService`/`TimeEntryService`/`TimeEntriesController`) with strict Controller → Service layering — the surface every later phase reads but no phase originally owned
+**Plan**: [Phase-2.5-TIME-ENTRY-CRUD-PLAN.md](./Phase-2.5-TIME-ENTRY-CRUD-PLAN.md)
+**Status**: 📋 Planned
+**Note**: Backfilled after the time-entry CRUD surface was found assumed by Phases 3–6 and the DI contract but never owned by a phase slice. Also replaces the prior `DbContext`-in-controller implementation with proper service-layer separation.
+
+---
+
 ### Phase 3: Invoice Engine
 **Goal**: Invoice generation with rate tiers, volume discounts, and state machine
 **Plan**: [Phase-3-INVOICE-ENGINE-PLAN.md](./Phase-3-INVOICE-ENGINE-PLAN.md)

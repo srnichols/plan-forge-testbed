@@ -34,13 +34,13 @@ Add CRUD operations for the `Project` entity — API endpoints linked to clients
 - `tests/TimeTracker.Tests/ProjectServiceTests.cs` — unit tests
 
 ### Out of Scope
-- Time entry management (already exists)
-- Billing reports (already exists)
+- Time entry management (owned by Phase 2.5 — Time Entry CRUD)
+- Billing / invoice engine (Phase 3)
 - Client management (Phase 1)
 - UI frontend
 
 ### Forbidden Actions
-- Do NOT modify `TimeEntriesController.cs` or `BillingController.cs`
+- Do NOT create or modify `TimeEntriesController.cs` — it is owned by Phase 2.5 (Time Entry CRUD)
 - Do NOT modify `Client.cs` model
 - Do NOT change `docker-compose.yml`
 - Do NOT inject `TimeTrackerDbContext` into `ProjectsController` — the controller is HTTP-only and must depend on the `IProjectService` abstraction (Controller → Service → data access)

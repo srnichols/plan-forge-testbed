@@ -73,7 +73,7 @@ None — feature scope is well-defined.
 - `TimeEntryReportServiceTests` with comprehensive unit tests
 
 ### Forbidden Actions
-- DO NOT modify existing controllers (ClientsController, InvoicesController, BillingController, TimeEntriesController)
+- DO NOT modify existing controllers (ClientsController, InvoicesController, BillingController, TimeEntriesController — the last is owned by Phase 2.5, Time Entry CRUD)
 - DO NOT modify existing models (Client, Project, TimeEntry, Invoice)
 - DO NOT modify existing services (ClientService, InvoiceService, BillingService, ProjectService)
 - DO NOT modify existing tests
