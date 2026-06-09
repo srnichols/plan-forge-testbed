@@ -1,0 +1,93 @@
+@page "/invoices/new"
+@rendermode InteractiveServer
+@using TimeTracker.Web.Client.Models
+
+<PageTitle>New Invoice</PageTitle>
+
+<FluentStack Orientation="Orientation.Vertical" VerticalGap="16" Style="max-width: 480px;">
+    <FluentBreadcrumb>
+        <FluentBreadcrumbItem Href="/invoices">Invoices</FluentBreadcrumbItem>
+        <FluentBreadcrumbItem>New Invoice</FluentBreadcrumbItem>
+    </FluentBreadcrumb>
+
+    <FluentLabel Typo="Typography.PageTitle">Generate Invoice</FluentLabel>
+
+    @if (_loading)
+    {
+        <FluentProgressRing aria-label="Loading clients" />
+    }
+    else if (_loadError is not null)
+    {
+        <FluentMessageBar Intent="MessageIntent.Error" Title="Failed to load">
+            @_loadError
+        </FluentMessageBar>
+    }
+    else
+    {
+        <EditForm Model="_form" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+                <div>
+                    <FluentSelect TOption="string"
+                                  Label="Client"
+                                  Required="true"
+                                  aria-required="true"
+                                  Value="@_clientIdStr"
+                                  ValueChanged="@OnClientChanged"
+                                  Style="width: 100%;">
+                        <FluentOption TOption="string" Value="">— Select a client —</FluentOption>
+                        @foreach (ClientDto client in _clients)
+                        {
+                            <FluentOption TOption="string" Value="@client.Id.ToString()">@client.Name</FluentOption>
+                        }
+                    </FluentSelect>
+                    <ValidationMessage For="@(() => _form.ClientId)" />
+                </div>
+
+                <div>
+                    <FluentDatePicker Label="Period start"
+                                      Required="true"
+                                      aria-required="true"
+                                      @bind-Value="_periodStartProxy" />
+                    <ValidationMessage For="@(() => _form.PeriodStart)" />
+                </div>
+
+                <div>
+                    <FluentDatePicker Label="Period end"
+                                      Required="true"
+                                      aria-required="true"
+                                      @bind-Value="_periodEndProxy" />
+                    <ValidationMessage For="@(() => _form.PeriodEnd)" />
+                </div>
+
+                @if (_validationError is not null)
+                {
+                    <FluentMessageBar Intent="MessageIntent.Error" Title="Invalid input">
+                        @_validationError
+                    </FluentMessageBar>
+                }
+
+                @if (_submitError is not null)
+                {
+                    <FluentMessageBar Intent="MessageIntent.Error" Title="Generate failed">
+                        @_submitError
+                    </FluentMessageBar>
+                }
+
+                <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="8">
+                    <FluentButton Type="ButtonType.Submit"
+                                  Appearance="Appearance.Accent"
+                                  Disabled="@_submitting">
+                        @(_submitting ? "Generating…" : "Generate")
+                    </FluentButton>
+                    <FluentButton Appearance="Appearance.Neutral"
+                                  OnClick="@Cancel"
+                                  Disabled="@_submitting">
+                        Cancel
+                    </FluentButton>
+                </FluentStack>
+            </FluentStack>
+        </EditForm>
+    }
+</FluentStack>

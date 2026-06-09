@@ -5,3 +5,8 @@
     --app-spacing-md: 16px;
     --app-spacing-lg: 24px;
 }
+
+html, body { height: 100%; margin: 0; }
+.layout { min-height: 100vh; }
+.layout > .main { flex: 1 1 auto; min-height: 0; }
+.layout > .main > .body-content { height: 100%; }

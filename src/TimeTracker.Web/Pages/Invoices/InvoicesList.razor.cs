@@ -77,8 +77,6 @@ public partial class InvoicesList : ComponentBase, IDisposable
         }
     }
 
-    private void NavigateToCreate() => Nav.NavigateTo("/invoices/new");
-
     private void NavigateToView(int id) => Nav.NavigateTo($"/invoices/{id}");
 
     private static Appearance GetStatusAppearance(InvoiceStatus status) => status switch

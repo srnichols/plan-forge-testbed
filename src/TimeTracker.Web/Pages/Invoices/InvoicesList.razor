@@ -8,7 +8,7 @@
         <FluentLabel Typo="Typography.PageTitle">Invoices</FluentLabel>
         <FluentSpacer />
         <FluentButton Appearance="Appearance.Accent"
-                      OnClick="@NavigateToCreate"
+                      OnClick="@(() => Nav.NavigateTo("/invoices/new"))"
                       aria-label="Create new invoice">
             New Invoice
         </FluentButton>
