@@ -21,7 +21,7 @@ public static class DbSeeder
         }
 
         SeedContoso(db);
-        SeedMicrosoft(db);
+        SeedAdventureWorks(db);
 
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -78,12 +78,12 @@ public static class DbSeeder
             lines));
     }
 
-    private static void SeedMicrosoft(TimeTrackerDbContext db)
+    private static void SeedAdventureWorks(TimeTrackerDbContext db)
     {
         var client = new Client
         {
-            Name = "Microsoft Test App",
-            Email = "demo@microsoft.test",
+            Name = "Adventure Works",
+            Email = "demo@adventure-works.test",
             HourlyRate = 175m,
             IsActive = true
         };
