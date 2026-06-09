@@ -15,6 +15,9 @@ builder.Services.AddScoped<IClientService, ClientService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 builder.Services.AddScoped<ITimeEntryReportService, TimeEntryReportService>();
+builder.Services.AddScoped<IDashboardService>(sp => new DashboardService(
+    sp.GetRequiredService<TimeTrackerDbContext>(),
+    sp.GetRequiredService<ILogger<DashboardService>>()));
 
 var app = builder.Build();
 
