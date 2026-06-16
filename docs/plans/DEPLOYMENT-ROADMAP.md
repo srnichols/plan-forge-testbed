@@ -32,6 +32,14 @@
 
 ---
 
+### Phase 2.5: Time Entry CRUD
+**Goal**: CRUD API for time entries (`ITimeEntryService`/`TimeEntryService`/`TimeEntriesController`) — the surface every later phase reads but no phase originally owned
+**Plan**: [Phase-2.5-TIME-ENTRY-CRUD-PLAN.md](./Phase-2.5-TIME-ENTRY-CRUD-PLAN.md)
+**Status**: ✅ Complete (backfilled) — runs after Phase 2 (Project FK) and before Phases 3–6 (all consume time entries)
+**Note**: Added after the v1 demo rebuild surfaced a 404 on `GET /api/timeentries`. The Time Entry CRUD backend was assumed by Phases 3–6 and the DI contract but never had an owning plan slice.
+
+---
+
 ### Phase 3: Invoice Engine
 **Goal**: Invoice generation with rate tiers, volume discounts, and state machine
 **Plan**: [Phase-3-INVOICE-ENGINE-PLAN.md](./Phase-3-INVOICE-ENGINE-PLAN.md)

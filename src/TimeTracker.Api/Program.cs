@@ -9,11 +9,23 @@ builder.Services.AddControllers()
 builder.Services.AddOpenApi();
 
 builder.Services.AddDbContext<TimeTrackerDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        // Demo/local fallback: no Postgres configured — use an in-memory store so the app runs standalone.
+        options.UseInMemoryDatabase("TimeTrackerDemo");
+    }
+    else
+    {
+        options.UseNpgsql(connectionString);
+    }
+});
 
 builder.Services.AddScoped<IClientService, ClientService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+builder.Services.AddScoped<ITimeEntryService, TimeEntryService>();
 builder.Services.AddScoped<ITimeEntryReportService, TimeEntryReportService>();
 builder.Services.AddScoped<IDashboardService>(sp => new DashboardService(
     sp.GetRequiredService<TimeTrackerDbContext>(),
