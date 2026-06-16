@@ -60,6 +60,13 @@
 
 ---
 
+### Phase 7: Client Activity Summary Endpoint
+**Goal**: `GET /api/clients/{id}/summary` — per-client aggregate rollup (project count, billable/non-billable hours, invoice count, outstanding total). Additive, mirrors the Phase 5 Dashboard pattern scoped to one client.
+**Plan**: [Phase-7-CLIENT-SUMMARY-PLAN.md](./Phase-7-CLIENT-SUMMARY-PLAN.md)
+**Status**: 📋 Planned — kept unmarked-complete as a **repeatable dry-run demo** plan (see [../PHASE-7-DRYRUN-DEMO.md](../PHASE-7-DRYRUN-DEMO.md)).
+
+---
+
 <!-- Add more phases as needed. Each phase should link to its *-PLAN.md file. -->
 
 ---
