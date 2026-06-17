@@ -1,7 +1,44 @@
-/* Theming tokens only — layout via Fluent components. */
+/* Theming tokens and layout fixes */
 :root {
     --app-accent: #0078d4;
     --app-spacing-sm: 8px;
     --app-spacing-md: 16px;
     --app-spacing-lg: 24px;
+}
+
+/* Full-height layout chain — prevents dropdown clipping */
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+/* Fluent Layout uses full viewport */
+fluent-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+/* Main content container prevents overflow clipping */
+.main {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: row;
+}
+
+/* Body content uses flex layout instead of overflow: auto */
+fluent-body-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Ensure dropdowns and modals render above all content */
+fluent-select::part(listbox),
+fluent-option {
+    z-index: 1000;
 }
