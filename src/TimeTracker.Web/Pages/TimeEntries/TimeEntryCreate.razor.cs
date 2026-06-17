@@ -8,6 +8,7 @@ public partial class TimeEntryCreate : ComponentBase, IDisposable
 {
     [Inject] private ITimeEntriesApi TimeEntriesApi { get; set; } = default!;
     [Inject] private IProjectsApi ProjectsApi { get; set; } = default!;
+    [Inject] private IClientsApi ClientsApi { get; set; } = default!;
     [Inject] private NavigationManager Nav { get; set; } = default!;
     [Inject] private ILogger<TimeEntryCreate> Logger { get; set; } = default!;
 
@@ -45,8 +46,14 @@ public partial class TimeEntryCreate : ComponentBase, IDisposable
     {
         try
         {
-            List<ProjectDto> projects = await ProjectsApi.GetAllAsync(ct: _cts.Token);
-            _projectOptions = projects.Select(p => new ProjectOption(p.Id, p.Name)).ToList();
+            Task<List<ProjectDto>> projectsTask = ProjectsApi.GetAllAsync(ct: _cts.Token);
+            Task<List<ClientDto>> clientsTask = ClientsApi.GetAllAsync(_cts.Token);
+            await Task.WhenAll(projectsTask, clientsTask);
+
+            Dictionary<int, string> clientNames = clientsTask.Result.ToDictionary(c => c.Id, c => c.Name);
+            _projectOptions = projectsTask.Result
+                .Select(p => new ProjectOption(p.Id, ProjectLabel.Format(clientNames, p)))
+                .ToList();
         }
         catch (OperationCanceledException)
         {
@@ -93,4 +100,4 @@ public partial class TimeEntryCreate : ComponentBase, IDisposable
     public void Dispose() => _cts.Cancel();
 }
 
-public record ProjectOption(int Id, string Name);
+public record ProjectOption(int Id, string Label);

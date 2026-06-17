@@ -24,7 +24,7 @@
             <FluentOption TOption="string" Value="">All Projects</FluentOption>
             @foreach (ProjectFilterOption project in _projectOptions)
             {
-                <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Name</FluentOption>
+                <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Label</FluentOption>
             }
         </FluentSelect>
         @if (_filterProjectId.HasValue)

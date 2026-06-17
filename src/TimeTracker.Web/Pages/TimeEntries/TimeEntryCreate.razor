@@ -30,7 +30,7 @@
                     <FluentOption TOption="string" Value="">— Select a project —</FluentOption>
                     @foreach (ProjectOption project in _projectOptions)
                     {
-                        <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Name</FluentOption>
+                        <FluentOption TOption="string" Value="@project.Id.ToString()">@project.Label</FluentOption>
                     }
                 </FluentSelect>
                 <ValidationMessage For="@(() => _model.ProjectId)" />
