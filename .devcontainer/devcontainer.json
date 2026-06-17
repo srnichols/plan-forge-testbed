@@ -1,0 +1,44 @@
+{
+  "name": "TimeTracker + Plan Forge",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "docker-compose.yml"
+  ],
+  "service": "devcontainer",
+  "workspaceFolder": "/workspace",
+  "runServices": [
+    "db",
+    "devcontainer"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "vscode",
+      "installZsh": true,
+      "upgradePackages": true
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.csharp",
+        "ms-azuretools.vscode-containers",
+        "github.copilot",
+        "github.copilot-chat"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "TimeTracker.slnx"
+      }
+    }
+  },
+  "forwardPorts": [
+    8080,
+    5432
+  ],
+  "postCreateCommand": "dotnet restore TimeTracker.slnx && npm --prefix pforge-mcp install && npx --prefix pforge-mcp playwright install --with-deps chromium",
+  "remoteUser": "vscode"
+}

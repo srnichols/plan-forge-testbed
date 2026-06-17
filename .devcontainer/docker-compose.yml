@@ -1,0 +1,13 @@
+services:
+  devcontainer:
+    image: mcr.microsoft.com/dotnet/sdk:10.0-preview
+    command: sleep infinity
+    volumes:
+      - ..:/workspace:cached
+    working_dir: /workspace
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=timetracker;Username=postgres;Password=postgres
+    depends_on:
+      db:
+        condition: service_healthy
