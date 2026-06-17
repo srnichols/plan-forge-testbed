@@ -2170,7 +2170,7 @@ async function _executeSliceDispatchWorkerForAttempt({ mode, worker, slice, cwd,
   const { proxy, proxyEnv } = await _executeSliceStartProxy({ networkAllowed, networkEnforce, runDir, slice });
   try {
     const workerResult = await spawnWorker(sliceInstructions, {
-      model: currentModel, cwd, runPlanActive: true,
+      model: currentModel, cwd, worker, runPlanActive: true,
       timeout: resolveWorkerTimeoutMs({ sliceOverride: slice.workerTimeoutMs }),
       eventBus, extraEnv: proxyEnv,
     });
