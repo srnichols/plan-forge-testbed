@@ -1,6 +1,6 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using TimeTracker.Api.Data;
+using TimeTracker.Api.Services;
 using TimeTracker.Core.Models;
 
 namespace TimeTracker.Api.Controllers;
@@ -9,54 +9,80 @@ namespace TimeTracker.Api.Controllers;
 [Route("api/[controller]")]
 public class TimeEntriesController : ControllerBase
 {
-    private readonly TimeTrackerDbContext _db;
+    private readonly ITimeEntryService _timeEntryService;
 
-    public TimeEntriesController(TimeTrackerDbContext db) => _db = db;
-
-    [HttpGet]
-    public async Task<ActionResult<List<TimeEntry>>> GetAll([FromQuery] DateTime? date, [FromQuery] int? projectId)
+    public TimeEntriesController(ITimeEntryService timeEntryService)
     {
-        var query = _db.TimeEntries.Include(t => t.Project).AsQueryable();
-        if (date.HasValue) query = query.Where(t => t.Date.Date == date.Value.Date);
-        if (projectId.HasValue) query = query.Where(t => t.ProjectId == projectId.Value);
-        return await query.OrderByDescending(t => t.Date).ThenByDescending(t => t.CreatedAt).ToListAsync();
+        _timeEntryService = timeEntryService;
     }
 
-    [HttpGet("{id}")]
-    public async Task<ActionResult<TimeEntry>> GetById(int id)
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<TimeEntry>>> GetAll(
+        [FromQuery] DateTime? date,
+        [FromQuery] int? projectId,
+        CancellationToken cancellationToken)
     {
-        var entry = await _db.TimeEntries.Include(t => t.Project).FirstOrDefaultAsync(t => t.Id == id);
-        return entry is null ? NotFound() : Ok(entry);
+        var entries = await _timeEntryService.GetAllAsync(date, projectId, cancellationToken);
+        return Ok(entries);
+    }
+
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<TimeEntry>> GetById(int id, CancellationToken cancellationToken)
+    {
+        var entry = await _timeEntryService.GetByIdAsync(id, cancellationToken);
+        if (entry is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(entry);
     }
 
     [HttpPost]
-    public async Task<ActionResult<TimeEntry>> Create(CreateTimeEntryRequest request)
+    public async Task<ActionResult<TimeEntry>> Create(
+        [FromBody] CreateTimeEntryRequest request,
+        CancellationToken cancellationToken)
     {
-        var project = await _db.Projects.FindAsync(request.ProjectId);
-        if (project is null) return BadRequest("Project not found");
-
-        var entry = new TimeEntry
+        if (!ModelState.IsValid)
         {
-            ProjectId = request.ProjectId,
-            Date = request.Date,
-            Hours = request.Hours,
-            Description = request.Description,
-            IsBillable = request.IsBillable,
-        };
-        _db.TimeEntries.Add(entry);
-        await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetById), new { id = entry.Id }, entry);
+            return ValidationProblem(ModelState);
+        }
+
+        try
+        {
+            var entry = await _timeEntryService.CreateAsync(
+                request.ProjectId,
+                request.Date,
+                request.Hours,
+                request.Description,
+                request.IsBillable,
+                cancellationToken);
+
+            return CreatedAtAction(nameof(GetById), new { id = entry.Id }, entry);
+        }
+        catch (ValidationException ex)
+        {
+            ModelState.AddModelError(string.Empty, ex.Message);
+            return ValidationProblem(ModelState);
+        }
     }
 
-    [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(int id)
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
-        var entry = await _db.TimeEntries.FindAsync(id);
-        if (entry is null) return NotFound();
-        _db.TimeEntries.Remove(entry);
-        await _db.SaveChangesAsync();
+        var deleted = await _timeEntryService.DeleteAsync(id, cancellationToken);
+        if (!deleted)
+        {
+            return NotFound();
+        }
+
         return NoContent();
     }
-}
 
-public record CreateTimeEntryRequest(int ProjectId, DateTime Date, decimal Hours, string? Description, bool IsBillable = true);
+    public sealed record CreateTimeEntryRequest(
+        [Range(1, int.MaxValue, ErrorMessage = "Project is required")] int ProjectId,
+        [Required] DateTime Date,
+        [Range(0.01, 24.0, ErrorMessage = "Hours must be between 0.01 and 24")] decimal Hours,
+        [MaxLength(1000)] string? Description,
+        bool IsBillable);
+}

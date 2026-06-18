@@ -15,6 +15,7 @@ builder.Services.AddScoped<IBillingService, BillingService>();
 builder.Services.AddScoped<IClientService, ClientService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
+builder.Services.AddScoped<ITimeEntryService, TimeEntryService>();
 builder.Services.AddScoped<ITimeEntryReportService, TimeEntryReportService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 
