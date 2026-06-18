@@ -170,22 +170,18 @@ Common shortcuts agents take that still produce compiling code but erode archite
 | "This is a one-off, patterns don't apply" | One-offs multiply. The next developer (or agent) sees the exception and copies it. Follow the pattern even for one-offs. |
 | "Adding an interface for one implementation is over-engineering" | Interfaces enable testing, future swaps, and dependency injection. The cost is one file — the benefit is permanent testability. |
 | "I'll skip the repository and query directly from the service" | Services with data access can't be unit tested without a database. The repository boundary exists to make testing fast and reliable. |
-| "Hardcoding a string from a stable-small-set in code?" | STOP — import from `pforge-mcp/enums.mjs`. Hook names, quorum modes, model tiers, cost sources, watcher modes, and error codes all have canonical frozen arrays there. Hand-typed literals drift silently; the frozen arrays are checked by CI guards. |
-| "It's only two copies — I'll deduplicate later if a third appears" | **DRY violation.** Two is already enough to drift. The Phase 41 enums-centralization had to chase the same string literals across 50+ files because two became four became fifty over time. If the same value, regex, or 3+ line block appears in two places, extract to a named constant or helper **now** — the cost is one symbol; the benefit is one place to fix bugs. Run `/clean-code-review` to surface duplicates via `jscpd`. |
+| "Hardcoding a string from a stable-small-set in code?" | STOP — extract to a canonical enums/constants module and import from there. Status names, mode names, error codes, tier names all belong in one place. Hand-typed literals drift silently. |
+| "It's only two copies — I'll deduplicate later if a third appears" | **DRY violation.** Two is already enough to drift. If the same value, regex, or 3+ line block appears in two places, extract to a named constant or helper **now** — the cost is one symbol; the benefit is one place to fix bugs. Run `/clean-code-review` to surface duplicates mechanically. |
 
-### Tool-surface (ACI) temper guards
+### Tool-surface (Agent-Computer Interface) temper guards
 
-> **Full rules live in [aci-design.instructions.md](aci-design.instructions.md)** — it auto-loads when you edit `pforge-mcp/server.mjs` or `capabilities.mjs`. Summary below.
-
-When designing or modifying any MCP tool surface (`forge_*` handlers, output payloads, schemas), watch for these shortcuts. Empirically validated against the SWE-agent ACI principle: the agent only performs as well as the surface lets it.
+If your project exposes tool surfaces to AI agents (MCP tools, function-calling APIs, JSON-RPC handlers), the same payload-shaping discipline applies. Empirically validated against the SWE-agent ACI principle: the agent only performs as well as the surface lets it.
 
 | Shortcut | Why It Breaks |
 |----------|--------------|
-| "Return the full object to be safe" | Unbounded payloads (30KB+ snapshots, 10K-event captures) blow agent context budgets and cause the agent to skip later tool calls or hallucinate to fit. **Fix**: return summary counts/status by default; offer a `drill` / `verbose` opt-in for details. |
+| "Return the full object to be safe" | Unbounded payloads (30KB+ snapshots, large event captures) blow agent context budgets and cause the agent to skip later tool calls or hallucinate to fit. **Fix**: return summary counts/status by default; offer a `drill` / `verbose` opt-in for details. |
 | "Empty response means nothing happened" | A bare `{ hits: [], total: 0 }` reads as failure to most agents. **Fix**: include a `message` field describing what was searched, what filters were active, and how to broaden the query. |
-| "Pagination is too hard; return all" | Tools like `forge_run_plan`, `forge_diagnose`, and `forge_home_snapshot` can return arbitrarily large activity logs. **Fix**: always paginate with `limit` + `cursor` + `hasMore`; pick a small default (10–25). |
-
-**Reference standard**: `forge_search` is the gold standard ACI surface — bounded 80-char snippets, sparse fields (`{ source, recordRef, snippet, score, timestamp }`), `total` + `truncated` for pagination metadata, and a friendly `message` on the empty path. Pattern-match new tool refactors against it. See [aci-design.instructions.md](aci-design.instructions.md) for the full 5 Rules + test contract.
+| "Pagination is too hard; return all" | Any list that can grow unbounded eventually does. **Fix**: always paginate with `limit` + `cursor` + `hasMore`; pick a small default (10–25). |
 
 ---
 
@@ -201,8 +197,8 @@ Observable patterns indicating these principles are being violated:
 - A class has more than 10 public methods or exceeds 300 lines (God object forming)
 - A method accepts more than 5 parameters (missing a model or configuration object)
 - Test files are absent for new service or repository classes (TDD skipped)
-- A new MCP tool returns more than ~10KB of JSON in its happy path with no opt-in flag (unbounded ACI surface — paginate or summarize)
-- A new MCP tool returns silent empty results (`{ hits: [] }` with no `message` field) when filters match nothing (ambiguous to agents)
+- A new tool surface returns more than ~10KB of JSON in its happy path with no opt-in flag (unbounded ACI surface — paginate or summarize)
+- A new tool surface returns silent empty results (`{ hits: [] }` with no `message` field) when filters match nothing (ambiguous to agents)
 
 ---
 
@@ -223,8 +219,6 @@ Outer  (Frameworks / Drivers / UI)
 
 Nothing in an inner circle may know anything about an outer circle. Data crossing a boundary must be in a form convenient for the inner circle — never raw framework types such as `Request`, `Response`, or ORM models.
 
-**In Plan Forge**: tool handlers (`forge_*`) are at the interface-adapter layer. They depend on `hub.mjs` and `memory.mjs` (inner). They MUST NOT depend on the orchestrator (peer layer). The orchestrator depends on tools, not the reverse.
-
 ### SOLID Principles
 
 | Principle | Rule | Violation to Watch |
@@ -241,9 +235,9 @@ Nothing in an inner circle may know anything about an outer circle. Data crossin
 
 Every commit that touches a file must leave it in a better state: rename a confusing variable, extract a guard clause, add a missing type, delete a dead comment. Accumulated Boy Scout passes are how large-scale cleanup happens safely without dedicated refactor sprints.
 
-**Corollary**: If you are forced to touch a file that has an active ESLint error (`complexity-error`, `max-lines-per-function-error`), fix that error in the same commit.
+**Corollary**: If you are forced to touch a file that has an active linter error (complexity, max-lines-per-function), fix that error in the same commit.
 
-**Corollary**: Do not introduce new violations in a file you are already cleaning. A PR that removes one `complexity-error` and adds another is net-zero, not Boy Scout compliant.
+**Corollary**: Do not introduce new violations in a file you are already cleaning. A PR that removes one violation and adds another is net-zero, not Boy Scout compliant.
 
 ### Component Cohesion
 
@@ -254,8 +248,6 @@ Three principles govern which modules belong together in a deployable component:
 | **REP** — Reuse/Release Equivalence | The granule of reuse is the granule of release. Group code that is released and versioned together. | Package / library design |
 | **CCP** — Common Closure Principle | Classes that change for the same reasons and at the same times belong in the same component. | Application component boundaries |
 | **CRP** — Common Reuse Principle | Do not depend on things you do not use. Split components that force consumers to redeploy for irrelevant changes. | Component splitting decisions |
-
-In Plan Forge the MCP tool surface, the orchestrator business logic, and the memory persistence layer are three distinct CCP components. A change to the memory schema should not force a redeployment of all 100+ tool handlers.
 
 ### Stable Dependencies Principle
 
@@ -282,20 +274,18 @@ A professional practitioner's obligation to say **"no"** clearly when:
 
 ---
 
-## Clean Code Standards (Phase 42 Catalog)
+## Clean Code Standards
 
 > **Reference**: *Clean Code* (Robert C. Martin) — the conceptual baseline for the guardrails in this section.
-> **Audit source**: Phase 42 Clean-Code Audit catalog — 27 actionable findings across 6 categories.
-> See `docs/plans/cleanup-findings/CATEGORIES-SUMMARY.md` for the full finding set.
 > **Detailed guardrails**: `.github/instructions/clean-code.instructions.md` (function rules, naming, commenting, PR checklist).
 
-Active guardrails derived from the Phase 42 audit:
+Active guardrails:
 
 | Category | Guard |
 |----------|-------|
-| **Module Size — high (A-series)** | No file may exceed 3,000 LOC. Extract sub-modules, split by Single Responsibility. |
-| **Module Size — medium (B-series)** | Files 1,000–3,000 LOC must be monitored; extract on the next feature addition to that file. |
-| **Long Parameter Lists (C-series)** | Functions with ≥4 positional parameters MUST wrap args in an options object (*Clean Code* Ch. 3: "Dyadic and Triadic Functions"). |
-| **ESLint Errors (D-series)** | All `complexity-error` violations in `orchestrator.mjs` and `server.mjs` are **blocking** — fix before any release gate. |
-| **ESLint Warnings (E-series)** | Batch-fix by rule; prioritise `complexity-warn` first, then nesting depth. |
-| **Console.log advisory (F-series)** | Every `console.log` must be intentional CLI output. Debug leakage is a warning sign; audit with each PR. |
+| **Module Size — high** | No file may exceed 3,000 LOC. Extract sub-modules, split by Single Responsibility. |
+| **Module Size — medium** | Files 1,000–3,000 LOC must be monitored; extract on the next feature addition to that file. |
+| **Long Parameter Lists** | Functions with ≥4 positional parameters MUST wrap args in an options object / parameter struct (*Clean Code* Ch. 3: "Dyadic and Triadic Functions"). |
+| **Linter Errors — complexity** | All complexity violations are **blocking** — fix before any release gate. |
+| **Linter Warnings** | Batch-fix by rule; prioritise complexity warnings first, then nesting depth. |
+| **Debug-output advisory** | Every `console.log` / `print` / `Console.WriteLine` must be intentional output. Debug leakage is a warning sign; audit with each PR. |

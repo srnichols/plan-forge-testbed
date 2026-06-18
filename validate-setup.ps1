@@ -33,11 +33,11 @@ function Check-FileExists([string]$RelPath, [bool]$Required = $true) {
         if ($size -eq 0) {
             Write-Host "  FAIL  $RelPath (empty file)" -ForegroundColor Red
             if ($Required) { $script:fail++ } else { $script:warn++ }
-            return $false
+            return
         }
         Write-Host "  PASS  $RelPath ($size bytes)" -ForegroundColor Green
         $script:pass++
-        return $true
+        return
     }
     else {
         if ($Required) {
@@ -48,7 +48,7 @@ function Check-FileExists([string]$RelPath, [bool]$Required = $true) {
             Write-Host "  WARN  $RelPath (missing — optional)" -ForegroundColor Yellow
             $script:warn++
         }
-        return $false
+        return
     }
 }
 

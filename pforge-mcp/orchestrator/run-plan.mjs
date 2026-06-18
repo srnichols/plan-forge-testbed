@@ -30,11 +30,11 @@ import { API_ALLOWED_ROLES, COST_ANOMALY_MULTIPLIER, CRUCIBLE_STALL_CUTOFF_DAYS,
 import { LogEventHandler, OrchestratorEventBus, appendEvent, writeSilentExitRecord } from "./event-bus.mjs";
 import { buildSlicePrompt } from "./prompt-builders.mjs";
 import { parsePlan, computeLockHash, normalizeSliceId, compareSliceIds, parseOnlySlicesExpr, parseWorkerTimeoutValue, parseSlices, buildDAG, loadPlanParserConfig } from "./plan-parser.mjs";
-import { resetCliWorkersCache, setGhCopilotProbe, isDirectApiOnlyModel, isCopilotServableModel, isApiOnlyModel, getFoundryAuthScope, detectApiProvider, setSecretsLoader, buildApiMessages, generateImage, loadWorkerCapabilities, compareVersions, detectPackageManager, suggestInstall, classifyProbeFailure, detectWorkers, detectExecutionRuntime, detectClientHost, describeBillingSurface, getRoutingPreference, loadRoutingPreference, resolveRequiredCli, probeQuorumModelAvailability, filterQuorumModels, formatQuorumSummary, assessQuorumViability, detectRuntimes, spawnWorker, detectHelpTextOutput, detectSilentWorkerFailure, detectKilledBySignal, deriveVendorFromModel, extractTokens, shouldDefaultPremiumRequestsToOne, parseStderrStats, resolveWorkerOutputIdleMs, resolveWorkerTimeoutMs } from "./worker-spawn.mjs";
+import { resetCliWorkersCache, setGhCopilotProbe, isDirectApiOnlyModel, isCopilotServableModel, isApiOnlyModel, getFoundryAuthScope, detectApiProvider, setSecretsLoader, buildApiMessages, generateImage, loadWorkerCapabilities, compareVersions, detectPackageManager, suggestInstall, classifyProbeFailure, detectWorkers, detectExecutionRuntime, detectClientHost, describeBillingSurface, getRoutingPreference, loadRoutingPreference, resolveRequiredCli, probeQuorumModelAvailability, filterQuorumModels, formatQuorumSummary, assessQuorumViability, detectRuntimes, spawnWorker, detectHelpTextOutput, detectSilentWorkerFailure, detectKilledBySignal, deriveVendorFromModel, extractTokens, shouldDefaultPremiumRequestsToOne, parseStderrStats, resolveWorkerOutputIdleMs, resolveWorkerTimeoutMs, assertWorkerBackendReady } from "./worker-spawn.mjs";
 import { resolveGateTimeoutMs, __resetBashPathCache, resolveBashPath, detectSelfRepairMissed, buildRetryPrompt, coalesceGateLines, editDistance, isPlaceholderToken, suggestAllowedCommand, looksLikeProse, runGate, SequentialScheduler, ParallelScheduler, CompetitiveScheduler, selectWinner, detectScopeConflicts } from "./schedulers.mjs";
 import { ensureForgeDir, pruneForgeRuns, recordModelPerformance, readForgeJson, appendForgeJsonl, readForgeJsonl, auditOrphanForgeFiles, loadModelPerformance, aggregateModelStats, getCostReport, getHealthTrend, emitToolTelemetry, loadGateCheckConfig, registerGateCheckResponder } from "./forge-io.mjs";
 import { extractPlanReleaseVersion, detectVersionCollision, parseValidationGates, lintGateCommands, validateGatePortability, isGateCommandAllowed, regressionGuard } from "./gate-helpers.mjs";
-import { isDestructiveSliceTitle, isWorktreeExemptPath, loadTeardownGuardConfig, verifyBranchSafety, captureAbsorbedCommits, snapshotPreSliceState, pushSliceSnapshot, popSliceSnapshot, attachSliceSnapshotRestore, cleanupStaleSnapshots, extractFilesModifiedExhaustive, verifyFilesModified, autoCommitSliceIfDirty, stageOrphansOnSliceFailure } from "./git-safety.mjs";
+import { isDestructiveSliceTitle, isWorktreeExemptPath, loadTeardownGuardConfig, verifyBranchSafety, captureAbsorbedCommits, snapshotPreSliceState, pushSliceSnapshot, popSliceSnapshot, attachSliceSnapshotRestore, cleanupStaleSnapshots, extractFilesModifiedExhaustive, verifyFilesModified, verifyDeletionSlice, verifySliceScope, autoCommitSliceIfDirty, stageOrphansOnSliceFailure } from "./git-safety.mjs";
 import { registerCorrelationThreadResponder, isDeployTrigger, runPreDeployHook, parseGitPorcelain, parseShortstat, resetPostSliceHookFired, runPostSliceHook, resetPostSliceTemperingFired, runPostSliceTemperingHook, runPreAgentHandoffHook, loadOpenClawConfig, postOpenClawSnapshot, runPostRunAuditorHook } from "./hooks.mjs";
 import { findLatestRun, parseEventLine, parseEventsLog, readSliceArtifacts, normalizeRunState, readCrucibleState, readReviewQueueState, buildWatchSnapshot, readHomeSnapshot, detectWatchAnomalies, recommendFromAnomalies, ensureReviewQueueDirs, ensureNotificationsDirs, ensureNotificationsConfig, generateReviewItemId, readReviewItem, listReviewItems, addReviewItem, resolveReviewItem, maybeAddStallReview, maybeAddTemperingReview, maybeAddBugReview, maybeAddVisualBaselineReview, maybeAddFixPlanReview, appendWatchHistory, runWatch, runWatchLive, scoreSliceComplexity } from "./review-watcher.mjs";
 import { inferSliceType, recommendModel } from "./model-scoring.mjs";
@@ -105,7 +105,7 @@ export { PROPOSED_FIX_DIR };
  */
 export function defaultRunGitApply({ cwd, args, stdin }) {
   try {
-    execSync(`git ${args.join(" ")}`, {
+    execFileSync("git", args, {
       cwd,
       input: stdin,
       stdio: ["pipe", "pipe", "pipe"],
@@ -1262,13 +1262,31 @@ export async function runPlan(planPath, options = {}) {
 
   // Estimation mode — return without executing
   if (estimate) {
+    // Bonus preflight: surface (but don't block) a missing/unauthenticated
+    // worker backend so users see the problem before committing to Full Auto.
+    const estimateAuthGate = assertWorkerBackendReady({ model: effectiveModel, worker, cwd });
+    if (estimateAuthGate) {
+      // eslint-disable-next-line no-console
+      console.error(`[preflight] ${estimateAuthGate.error}`);
+    }
     const estimateQuorumConfig = _buildEstimateQuorumConfig(quorum, cwd, quorumPreset, quorumThreshold);
-    return buildEstimate({ plan, model: effectiveModel, cwd, quorumConfig: estimateQuorumConfig, resumeFrom, worker });
+    const estimateResult = buildEstimate({ plan, model: effectiveModel, cwd, quorumConfig: estimateQuorumConfig, resumeFrom, worker });
+    if (estimateAuthGate) estimateResult.workerWarning = estimateAuthGate.error;
+    return estimateResult;
   }
 
   // Dry run — parse and validate only
   if (dryRun) {
     return _buildDryRunResult(plan, worker);
+  }
+
+  // Worker-backend preflight: refuse to start Full Auto when no usable worker
+  // exists (e.g. gh not authenticated). Returns a clean, actionable failure
+  // instead of dispatching doomed workers — which previously cascaded into N
+  // opaque slice failures (and, before the UV_HANDLE_CLOSING fix, a libuv abort).
+  const workerAuthGate = assertWorkerBackendReady({ model: effectiveModel, worker, cwd });
+  if (workerAuthGate) {
+    return { ...workerAuthGate, planPath };
   }
 
   // Phase GITHUB-B Slice 3 + gate lint + gate synthesis pre-flight
@@ -1355,7 +1373,7 @@ export function loadModelRouting(cwd) {
   } catch {
     // Invalid JSON or missing file — use defaults
   }
-  return { default: "claude-opus-4.6" };
+  return { default: "claude-opus-4.7" };
 }
 
 /**
@@ -1526,7 +1544,7 @@ function triggerCiWorkflow(ciConfig, eventBus) {
         args.push("-f", `${key}=${value}`);
       }
     }
-    execSync(`gh ${args.join(" ")}`, { encoding: "utf-8", timeout: 30_000 });
+    execFileSync("gh", args, { encoding: "utf-8", timeout: 30_000 });
 
     const result = { workflow, ref, status: "triggered", timestamp };
     eventBus.emit("ci-triggered", result);
@@ -2044,6 +2062,57 @@ function _executeSliceFilesModifiedCheck({ sliceResult, slice, cwd, sliceStartHe
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Issue #227 — fail a deletion slice whose commit re-added the files it was
+ * supposed to remove. A pure-deletion slice ("Delete redundant …") that
+ * commits an ADD of its declared targets is the inverse of its intent; the
+ * slice's own gate did not catch this in Phase-86 Slice 12. Marking the slice
+ * failed lets the retry/rollback machinery restore the correct deleted state.
+ */
+function _executeSliceDeletionInversionCheck({ sliceResult, slice, cwd, sliceStartHead, eventBus }) {
+  if (sliceResult.status !== "passed") return;
+  try {
+    const check = verifyDeletionSlice({ slice, cwd, startSha: sliceStartHead });
+    if (!check.applicable || !check.inverted) return;
+    const paths = check.offending.map(o => o.path).join(", ");
+    sliceResult.status = "failed";
+    sliceResult.statusReason = `deletion-inversion: slice "${slice.title}" committed an ADD of files it should delete (${paths})`;
+    sliceResult.deletionInversion = { offending: check.offending };
+    eventBus?.emit("slice-deletion-inversion", {
+      sliceNumber: slice.number,
+      sliceTitle: slice.title,
+      offending: check.offending,
+    });
+  } catch { /* non-fatal */ }
+}
+
+/**
+ * Issue #230 — fail a slice whose entire commit landed outside its declared
+ * file scope. The Phase-93 false-green run committed only out-of-scope
+ * `.github/instructions/*.md` docs while every promised in-scope feature file
+ * was missing, yet 14/14 slices reported PASSED. When a slice declares a
+ * non-empty scope and NONE of the changed paths match it, the worker did not
+ * build what it was told to. Marking the slice failed lets the retry/rollback
+ * machinery recover instead of pushing a doc-only no-op as a feature build.
+ */
+function _executeSliceScopeEscapeCheck({ sliceResult, slice, cwd, sliceStartHead, eventBus }) {
+  if (sliceResult.status !== "passed") return;
+  try {
+    const check = verifySliceScope({ slice, cwd, startSha: sliceStartHead });
+    if (!check.applicable || !check.escaped) return;
+    const paths = check.offending.slice(0, 10).join(", ");
+    sliceResult.status = "failed";
+    sliceResult.statusReason = `scope-escape: slice "${slice.title}" committed only out-of-scope files (${paths}); none match declared scope (${check.scope.join(", ")})`;
+    sliceResult.scopeEscape = { offending: check.offending, scope: check.scope };
+    eventBus?.emit("slice-scope-escape", {
+      sliceNumber: slice.number,
+      sliceTitle: slice.title,
+      offending: check.offending,
+      scope: check.scope,
+    });
+  } catch { /* non-fatal */ }
+}
+
 function _executeSliceStampCost(sliceResult) {
   try {
     const rec = calculateSliceCost(sliceResult.tokens, sliceResult.worker);
@@ -2170,7 +2239,7 @@ async function _executeSliceDispatchWorkerForAttempt({ mode, worker, slice, cwd,
   const { proxy, proxyEnv } = await _executeSliceStartProxy({ networkAllowed, networkEnforce, runDir, slice });
   try {
     const workerResult = await spawnWorker(sliceInstructions, {
-      model: currentModel, cwd, worker, runPlanActive: true,
+      model: currentModel, cwd, runPlanActive: true,
       timeout: resolveWorkerTimeoutMs({ sliceOverride: slice.workerTimeoutMs }),
       eventBus, extraEnv: proxyEnv,
     });
@@ -2331,6 +2400,8 @@ async function executeSlice(slice, options) {
   });
 
   _executeSliceFilesModifiedCheck({ sliceResult, slice, cwd, sliceStartHead, eventBus });
+  _executeSliceDeletionInversionCheck({ sliceResult, slice, cwd, sliceStartHead, eventBus });
+  _executeSliceScopeEscapeCheck({ sliceResult, slice, cwd, sliceStartHead, eventBus });
   const costRecord = _executeSliceStampCost(sliceResult);
 
   writeFileSync(
@@ -2695,6 +2766,7 @@ const ORCHESTRATOR_SURFACE_EXPORTS = [
   "TEMPERING_SCAN_STALE_DAYS",
   "UNIX_TOOLS",
   "__resetBashPathCache",
+  "__resetChildShutdownGuard",
   "addReviewItem",
   "aggregateModelStats",
   "analyzeWithQuorum",
@@ -2702,6 +2774,7 @@ const ORCHESTRATOR_SURFACE_EXPORTS = [
   "appendForgeJsonl",
   "appendWatchHistory",
   "applyFixProposal",
+  "assertWorkerBackendReady",
   "assessQuorumViability",
   "attachSliceSnapshotRestore",
   "auditOrphanForgeFiles",
@@ -2761,6 +2834,7 @@ const ORCHESTRATOR_SURFACE_EXPORTS = [
   "getHealthTrend",
   "getRoutingPreference",
   "inferSliceType",
+  "installChildCleanupHandlers",
   "isApiOnlyModel",
   "isCopilotServableModel",
   "isDeployTrigger",
@@ -2769,6 +2843,7 @@ const ORCHESTRATOR_SURFACE_EXPORTS = [
   "isGateCommandAllowed",
   "isPlaceholderToken",
   "isWorktreeExemptPath",
+  "killTrackedChildren",
   "lintGateCommands",
   "listPlanPostmortems",
   "listReviewItems",

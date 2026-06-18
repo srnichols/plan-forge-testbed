@@ -1,80 +1,81 @@
 ---
-description: .NET testing patterns — xUnit/NUnit, Testcontainers, integration testing
-applyTo: '**/*.Tests/**,**/*Test*.cs,**/*Spec*.cs'
+description: TypeScript testing patterns — Vitest/Jest, Supertest, integration testing
+applyTo: '**/*.test.ts,**/*.spec.ts,**/tests/**,**/vitest.config.*,**/jest.config.*'
 ---
 
-# .NET Testing Patterns
+# TypeScript Testing Patterns
 
 ## Tech Stack
 
-- **Unit Tests**: xUnit (recommended) or NUnit
-- **Assertions**: FluentAssertions or xUnit Assert
-- **Mocking**: Moq or NSubstitute
-- **Integration**: Testcontainers, WebApplicationFactory
+- **Test Runner**: Vitest (recommended) or Jest
+- **API Testing**: Supertest
+- **Mocking**: vi.mock (Vitest) or jest.mock, MSW for HTTP
 - **E2E**: Playwright
+- **Coverage**: v8 / istanbul
 
 ## Test Types
 
 | Type | Scope | Database | Speed |
 |------|-------|----------|-------|
-| **Unit** | Single class/method | Mocked | Fast (ms) |
-| **Integration** | Service + DB | Real (Testcontainers) | Medium (1-3s) |
-| **E2E** | Full HTTP flow | Real | Slow (10s+) |
+| **Unit** | Single function/class | Mocked | Fast (ms) |
+| **Integration** | Service + DB | Real (Docker) | Medium (1-3s) |
+| **E2E** | Full user flows | Real (Docker) | Slow (10s+) |
 
 ## Patterns
 
-### Unit Test (xUnit)
-```csharp
-public class UserServiceTests
-{
-    [Fact]
-    public async Task GetUser_WithValidId_ReturnsUser()
-    {
-        // Arrange
-        var repo = Substitute.For<IUserRepository>();
-        repo.GetByIdAsync("user-1", Arg.Any<CancellationToken>())
-            .Returns(new User { Id = "user-1", Name = "Test" });
-        var service = new UserService(repo);
+### Unit Test (Vitest)
+```typescript
+import { describe, it, expect, vi } from 'vitest';
+import { UserService } from './user.service';
 
-        // Act
-        var result = await service.GetUserAsync("user-1");
+describe('UserService', () => {
+  it('should return user by ID', async () => {
+    // Arrange
+    const mockRepo = { findById: vi.fn().mockResolvedValue({ id: '1', name: 'Test' }) };
+    const service = new UserService(mockRepo);
 
-        // Assert
-        result.Should().NotBeNull();
-        result.Name.Should().Be("Test");
-    }
-}
+    // Act
+    const result = await service.getUser('1');
+
+    // Assert
+    expect(result).toBeDefined();
+    expect(result.name).toBe('Test');
+    expect(mockRepo.findById).toHaveBeenCalledWith('1');
+  });
+});
 ```
 
-### Integration Test (WebApplicationFactory)
-```csharp
-public class UsersApiTests(WebApplicationFactory<Program> factory) 
-    : IClassFixture<WebApplicationFactory<Program>>
-{
-    [Fact]
-    public async Task GetUsers_ReturnsOk()
-    {
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/users");
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
-}
+### API Integration Test (Supertest)
+```typescript
+import request from 'supertest';
+import { app } from '../app';
+
+describe('GET /api/users', () => {
+  it('should return 200 with user list', async () => {
+    const response = await request(app)
+      .get('/api/users')
+      .set('Authorization', `Bearer ${testToken}`)
+      .expect(200);
+
+    expect(response.body).toBeInstanceOf(Array);
+  });
+});
 ```
 
 ## Conventions
 
-- Test file: `{ClassName}Tests.cs`
-- Test method: `{Method}_{Scenario}_{ExpectedResult}`
-- Use `[Trait("Category", "Unit")]` or `[Trait("Category", "Integration")]` for filtering
-- Run specific categories: `dotnet test --filter "Category=Unit"`
+- Test file: `{module}.test.ts` or `{module}.spec.ts`
+- Test name: `should {expected behavior} when {condition}`
+- Collocate tests next to source, or use `__tests__/` directory
+- Use `describe` blocks to group related tests
 
 ## Validation Gates (for Plan Hardening)
 
 ```markdown
-- [ ] `dotnet build` passes with zero errors
-- [ ] `dotnet test --filter "Category=Unit"` — all pass
-- [ ] `dotnet test --filter "Category=Integration"` — all pass
-- [ ] Anti-pattern grep: `grep -rn "\.Result\b\|\.Wait()\|\.GetAwaiter().GetResult()" --include="*.cs"` returns zero hits
+- [ ] `pnpm build` passes with zero errors
+- [ ] `pnpm test -- --run` — all pass
+- [ ] `pnpm lint` — no violations
+- [ ] Anti-pattern grep: `grep -rn "as any\|@ts-ignore\|@ts-expect-error" --include="*.ts"` returns zero hits in new files
 
 ## See Also
 
@@ -89,20 +90,20 @@ public class UsersApiTests(WebApplicationFactory<Program> factory)
 
 | Shortcut | Why It Breaks |
 |----------|--------------|
-| "This method is too simple to test" | Simple methods get modified later. The test documents the contract and catches regressions when someone changes the "simple" logic. |
+| "This function is too simple to test" | Simple functions get modified later. The test documents the contract and catches regressions when someone changes the "simple" logic. |
 | "I'll add tests after the feature works" | Technical debt compounds exponentially. Red-Green-Refactor means the test exists before the implementation. |
 | "The integration test covers this unit" | Integration tests are slow, don't pinpoint failures, and can't run in CI quickly. Unit tests are the foundation of the test pyramid. |
-| "This is just a DTO — no logic to test" | Validation rules, default values, and serialization attributes are logic. Test that `[Required]` fields reject null, that defaults are correct. |
-| "Mocking this dependency is too complex" | If it's hard to mock, the design has too much coupling. Fix the design with interfaces and DI — don't skip the test. |
-| "One test for the happy path is enough" | Edge cases cause production incidents. Test null inputs, empty collections, boundary values, and concurrent access. |
+| "This is just a type/interface — no logic to test" | Validation schemas, default values, and transform logic are testable behavior. Test that Zod schemas reject invalid input, that defaults are correct. |
+| "Mocking this dependency is too complex" | If it's hard to mock, the design has too much coupling. Fix the design with dependency injection — don't skip the test. |
+| "One test for the happy path is enough" | Edge cases cause production incidents. Test null inputs, empty arrays, boundary values, and async error paths. |
 
 ---
 
 ## Warning Signs
 
-- A test file has fewer test methods than the class under test has public methods (coverage gap)
-- Test names describe implementation (`Test_CallsRepository`) instead of behavior (`GetUser_WithInvalidId_ThrowsNotFound`)
-- Tests use `Thread.Sleep` or hardcoded delays instead of async patterns or test fakes
-- No `[Trait("Category", "Integration")]` attributes — unable to filter fast vs slow tests
+- A test file has fewer `it()` / `test()` blocks than the module under test has exported functions (coverage gap)
+- Test names describe implementation (`test calls repository`) instead of behavior (`returns 404 when user not found`)
+- Tests use `setTimeout` or hardcoded delays instead of `async/await` with proper assertions
+- No test categorization — unable to filter unit vs integration vs e2e tests
 - Arrange section is longer than 15 lines (test is testing too much or setup needs extraction)
-- Tests directly `new` up concrete dependencies instead of using mocks or DI containers
+- Tests import concrete implementations instead of using mocks or dependency injection
