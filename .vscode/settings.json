@@ -10,6 +10,12 @@
     // Remove or set to false to require manual handoff button clicks between pipeline agents.
     "chat.subagents.allowInvocationsFromSubagents": true,
 
+    // Apply .github/instructions + .github/prompts from this repo when it's opened as a parent folder
+    "chat.useCustomizationsInParentRepositories": true,
+
+    // Enable .prompt.md prompt files for the Plan Forge pipeline steps
+    "chat.promptFiles": true,
+
     // Point Copilot to your instruction files for inline suggestions
     "github.copilot.chat.codeGeneration.instructions": [
         { "file": ".github/instructions/architecture-principles.instructions.md" },
