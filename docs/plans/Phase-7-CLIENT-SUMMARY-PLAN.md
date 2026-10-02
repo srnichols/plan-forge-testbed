@@ -120,28 +120,53 @@ _None — all requirements are clear for this validation feature._
 
 ## Execution Slices
 
-### Slice 1: Model + Service Interface + Tests (TDD Red)
-**Files created**: `ClientActivitySummary.cs`, `IClientSummaryService.cs`, `ClientSummaryServiceTests.cs`
-**Validation gate**:
-- [ ] `dotnet build` succeeds (tests compile)
-- [ ] `dotnet test --filter ClientSummaryServiceTests` — tests fail (Red phase confirmed)
-- [ ] No changes to files outside scope contract
+### Slice 1: Model + Service Interface + Tests (TDD Red) [scope: src/TimeTracker.Core/Models/ClientActivitySummary.cs, src/TimeTracker.Api/Services/IClientSummaryService.cs, tests/TimeTracker.Tests/ClientSummaryServiceTests.cs]
 
-### Slice 2: Service Implementation (TDD Green)
-**Files created**: `ClientSummaryService.cs`
-**Files modified**: `Program.cs` (DI registration — 1 line)
-**Validation gate**:
-- [ ] `dotnet test --filter ClientSummaryServiceTests` — all tests pass (Green phase)
-- [ ] `dotnet test` — all existing tests still pass (regression check)
-- [ ] No changes to files outside scope contract
+**Goal**: Define the response shape and the service contract, and write the failing tests that pin the acceptance criteria.
 
-### Slice 3: Controller + Final Validation
-**Files created**: `ClientSummaryController.cs`
-**Validation gate**:
-- [ ] `dotnet build` succeeds
-- [ ] `dotnet test` — all tests pass (existing + new)
-- [ ] Controller follows existing pattern (try-catch, CancellationToken, `[ApiController]`, 404 ProblemDetails on not-found)
-- [ ] No TODOs, FIXMEs, stubs, or placeholder code
+**Tasks**:
+1. Create `src/TimeTracker.Core/Models/ClientActivitySummary.cs`: a `public record ClientActivitySummary` with `ClientId`, `ClientName`, `ProjectCount`, `TotalHours`, `BillableHours`, `NonBillableHours`, `InvoiceCount`, `OutstandingTotal` (decimal hours and totals, matching the existing `DashboardSummary`).
+2. Create `src/TimeTracker.Api/Services/IClientSummaryService.cs` with `Task<ClientActivitySummary?> GetSummaryAsync(int clientId, CancellationToken ct = default)`; `null` means the client does not exist.
+3. Create `tests/TimeTracker.Tests/ClientSummaryServiceTests.cs` following the existing service tests' setup. Cover the happy path, client not found (returns `null`), a client with no activity (all zeros), and mixed billable/non-billable hours. Reference `ClientSummaryService`, which does not exist yet, so the test project does not compile until Slice 2 (TDD Red).
+
+**Validation Gate**:
+```bash
+dotnet build src/TimeTracker.Api/TimeTracker.Api.csproj --nologo -v q
+node -e "const f=require('fs');['src/TimeTracker.Core/Models/ClientActivitySummary.cs','src/TimeTracker.Api/Services/IClientSummaryService.cs','tests/TimeTracker.Tests/ClientSummaryServiceTests.cs'].forEach(p=>f.statSync(p));if(!f.readFileSync('tests/TimeTracker.Tests/ClientSummaryServiceTests.cs','utf8').includes('ClientSummaryService'))throw new Error('tests do not exercise ClientSummaryService');console.log('OK')"
+```
+
+---
+
+### Slice 2: Service Implementation (TDD Green) [depends: Slice 1] [scope: src/TimeTracker.Api/Services/ClientSummaryService.cs, src/TimeTracker.Api/Program.cs]
+
+**Goal**: Implement the service so the Slice 1 tests pass, without breaking any existing test.
+
+**Tasks**:
+1. Create `src/TimeTracker.Api/Services/ClientSummaryService.cs` implementing `IClientSummaryService` with a primary constructor taking `TimeTrackerDbContext`. Return `null` when the client does not exist. Count only active projects; sum hours from the client's projects' time entries, split by `IsBillable`; `OutstandingTotal` sums `Total` of the client's invoices whose `Status` is `Draft` or `Issued`. Pass the `CancellationToken` to every EF Core call.
+2. In `src/TimeTracker.Api/Program.cs`, add exactly one line: `builder.Services.AddScoped<IClientSummaryService, ClientSummaryService>();` next to the other service registrations.
+
+**Validation Gate**:
+```bash
+dotnet test tests/TimeTracker.Tests/TimeTracker.Tests.csproj --nologo --filter ClientSummaryServiceTests
+dotnet test TimeTracker.slnx --nologo
+```
+
+---
+
+### Slice 3: Controller + Final Validation [depends: Slice 2] [scope: src/TimeTracker.Api/Controllers/ClientSummaryController.cs]
+
+**Goal**: Expose the summary over HTTP with the codebase's controller conventions.
+
+**Tasks**:
+1. Create `src/TimeTracker.Api/Controllers/ClientSummaryController.cs`: `[ApiController]`, route `api/clients/{id:int}/summary`, primary constructor taking `IClientSummaryService`. `GET` returns `200` with the summary, or `404` ProblemDetails when the service returns `null`; propagate the request's `CancellationToken`; wrap unexpected errors in a `500` ProblemDetails like the existing controllers.
+2. Leave no TODOs, FIXMEs, stubs or placeholder code in any file this phase created.
+
+**Validation Gate**:
+```bash
+dotnet build TimeTracker.slnx --nologo -v q
+dotnet test TimeTracker.slnx --nologo
+node -e "const s=require('fs').readFileSync('src/TimeTracker.Api/Controllers/ClientSummaryController.cs','utf8');for(const t of ['[ApiController]','summary','CancellationToken','NotFound']){if(!s.includes(t))throw new Error('controller missing '+t)};if(/TODO|FIXME/.test(s))throw new Error('placeholder left');console.log('OK')"
+```
 
 ---
 
