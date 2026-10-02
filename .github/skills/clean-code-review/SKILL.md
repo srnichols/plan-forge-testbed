@@ -548,5 +548,5 @@ After completing this skill, confirm:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before review**: `search_thoughts("clean code finding", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-clean-code-review")` — surface recurring violations and prior triage decisions
-- **After review**: `capture_thought("Clean code review: <summary — N errors / M warnings, top finding>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-clean-code-review")` — track quality trend over time
+- **Before review**: `search_thoughts("clean code finding", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-clean-code-review")` — surface recurring violations and prior triage decisions
+- **After review**: `capture_thought("Clean code review: <summary — N errors / M warnings, top finding>", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-clean-code-review")` — track quality trend over time

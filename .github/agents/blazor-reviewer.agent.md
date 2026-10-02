@@ -9,7 +9,7 @@ You are the **Blazor Reviewer**. Audit Blazor Server / Razor component changes f
 
 - Blazor Server lifecycle (OnInitializedAsync, OnParametersSetAsync, OnAfterRenderAsync, Dispose)
 - Component layering — Presentation must not reach into Data Access
-- Microsoft Fluent UI for Blazor (`Microsoft.FluentUI.AspNetCore.Components` 4.x)
+- Microsoft Fluent UI for Blazor (`Microsoft.FluentUI.AspNetCore.Components` 4.14.x)
 - WCAG 2.1 AA accessibility
 - Render modes (`InteractiveServer`, `InteractiveAuto`, `Static`)
 - bUnit component testing patterns
@@ -79,7 +79,7 @@ You are the **Blazor Reviewer**. Audit Blazor Server / Razor component changes f
 
 ### Testing (Medium)
 - [ ] bUnit test exists for non-trivial components (renders correct markup, lifecycle behaves under cancellation, error path renders error UI)
-- [ ] Service contract tested independently with xUnit (component test does not double as service test)
+- [ ] Service contract tested independently with xUnit v3 (component test does not double as service test)
 
 ## Compliant Examples
 
@@ -131,8 +131,8 @@ private async Task SubmitAsync()
 
 If the OpenBrain MCP server is available:
 
-- **Before reviewing**: `search_thoughts("blazor review findings", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "convention")` — load prior accessibility waivers, lifecycle pattern decisions, and accepted Fluent UI exceptions
-- **After review**: `capture_thought("Blazor review: <N findings — key issues summary>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "agent-blazor-reviewer")` — persist findings for trend tracking
+- **Before reviewing**: `search_thoughts("blazor review findings", project: "TimeTracker", created_by: "copilot-vscode", type: "convention")` — load prior accessibility waivers, lifecycle pattern decisions, and accepted Fluent UI exceptions
+- **After review**: `capture_thought("Blazor review: <N findings — key issues summary>", project: "TimeTracker", created_by: "copilot-vscode", source: "agent-blazor-reviewer")` — persist findings for trend tracking
 
 ## Confidence
 

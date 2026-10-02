@@ -6,8 +6,8 @@ priority: HIGH
 
 # AI Plan Hardening Runbook — Usage Instructions
 
-> **Purpose**: Quick-reference guide for using the [AI-Plan-Hardening-Runbook.md](./AI-Plan-Hardening-Runbook.md) to harden and execute phase plans  
-> **When to use**: Every time you have a new or updated `*-PLAN.md` to prepare for agent execution  
+> **Purpose**: Quick-reference guide for using the [AI-Plan-Hardening-Runbook.md](./AI-Plan-Hardening-Runbook.md) to harden and execute phase plans
+> **When to use**: Every time you have a new or updated `*-PLAN.md` to prepare for agent execution
 > **Version**: 2.0 (Multi-Stack)
 
 ---
@@ -178,9 +178,12 @@ Read these files first:
 5. docs/plans/PROJECT-PRINCIPLES.md (if exists)
 
 Also check for prior phase lessons (if they exist — skip if not found):
-- /memories/repo/conventions.md — patterns and conventions from earlier phases
-- /memories/repo/lessons-learned.md — past mistakes to avoid
-- /memories/repo/forbidden-patterns.md — patterns that caused regressions
+Prior lessons — enumerate `/memories/repo/`, do not guess filenames. Read what looks
+relevant to this plan's subject, then search memory too (`forge_search` with
+`sources: ["memory"]`, or `brain_recall` when OpenBrain is configured). Memory files
+are named by subject, so a fixed three-name check reports "no prior lessons" against a
+directory full of them. Report "searched N files + memory, nothing relevant" rather
+than "no prior lessons exist", and only record queries you actually ran.
 
 Now act as a PLAN HARDENING AGENT (see the Plan Hardening Prompt in the runbook).
 
@@ -230,6 +233,24 @@ After all sections are drafted, run a PLAN QUALITY SELF-CHECK before outputting:
 5. Do the Stop Conditions cover: build failure, test failure, scope violation, and security breach?
 6. Does every slice list only the instruction files relevant to its domain (not all 17)?
 7. Are MUST acceptance criteria from the spec traceable to at least one slice's validation gate?
+8. Can every gate actually FAIL? Run it against the absent thing and confirm a non-zero
+   exit. `vitest run <path>` on a path matching nothing exits 0 on vitest 2.x/3.x but 1 on
+   vitest 4 — version-dependent, so check your installed version rather than assuming, and
+   add `--passWithNoTests=false` if it exits 0. `pnpm --filter <pkg> <script>` exits 0 when
+   the script does not exist (use `pnpm run <script>` from inside the package). A gate
+   counting new files with `git diff HEAD~N` reads 0, because that never lists untracked
+   files. A gate asserting `>= 1` may already be satisfied by something pre-existing — run
+   it on a clean tree first.
+9. Can every gate also PASS? Before forbidding a string, confirm the tool that generates
+   the file does not always emit it — a gate forbidding `ALTER TABLE` is unsatisfiable in
+   a Prisma migration, because every foreign key is emitted that way. And if a slice
+   claims a red step, run the named suites first and confirm they actually go red.
+10. Does everything the plan names exist as a file — gate scripts, cited helpers, fixtures?
+    Check with `git ls-files`: a gitignored, untracked helper is absent from the worktree
+    the plan mandates.
+11. If the plan declares an isolated branch or worktree, does it carry bootstrap steps plus
+    a confirm-before-Slice-1 check? Treat any recorded baseline SHA as a hardening record,
+    not a branch point.
 
 If any check fails, revise the plan before outputting.
 

@@ -137,5 +137,5 @@ After completing this skill, confirm:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before executing**: `search_thoughts("plan execution failure", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "postmortem")` — load prior execution failures for this plan to avoid repeating mistakes
-- **After execution**: `capture_thought("Plan execution: <plan name> — <outcome summary>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-forge-execute")` — persist execution results and any lessons learned
+- **Before executing**: `search_thoughts("plan execution failure", project: "TimeTracker", created_by: "copilot-vscode", type: "postmortem")` — load prior execution failures for this plan to avoid repeating mistakes
+- **After execution**: `capture_thought("Plan execution: <plan name> — <outcome summary>", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-forge-execute")` — persist execution results and any lessons learned

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { QUORUM_MODES, WATCHER_MODES } from "../enums.mjs";
-import { createTraceContext, createTelemetryHandler, writeManifest, appendRunIndex, pruneRunHistory, addLogSummary } from "../telemetry.mjs";
+import { createTraceContext, createTelemetryHandler, writeManifest, appendRunIndex, addLogSummary } from "../telemetry.mjs";
 import { recordActivity } from "../team-activity.mjs";
 import { isOpenBrainConfigured, buildMemorySearchBlock, buildMemoryCaptureBlock, buildReflexionBlock, buildTrajectorySuffix, extractTrajectory, writeTrajectory, retrieveAutoSkills, buildAutoSkillContext, extractAutoSkill, writeAutoSkill, incrementAutoSkillReuse, buildRunSummaryThought, buildCostAnomalyThought, loadProjectContext, buildPlanBootContext, computeGateSuggestionKey, getGateSuggestionCounter, captureMemory, autoDrainOpenBrainQueue } from "../memory.mjs";
 import { enforceCrucibleId, CrucibleEnforcementError } from "../crucible-enforce.mjs";
@@ -26,11 +26,11 @@ import { startProxyLogger } from "../proxy-logger.mjs";
 import { buildCrossRunSnapshot } from "../watcher.mjs";
 import { inspectGithubStack as _inspectGithubStackDefault } from "../github-introspect.mjs";
 import { buildIssueBody as _buildIssueBodyDefault, dispatchSlice as _dispatchSliceDefault, pollPullRequest as _pollPullRequestDefault, DEFAULT_POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MS } from "../workers/copilot-coding-agent.mjs";
-import { API_ALLOWED_ROLES, COST_ANOMALY_MULTIPLIER, CRUCIBLE_STALL_CUTOFF_DAYS, DEFAULT_GATE_TIMEOUT_MS, DEFAULT_WORKER_OUTPUT_IDLE_MS, DEFAULT_WORKER_TIMEOUT_MS, EVENT_SOURCE, GATE_ALLOWED_PREFIXES, GATE_SUGGESTION_AUTO_INJECT_THRESHOLD, POSTMORTEM_RETENTION_COUNT, PROPOSED_FIX_DIR, QUORUM_PRESETS, REVIEW_RESOLUTIONS, REVIEW_SEVERITIES, REVIEW_SOURCES, REVIEW_STATUSES, SECURITY_RISK, SECURITY_RISK_FOR_TYPE, SUPPORTED_AGENTS, UNIX_TOOLS } from "./constants.mjs";
+import { API_ALLOWED_ROLES, COST_ANOMALY_MULTIPLIER, CRUCIBLE_STALL_CUTOFF_DAYS, DEFAULT_ESCALATION_CHAIN, DEFAULT_GATE_TIMEOUT_MS, DEFAULT_ROUTING_MODEL, DEFAULT_WORKER_OUTPUT_IDLE_MS, DEFAULT_WORKER_TIMEOUT_MS, EVENT_SOURCE, GATE_ALLOWED_PREFIXES, GATE_SUGGESTION_AUTO_INJECT_THRESHOLD, POSTMORTEM_RETENTION_COUNT, PROPOSED_FIX_DIR, QUORUM_PRESETS, REVIEW_RESOLUTIONS, REVIEW_SEVERITIES, REVIEW_SOURCES, REVIEW_STATUSES, SECURITY_RISK, SECURITY_RISK_FOR_TYPE, SUPPORTED_AGENTS, UNIX_TOOLS, WORKER_LAUNCH_RETRY_BACKOFF_MS } from "./constants.mjs";
 import { LogEventHandler, OrchestratorEventBus, appendEvent, writeSilentExitRecord } from "./event-bus.mjs";
 import { buildSlicePrompt } from "./prompt-builders.mjs";
-import { parsePlan, computeLockHash, normalizeSliceId, compareSliceIds, parseOnlySlicesExpr, parseWorkerTimeoutValue, parseSlices, buildDAG, loadPlanParserConfig } from "./plan-parser.mjs";
-import { resetCliWorkersCache, setGhCopilotProbe, isDirectApiOnlyModel, isCopilotServableModel, isApiOnlyModel, getFoundryAuthScope, detectApiProvider, setSecretsLoader, buildApiMessages, generateImage, loadWorkerCapabilities, compareVersions, detectPackageManager, suggestInstall, classifyProbeFailure, detectWorkers, detectExecutionRuntime, detectClientHost, describeBillingSurface, getRoutingPreference, loadRoutingPreference, resolveRequiredCli, probeQuorumModelAvailability, filterQuorumModels, formatQuorumSummary, assessQuorumViability, detectRuntimes, spawnWorker, detectHelpTextOutput, detectSilentWorkerFailure, detectKilledBySignal, deriveVendorFromModel, extractTokens, shouldDefaultPremiumRequestsToOne, parseStderrStats, resolveWorkerOutputIdleMs, resolveWorkerTimeoutMs, assertWorkerBackendReady } from "./worker-spawn.mjs";
+import { parsePlan, computeLockHash, normalizeSliceId, compareSliceIds, parseOnlySlicesExpr, parseWorkerTimeoutValue, parseSlices, buildDAG, restrictDagToSlices, loadPlanParserConfig } from "./plan-parser.mjs";
+import { resetCliWorkersCache, setGhCopilotProbe, isDirectApiOnlyModel, isCopilotServableModel, isApiOnlyModel, getFoundryAuthScope, detectApiProvider, setSecretsLoader, buildApiMessages, generateImage, loadWorkerCapabilities, compareVersions, detectPackageManager, suggestInstall, classifyProbeFailure, detectWorkers, detectExecutionRuntime, detectClientHost, describeBillingSurface, getRoutingPreference, loadRoutingPreference, resolveRequiredCli, probeQuorumModelAvailability, filterQuorumModels, formatQuorumSummary, assessQuorumViability, detectRuntimes, spawnWorker, detectHelpTextOutput, detectSilentWorkerFailure, detectWorkerLaunchFailure, detectKilledBySignal, deriveVendorFromModel, extractTokens, shouldDefaultPremiumRequestsToOne, parseStderrStats, resolveWorkerOutputIdleMs, resolveWorkerTimeoutMs, assertWorkerBackendReady } from "./worker-spawn.mjs";
 import { resolveGateTimeoutMs, __resetBashPathCache, resolveBashPath, detectSelfRepairMissed, buildRetryPrompt, coalesceGateLines, editDistance, isPlaceholderToken, suggestAllowedCommand, looksLikeProse, runGate, SequentialScheduler, ParallelScheduler, CompetitiveScheduler, selectWinner, detectScopeConflicts } from "./schedulers.mjs";
 import { ensureForgeDir, pruneForgeRuns, recordModelPerformance, readForgeJson, appendForgeJsonl, readForgeJsonl, auditOrphanForgeFiles, loadModelPerformance, aggregateModelStats, getCostReport, getHealthTrend, emitToolTelemetry, loadGateCheckConfig, registerGateCheckResponder } from "./forge-io.mjs";
 import { extractPlanReleaseVersion, detectVersionCollision, parseValidationGates, lintGateCommands, validateGatePortability, isGateCommandAllowed, regressionGuard } from "./gate-helpers.mjs";
@@ -449,7 +449,7 @@ function _handlePassedSliceResult(result, slice, ctx) {
 }
 
 async function _runPlanSliceCallback(slice, ctx) {
-  const { cwd, dryRunWorker, effectiveModel, modelRouting, mode, runDir, maxRetries,
+  const { cwd, artifactCwd, dryRunWorker, effectiveModel, modelRouting, mode, runDir, maxRetries,
     memoryEnabled, projectName, planPath, quorumConfig, escalationChain, eventBus,
     worker, _dispatchSlice, _pollPullRequest, planMeta } = ctx;
   // Bug #123: capture HEAD before the slice so we can deterministically
@@ -471,7 +471,7 @@ async function _runPlanSliceCallback(slice, ctx) {
     return _buildDryRunSliceResult(slice);
   }
   const result = await executeSlice(slice, {
-    cwd, model: effectiveModel, modelRouting, mode, runDir, maxRetries,
+    cwd, artifactCwd, model: effectiveModel, modelRouting, mode, runDir, maxRetries,
     memoryEnabled, projectName, planName: basename(planPath, ".md"),
     quorumConfig, escalationChain, eventBus,
     worker, _dispatchSlice, _pollPullRequest,
@@ -528,6 +528,8 @@ function _checkLockHash(plan, planPath) {
       `Plan body has drifted since it was hardened — lockHash mismatch.\n` +
       `  stored:   ${plan.meta.lockHash}\n` +
       `  computed: ${computedHash}\n` +
+      `If the plan was not edited since hardening, the hash now covers scope and gate lines that\n` +
+      `older versions skipped (meta-bug #285): review those lines before re-stamping.\n` +
       `Re-run Step 2 hardening to regenerate the lockHash, then retry.`,
     code: "LOCK_HASH_MISMATCH",
     storedHash: plan.meta.lockHash,
@@ -566,9 +568,9 @@ function _checkVersionCollision(planPath, cwd) {
   return null;
 }
 
-function _buildEstimateQuorumConfig(quorum, cwd, quorumPreset, quorumThreshold) {
+function _buildEstimateQuorumConfig(quorum, cwd, quorumPreset, quorumThreshold, includeGrokOverride = null) {
   if (!quorum) return null;
-  const estimateQuorumConfig = loadQuorumConfig(cwd, quorumPreset);
+  const estimateQuorumConfig = loadQuorumConfig(cwd, quorumPreset, { includeGrokOverride });
   estimateQuorumConfig.enabled = true;
   if (quorum === QUORUM_MODE_AUTO) estimateQuorumConfig.auto = true;
   else if (quorum === true) estimateQuorumConfig.auto = false;
@@ -632,9 +634,15 @@ function _runCopilotPreflight(_inspectGithubStack, cwd, planPath) {
 
 function _checkGateLintPreflight(planPath, cwd) {
   const gateLint = lintGateCommands(planPath, cwd);
-  if (gateLint.passed) return null;
   const errorSummary = gateLint.errors.map(e => `  ❌ ${e.message}`).join("\n");
   const warnSummary = gateLint.warnings.map(w => `  ⚠️ ${w.message}`).join("\n");
+  if (gateLint.passed) {
+    // A passing lint used to discard its warnings entirely, so a plan whose
+    // dependency declarations failed to parse ran with no signal at all — the
+    // silence meta #262 is about. stderr, so MCP stdio stays clean.
+    for (const w of gateLint.warnings) console.warn(`[orchestrator] ⚠️ ${w.message}`);
+    return null;
+  }
   return {
     status: "failed",
     error: "Gate lint pre-flight failed — fix these before executing:",
@@ -760,9 +768,9 @@ function _probeQuorumAvailability(quorumConfig) {
   }
 }
 
-function _buildRunPlanQuorumConfig({ quorum, cwd, quorumPreset, quorumThreshold }) {
+function _buildRunPlanQuorumConfig({ quorum, cwd, quorumPreset, quorumThreshold, includeGrokOverride = null }) {
   if (!quorum) return null;
-  const quorumConfig = loadQuorumConfig(cwd, quorumPreset);
+  const quorumConfig = loadQuorumConfig(cwd, quorumPreset, { includeGrokOverride });
   // "auto" (CLI default): preserve quorumConfig.enabled from .forge.json.
   // true / "true" / preset: caller explicitly requested quorum — force enabled regardless of config.
   const callerExplicit = quorum === true || quorum === "true" || quorumPreset !== null;
@@ -858,11 +866,14 @@ async function _captureRunMemoryAndDrain(summary, cwd, projectName) {
   const runSummary = buildRunSummaryThought(summary, projectName);
   const costAnomaly = buildCostAnomalyThought(summary, getCostReport(cwd), projectName);
   const receipts = { runSummary: null, costAnomaly: null };
+  // The builders return a full { content, project, source, created_by }
+  // envelope; captureMemory wants the text. Passing the envelope wrapped it a
+  // second time and made the record unsearchable (issue #254).
   if (runSummary) {
-    receipts.runSummary = captureMemory({ content: runSummary, type: "decision", source: "forge_run_plan", cwd });
+    receipts.runSummary = captureMemory({ content: runSummary.content, type: "decision", source: "forge_run_plan", cwd });
   }
   if (costAnomaly) {
-    receipts.costAnomaly = captureMemory({ content: costAnomaly, type: "gotcha", source: "forge_run_plan/cost", cwd });
+    receipts.costAnomaly = captureMemory({ content: costAnomaly.content, type: "gotcha", source: "forge_run_plan/cost", cwd });
   }
   summary._memoryCapture = {
     runSummary,
@@ -1072,8 +1083,10 @@ async function _finalizeRunPlan({
 
   // Issue #212: rewrite plan-file status header on a fully successful run so the
   // plan file reflects COMPLETE instead of remaining pinned at HARDENED.
+  // Issue #255: record the outcome — a status line the rewriter did not
+  // recognise used to be indistinguishable from "already complete".
   if (allPassed && !estimate && !dryRun) {
-    _rewritePlanStatusOnSuccess({
+    summary.planStatusRewrite = _rewritePlanStatusOnSuccess({
       planPath,
       cwd,
       shippedAt: summary.endTime || new Date().toISOString(),
@@ -1119,7 +1132,7 @@ function _setupRunInfrastructure({ planPath, cwd, mode, effectiveModel, plan, ev
 }
 
 async function _executeSlicesWithTempering({
-  plan, executionOrder, noTempering, scheduler, abortSignal, resumeFrom, hub, gateCheckConfig, sliceCtx,
+  plan, executionNodes, executionOrder, noTempering, scheduler, abortSignal, resumeFrom, hub, gateCheckConfig, sliceCtx,
 }) {
   const _priorDisableTempering = process.env.PFORGE_DISABLE_TEMPERING;
   if (noTempering) {
@@ -1127,10 +1140,15 @@ async function _executeSlicesWithTempering({
   }
   try {
     return await scheduler.execute(
-      plan.dag.nodes,
+      executionNodes || plan.dag.nodes,
       executionOrder,
-      (slice) => _runPlanSliceCallback(slice, sliceCtx),
-      { abortSignal, resumeFrom: resumeFrom ? String(resumeFrom) : null, hub, gateCheckConfig },
+      (slice) => _runPlanSliceCallback(slice, {
+        ...sliceCtx, cwd: slice.worktreePath ?? sliceCtx.cwd, artifactCwd: sliceCtx.cwd,
+      }),
+      {
+        abortSignal, resumeFrom: resumeFrom ? String(resumeFrom) : null, hub, gateCheckConfig,
+        projectDir: sliceCtx.dryRunWorker ? null : sliceCtx.cwd, runDir: sliceCtx.runDir,
+      },
     );
   } finally {
     _restoreDisableTempering(_priorDisableTempering);
@@ -1172,7 +1190,10 @@ function _writeFinalRunArtifacts({ summary, runDir, runId, cwd, trace, eventBus,
   // v2.4: Write manifest + index + prune (AFTER trace.json is written by emit)
   const manifest = writeManifest(runDir, runId, { ...summary, traceId: trace.traceId });
   appendRunIndex(cwd, runId, manifest);
-  pruneRunHistory(cwd, loadMaxRunHistory(cwd));
+  pruneForgeRuns(cwd, {
+    maxRuns: loadMaxRunHistory(cwd),
+    maxAgeDays: loadMaxRunAgeDays(cwd),
+  });
 }
 
 const _RUN_PLAN_DEFAULTS = Object.freeze({
@@ -1218,10 +1239,25 @@ function _normalizeRunPlanOptionsExtras(options) {
   };
 }
 
+function _runPlanEstimate({ plan, effectiveModel, worker, cwd, resumeFrom, quorum, quorumPreset, quorumThreshold, includeGrokOverride }) {
+  // Bonus preflight: surface (but don't block) a missing/unauthenticated
+  // worker backend so users see the problem before committing to Full Auto.
+  const estimateAuthGate = assertWorkerBackendReady({ model: effectiveModel, worker, cwd });
+  if (estimateAuthGate) {
+    // eslint-disable-next-line no-console
+    console.error(`[preflight] ${estimateAuthGate.error}`);
+  }
+  const estimateQuorumConfig = _buildEstimateQuorumConfig(quorum, cwd, quorumPreset, quorumThreshold, includeGrokOverride);
+  const estimateResult = buildEstimate({ plan, model: effectiveModel, cwd, quorumConfig: estimateQuorumConfig, resumeFrom, worker });
+  if (estimateAuthGate) estimateResult.workerWarning = estimateAuthGate.error;
+  return estimateResult;
+}
+
 export async function runPlan(planPath, options = {}) {
   const {
     cwd, model, mode, resumeFrom, estimate, dryRun, eventHandler, abortController,
     quorum, quorumThreshold, quorumPreset, bridge,
+    includeGrokOverride = null,
     manualImport, manualImportSource, manualImportReason,
     hub, strictGates, onlySlices, noTempering, allowRetrograde,
     worker, dryRunWorker,
@@ -1262,17 +1298,7 @@ export async function runPlan(planPath, options = {}) {
 
   // Estimation mode — return without executing
   if (estimate) {
-    // Bonus preflight: surface (but don't block) a missing/unauthenticated
-    // worker backend so users see the problem before committing to Full Auto.
-    const estimateAuthGate = assertWorkerBackendReady({ model: effectiveModel, worker, cwd });
-    if (estimateAuthGate) {
-      // eslint-disable-next-line no-console
-      console.error(`[preflight] ${estimateAuthGate.error}`);
-    }
-    const estimateQuorumConfig = _buildEstimateQuorumConfig(quorum, cwd, quorumPreset, quorumThreshold);
-    const estimateResult = buildEstimate({ plan, model: effectiveModel, cwd, quorumConfig: estimateQuorumConfig, resumeFrom, worker });
-    if (estimateAuthGate) estimateResult.workerWarning = estimateAuthGate.error;
-    return estimateResult;
+    return _runPlanEstimate({ plan, effectiveModel, worker, cwd, resumeFrom, quorum, quorumPreset, quorumThreshold, includeGrokOverride });
   }
 
   // Dry run — parse and validate only
@@ -1314,7 +1340,7 @@ export async function runPlan(planPath, options = {}) {
   const projectName = loadProjectName(cwd);
 
   // Quorum mode (v2.5) — fix #122: respect .forge.json quorum.enabled when quorum==="auto"
-  const quorumConfig = _buildRunPlanQuorumConfig({ quorum, cwd, quorumPreset, quorumThreshold });
+  const quorumConfig = _buildRunPlanQuorumConfig({ quorum, cwd, quorumPreset, quorumThreshold, includeGrokOverride });
 
   eventBus.emit("run-started", { ...runMeta, quorum: quorumConfig ? { enabled: quorumConfig.enabled, auto: quorumConfig.auto, threshold: quorumConfig.threshold } : null });
 
@@ -1340,9 +1366,14 @@ export async function runPlan(planPath, options = {}) {
 
   // Phase-33.1: Pre-filter execution order for --only-slices.
   const executionOrder = _resolveExecutionOrder(plan, onlySlices);
+  // Prune edges to excluded slices too, or a selected dependent slice can never
+  // become ready and the run dies in the #225 deadlock path (meta-bug #265).
+  const executionNodes = (onlySlices && onlySlices.length > 0)
+    ? restrictDagToSlices(plan.dag.nodes, executionOrder)
+    : plan.dag.nodes;
 
   const results = await _executeSlicesWithTempering({
-    plan, executionOrder, noTempering, scheduler, abortSignal, resumeFrom, hub, gateCheckConfig,
+    plan, executionNodes, executionOrder, noTempering, scheduler, abortSignal, resumeFrom, hub, gateCheckConfig,
     sliceCtx: {
       cwd, dryRunWorker, effectiveModel, modelRouting, mode, runDir, maxRetries,
       memoryEnabled, projectName, planPath, quorumConfig, escalationChain, eventBus,
@@ -1358,7 +1389,7 @@ export async function runPlan(planPath, options = {}) {
 
 /**
  * Load model routing configuration from .forge.json.
- * Schema: { "modelRouting": { "execute": "gpt-5.2-codex", "review": "claude-sonnet-4.6", "default": "auto" } }
+ * Schema: { "modelRouting": { "execute": "gpt-6-sol", "review": "claude-sonnet-5.5", "default": "auto" } }
  * Returns the modelRouting object, or defaults if not configured.
  */
 export function loadModelRouting(cwd) {
@@ -1373,7 +1404,7 @@ export function loadModelRouting(cwd) {
   } catch {
     // Invalid JSON or missing file — use defaults
   }
-  return { default: "claude-opus-4.7" };
+  return { default: DEFAULT_ROUTING_MODEL };
 }
 
 /**
@@ -1416,7 +1447,7 @@ function loadMaxRetries(cwd) {
 
 /**
  * Load escalation chain from .forge.json.
- * Schema: { "escalationChain": ["auto", "claude-opus-4.7", "gpt-5.3-codex"] }
+ * Schema: { "escalationChain": ["auto", "claude-opus-5.5", "gpt-6-astra"] }
  * On each retry, the orchestrator escalates to the next model in the chain.
  * First escalation jumps to top-tier reasoning (Opus 4.7 — strongest reasoner
  * for hard bugs), then to Codex for bug-fixing.
@@ -1460,7 +1491,7 @@ function loadEscalationChain(cwd) {
     }
   } catch { /* fall through to static default */ }
 
-  return ["auto", "claude-opus-4.7", "gpt-5.3-codex"];
+  return [...DEFAULT_ESCALATION_CHAIN];
 }
 
 // Phase-53 S4: gate-synthesis helpers → orchestrator/run-plan.mjs
@@ -1487,6 +1518,23 @@ function loadMaxRunHistory(cwd) {
     }
   } catch { /* defaults */ }
   return 50;
+}
+
+/**
+ * Age cutoff for `.forge/runs/` retention, in days.
+ * Runs are pruned when they fail EITHER this or `maxRunHistory` (issue #259).
+ *
+ * @returns {number}
+ */
+function loadMaxRunAgeDays(cwd) {
+  const configPath = resolve(cwd, ".forge.json");
+  try {
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      if (typeof config.maxRunAgeDays === "number" && config.maxRunAgeDays > 0) return config.maxRunAgeDays;
+    }
+  } catch { /* defaults */ }
+  return 30;
 }
 
 /**
@@ -1973,6 +2021,11 @@ function _executeSliceDetermineStatus({ workerResult, mode, slice, gateResult })
   } else if (killedBySignal) {
     status = "failed";
     statusReason = `worker killed before completion: ${killedBySignal}`;
+  } else if (gateResult.launchFailure) {
+    // Distinct from a gate failure: nothing ran, so the gate result would have
+    // described the absence of work rather than the quality of it (meta-bug #264).
+    status = "failed";
+    statusReason = `worker-launch-failed: ${gateResult.launchFailure}`;
   } else if (!gateResult.success) {
     status = "failed";
     statusReason = `validation gate failed: ${gateResult.failedCommand || "unknown"}`;
@@ -2023,7 +2076,7 @@ function _executeSliceBuildResult({ slice, status, statusReason, duration, worke
     status,
     duration,
     exitCode: workerResult.exitCode,
-    gateStatus: gateResult.success ? "passed" : "failed",
+    gateStatus: gateResult.launchFailure ? "skipped" : (gateResult.success ? "passed" : "failed"),
     gateOutput: gateResult.output,
     gateError: gateResult.error || null,
     failedCommand: gateResult.failedCommand || null,
@@ -2160,20 +2213,20 @@ function _executeSliceSelfRepairAdvisory({ sliceResult, workerResult, cwd, slice
   } catch { /* non-fatal */ }
 }
 
-function _executeSliceAutoSkillBookkeeping({ sliceResult, injectedAutoSkills, slice, planName, cwd, eventBus }) {
+function _executeSliceAutoSkillBookkeeping({ sliceResult, injectedAutoSkills, slice, planName, cwd, artifactCwd, eventBus }) {
   if (sliceResult.status !== "passed") return;
   try {
     for (const injected of injectedAutoSkills) {
       if (injected && injected.sha256Prefix) {
-        incrementAutoSkillReuse({ cwd, sha256Prefix: injected.sha256Prefix });
+        incrementAutoSkillReuse({ cwd: artifactCwd, sha256Prefix: injected.sha256Prefix });
       }
     }
   } catch { /* non-fatal */ }
   try {
     const record = extractAutoSkill({ slice, planBasename: planName, cwd });
     if (!record) return;
-    const path = writeAutoSkill({ cwd, record });
-    sliceResult.autoSkillPath = relative(cwd, path);
+    const path = writeAutoSkill({ cwd: artifactCwd, record });
+    sliceResult.autoSkillPath = relative(artifactCwd, path);
     sliceResult.autoSkillPrefix = record.sha256Prefix;
     if (eventBus) {
       eventBus.emit("auto-skill-captured", {
@@ -2249,6 +2302,44 @@ async function _executeSliceDispatchWorkerForAttempt({ mode, worker, slice, cwd,
   }
 }
 
+/**
+ * Record a launch failure for another attempt. A worker that never launched
+ * exits non-zero, so the loop's `exitCode !== 0` break used to end the run on
+ * attempt 0 and the transient lock was never retried (meta #264).
+ */
+async function _recordLaunchFailureForRetry({ launchFailure, workerResult, currentModel, attemptStartTime, attempt, maxRetries, logFile }) {
+  const next = attempt + 1;
+  const context = {
+    previousAttempt: next,
+    gateName: "(worker never launched — gate skipped)",
+    model: workerResult.model || currentModel || "auto",
+    durationMs: Date.now() - attemptStartTime,
+    stderrTail: [launchFailure, workerResult.stderr].filter(Boolean).join("\n\n"),
+  };
+  if (next <= maxRetries) {
+    await new Promise((r) => setTimeout(r, WORKER_LAUNCH_RETRY_BACKOFF_MS * next));
+    writeFileSync(logFile, `\n\n--- WORKER NEVER LAUNCHED, RETRYING (attempt ${next + 1}) ---\n${launchFailure}\n`, { flag: "a" });
+  }
+  return { lastError: launchFailure, lastFailureContext: context, attempt: next };
+}
+
+/** Record a failed validation gate for another attempt. */
+function _recordGateFailureForRetry({ gateResult, workerResult, currentModel, attemptStartTime, attempt, maxRetries, logFile }) {
+  const lastError = `Gate command '${gateResult.failedCommand || "unknown"}' failed:\n${gateResult.error || gateResult.output}`;
+  const next = attempt + 1;
+  const context = {
+    previousAttempt: next,
+    gateName: gateResult.failedCommand || "unknown",
+    model: workerResult.model || currentModel || "auto",
+    durationMs: Date.now() - attemptStartTime,
+    stderrTail: [gateResult.error, gateResult.output, workerResult.stderr].filter(Boolean).join("\n\n"),
+  };
+  if (next <= maxRetries) {
+    writeFileSync(logFile, `\n\n--- GATE FAILED, RETRYING (attempt ${next + 1}) ---\n${lastError}\n`, { flag: "a" });
+  }
+  return { lastError, lastFailureContext: context, attempt: next };
+}
+
 async function _executeSliceAttemptLoop(ctx) {
   const {
     slice, cwd, mode, runDir, maxRetries, worker,
@@ -2290,7 +2381,10 @@ async function _executeSliceAttemptLoop(ctx) {
     }
 
     const logFile = _executeSliceWriteLog({ runDir, slice, attempt, workerResult, startTime });
-    gateResult = _executeSliceRunGates(slice, cwd);
+    const launchFailure = detectWorkerLaunchFailure(workerResult, mode);
+    gateResult = launchFailure
+      ? { success: false, skipped: true, launchFailure, output: launchFailure }
+      : _executeSliceRunGates(slice, cwd);
 
     if (gateResult.success && workerResult.exitCode === 0) break;
 
@@ -2311,30 +2405,28 @@ async function _executeSliceAttemptLoop(ctx) {
       continue;
     }
 
+    if (launchFailure) {
+      ({ lastError, lastFailureContext, attempt } = await _recordLaunchFailureForRetry({
+        launchFailure, workerResult, currentModel, attemptStartTime, attempt, maxRetries, logFile,
+      }));
+      continue;
+    }
+
     if (workerResult.exitCode !== 0) break;
 
-    lastError = `Gate command '${gateResult.failedCommand || "unknown"}' failed:\n${gateResult.error || gateResult.output}`;
-    lastFailureContext = {
-      previousAttempt: attempt + 1,
-      gateName: gateResult.failedCommand || "unknown",
-      model: workerResult.model || currentModel || "auto",
-      durationMs: Date.now() - attemptStartTime,
-      stderrTail: [gateResult.error, gateResult.output, workerResult.stderr].filter(Boolean).join("\n\n"),
-    };
-    attempt++;
-    if (attempt <= maxRetries) {
-      writeFileSync(logFile, `\n\n--- GATE FAILED, RETRYING (attempt ${attempt + 1}) ---\n${lastError}\n`, { flag: "a" });
-    }
+    ({ lastError, lastFailureContext, attempt } = _recordGateFailureForRetry({
+      gateResult, workerResult, currentModel, attemptStartTime, attempt, maxRetries, logFile,
+    }));
   }
 
   return { workerResult, gateResult, attempt, currentModel, copilotDispatchData, lastError };
 }
 
 async function executeSlice(slice, options) {
-  const { cwd, model, modelRouting = {}, mode, runDir, maxRetries = 1,
+  const { cwd, artifactCwd = cwd, model, modelRouting = {}, mode, runDir, maxRetries = 1,
     memoryEnabled = false, projectName = "", planName = "",
     quorumConfig = null,
-    escalationChain = ["auto", "claude-opus-4.7", "gpt-5.3-codex"],
+    escalationChain = [...DEFAULT_ESCALATION_CHAIN],
     eventBus = null,
     worker = null,
     _dispatchSlice = _dispatchSliceDefault,
@@ -2409,11 +2501,11 @@ async function executeSlice(slice, options) {
     JSON.stringify(sliceResult, null, 2),
   );
 
-  _executeSlicePersistTrajectory({ sliceResult, workerResult, planName, slice, cwd, eventBus });
-  _executeSliceSelfRepairAdvisory({ sliceResult, workerResult, cwd, slice, eventBus });
-  _executeSliceAutoSkillBookkeeping({ sliceResult, injectedAutoSkills, slice, planName, cwd, eventBus });
-  _executeSliceRecordModelPerf({ sliceResult, cwd, planName, slice, costRecord });
-  _executeSliceRecordQuorumHistory({ sliceResult, slice, quorumConfig, useQuorum, complexityScore, cwd });
+  _executeSlicePersistTrajectory({ sliceResult, workerResult, planName, slice, cwd: artifactCwd, eventBus });
+  _executeSliceSelfRepairAdvisory({ sliceResult, workerResult, cwd: artifactCwd, slice, eventBus });
+  _executeSliceAutoSkillBookkeeping({ sliceResult, injectedAutoSkills, slice, planName, cwd, artifactCwd, eventBus });
+  _executeSliceRecordModelPerf({ sliceResult, cwd: artifactCwd, planName, slice, costRecord });
+  _executeSliceRecordQuorumHistory({ sliceResult, slice, quorumConfig, useQuorum, complexityScore, cwd: artifactCwd });
 
   return finalizeSliceResult(sliceResult);
 }
@@ -2592,7 +2684,13 @@ function _cliParseQuorumArgs(args) {
 
 function _cliParseRunOptions(args, getArg) {
   const resumeFrom = getArg("--resume-from") ? Number(getArg("--resume-from")) : null;
-  const { quorum, quorumPreset } = _cliParseQuorumArgs(args);
+  let { quorum, quorumPreset } = _cliParseQuorumArgs(args);
+  // Phase GROK-BUILD-WORKER Slice 7: --with-grok / --with-grok-cli additively
+  // append a Grok member to the quorum (implies --quorum when it was disabled).
+  let includeGrokOverride = null;
+  if (args.includes("--with-grok-cli")) includeGrokOverride = "cli";
+  else if (args.includes("--with-grok")) includeGrokOverride = "api";
+  if (includeGrokOverride && quorum === false) quorum = true;
   const onlySlicesRaw = getArg("--only-slices");
   let onlySlices = null;
   if (onlySlicesRaw) {
@@ -2614,6 +2712,7 @@ function _cliParseRunOptions(args, getArg) {
     quorum,
     quorumThreshold: getArg("--quorum-threshold") ? Number(getArg("--quorum-threshold")) : null,
     quorumPreset,
+    includeGrokOverride,
     manualImport: args.includes("--manual-import"),
     manualImportSource: getArg("--manual-import-source") || "human",
     manualImportReason: getArg("--manual-import-reason") || null,

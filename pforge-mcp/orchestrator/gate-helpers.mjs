@@ -3,10 +3,13 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve, basename, dirname, join, relative, extname, isAbsolute } from "node:path";
-import { parsePlan } from "./plan-parser.mjs";
+import { parsePlan, VALIDATION_GATE_MARKER_RE } from "./plan-parser.mjs";
 import { UNIX_TOOLS, resolveGateCommandToken, isGatePrefixAllowed } from "./constants.mjs";
 import { coalesceGateLines, looksLikeProse, runGate, resolveGateTimeoutMs } from "./schedulers.mjs";
 import { recall as brainRecall, loadReviewerConfig, invokeReviewer } from "../brain.mjs";
+
+/** Characters of an offending line quoted in a lint message. */
+const LINT_EXCERPT_CHARS = 60;
 
 export function extractPlanReleaseVersion(planPath) {
   if (!planPath || typeof planPath !== "string") return null;
@@ -139,7 +142,7 @@ function _parseDisableDirectivesAndComments(rawLines, slice, warnings) {
         command: raw,
         rule: "comment-line",
         severity: "warn",
-        message: `${loc}: Standalone comment '${raw.slice(0, 60)}...' will be treated as a command. Remove or prefix with a real command.`,
+        message: `${loc}: Standalone comment '${raw.slice(0, LINT_EXCERPT_CHARS)}...' will be treated as a command. Remove or prefix with a real command.`,
       });
     }
   }
@@ -148,6 +151,12 @@ function _parseDisableDirectivesAndComments(rawLines, slice, warnings) {
 
 function _resolveCmdToken(line) {
   return resolveGateCommandToken(line);
+}
+
+// Shell metacharacters inside a quoted argument (e.g. the JS handed to `node -e`)
+// are not shell operators. Blank those spans out before applying shell-shape rules (#246).
+function _stripQuotedSpans(line) {
+  return line.replace(/'[^']*'|"[^"]*"/g, "");
 }
 
 function _pushWRule({ test, ruleId, rule, msg, line, slice, loc, strictMode, disabledRules, warnings, errors }) {
@@ -183,7 +192,7 @@ function _lintBasicRules({ line, slice, loc, cmdToken, lastSliceNumber, warnings
       message: `${loc}: curl to localhost requires a running server. Move runtime API checks to vitest integration tests.`,
     });
   }
-  if (/^node\s+.*\.test\.(mjs|js|ts)/.test(line)) {
+  if (/^node\s+.*\.test\.(mjs|js|ts)/.test(_stripQuotedSpans(line))) {
     warnings.push({
       slice: slice.number, command: line, rule: "vitest-direct-node", severity: "warn",
       message: `${loc}: 'node *.test.*' fails for vitest test files. Use 'npx vitest run <file>' instead.`,
@@ -219,6 +228,18 @@ function _lintBasicRules({ line, slice, loc, cmdToken, lastSliceNumber, warnings
       message: `${loc}: node -e contains '//' which acts as a line comment on a single line, breaking the code. Remove JS comments from gate commands.`,
     });
   }
+  if (/\bpnpm\s+(?:--filter|-F)\s+\S+\s+(?!exec\b|run\b|-)\S+/.test(line)) {
+    warnings.push({
+      slice: slice.number, command: line, rule: "gate-cannot-fail", severity: "warn",
+      message: `${loc}: 'pnpm --filter <pkg> <script>' exits 0 when the script does not exist ("None of the selected packages has a ... script"), so a typo or a script that only exists in a sibling package reads as a passing gate. Use 'pnpm run <script>' from inside the package directory — it exits 1 with ERR_PNPM_NO_SCRIPT.`,
+    });
+  }
+  if (/\bgit\s+diff\b[^\n]*\bHEAD~\d/.test(line)) {
+    warnings.push({
+      slice: slice.number, command: line, rule: "git-diff-misses-untracked", severity: "warn",
+      message: `${loc}: 'git diff ... HEAD~N' never lists untracked files, so a gate counting brand-new files reads 0 until they are committed — and the slice cannot commit on an unrun gate. Use 'git status --porcelain' or 'git ls-files --others --exclude-standard' to include new files.`,
+    });
+  }
   if (/\b(grep|rg|ripgrep|egrep|fgrep)\b/.test(line)
     && /\(\?<[=!]|\(\?[=!]/.test(line)
     && !/(^|\s)(-P|--pcre2|--perl-regexp)(\s|=|$)/.test(line)) {
@@ -237,7 +258,7 @@ function _lintWRules({ line, slice, loc, cmdToken, strictMode, disabledRules, wa
     line, slice, loc, strictMode, disabledRules, warnings, errors,
   });
   _pushWRule({
-    test: !/^bash\s+-c\b/.test(line) && /^(node|npx|pwsh)\b.*\|/.test(line),
+    test: !/^bash\s+-c\b/.test(line) && /^(node|npx|pwsh)\b.*\|/.test(_stripQuotedSpans(line)),
     ruleId: "W2", rule: "pipeline-node",
     msg: `Shell pipeline with '${cmdToken}' as left operand — cmd.exe may handle this differently. Consider wrapping in a 'node -e' script that uses child_process for portability.`,
     line, slice, loc, strictMode, disabledRules, warnings, errors,
@@ -274,7 +295,7 @@ function _lintCommandLine(line, slice, {
   if (looksLikeProse(line)) {
     warnings.push({
       slice: slice.number, command: line, rule: "prose-detected", severity: "warn",
-      message: `${loc}: Line looks like prose, not a command: '${line.slice(0, 60)}...' — will be skipped at runtime.`,
+      message: `${loc}: Line looks like prose, not a command: '${line.slice(0, LINT_EXCERPT_CHARS)}...' — will be skipped at runtime.`,
     });
     return;
   }
@@ -285,6 +306,95 @@ function _lintCommandLine(line, slice, {
   const portResult = validateGatePortability(line);
   for (const pw of portResult.warnings) {
     portabilityWarnings.push({ ...pw, slice: slice.number, command: line });
+  }
+}
+
+/**
+ * A dependency declaration in any shape the hardener or a human writes.
+ * Group 1 is everything after the marker.
+ */
+const DEPENDS_DECLARATION_RE =
+  /(?:\*\*Depends\s+On:?\*\*:?|\(\s*depends\b|\bafter\s+slice\b)\s*:?\s*(.*)/i;
+/** Phrase that explicitly asserts there is no dependency — never a defect. */
+const DEPENDS_NONE_RE = /^\s*[-—–]*\s*(?:n\/a|none|nothing|no\b|null)/i;
+/** Phrase that names at least one slice-ish token. */
+const DEPENDS_NAMES_SLICE_RE = /\bslices?\s*\d|\bs\d+\b|^\s*\d+[A-Za-z]?\b/i;
+
+/**
+ * Warn when a slice declares a dependency that the parser did not understand.
+ *
+ * `depends` is populated only from `[depends: Slice N]` heading tags and
+ * `**Depends On**:` body lines whose phrase begins with a slice id. Forms like
+ * `Slices 1–5`, `Slices 3 + 4` or `All prior slices` produce no edge, and the
+ * plan then asserts an order the orchestrator does not hold (meta #262).
+ *
+ * Scoped deliberately: it fires only when the phrase NAMES a slice. Across this
+ * repo's 46 parseable plans there are 211 dependency declarations, of which 17
+ * say "nothing"/"none"/"—" — warning on those would be pure noise.
+ */
+function _lintDependencyDeclarations(plan, warnings) {
+  for (const slice of plan.slices) {
+    if ((slice.depends || []).length > 0) continue;
+    const body = [slice.title || "", ...(slice.rawLines || [])];
+    for (const line of body) {
+      const m = String(line).match(DEPENDS_DECLARATION_RE);
+      if (!m) continue;
+      const phrase = (m[1] || "").trim();
+      if (DEPENDS_NONE_RE.test(phrase) || !DEPENDS_NAMES_SLICE_RE.test(phrase)) continue;
+      warnings.push({
+        slice: slice.number,
+        command: null,
+        rule: "depends-not-parsed",
+        severity: "warn",
+        message:
+          `Slice ${slice.number} ("${slice.title}"): dependency declaration "${phrase.slice(0, LINT_EXCERPT_CHARS)}" ` +
+          `produced no parsed dependency. Recognised forms are the heading tag [depends: Slice N] and ` +
+          `a "**Depends On**:" line beginning with a slice id. This slice will fall back to running ` +
+          `after its predecessor.`,
+      });
+      break;
+    }
+  }
+}
+
+/**
+ * Check that each parsed slice will actually launch with a gate and with
+ * instructions (meta-bug #281). A lint that only inspects the gate commands
+ * it found passed plans whose gates sat in ```text fences (never executed)
+ * and whose tasks were bullets or prose (never sent to the worker).
+ *
+ * - A slice that DECLARES a Validation Gate but parsed no runnable command is
+ *   an error: it would run with no gate at all. An explicit `[manual]` gate —
+ *   the step-2 convention for checks that cannot be automated — is exempt.
+ * - A slice with no numbered tasks is a warning: buildSlicePrompt sends only
+ *   numbered items, so the worker receives just the title, scope and gate.
+ *   Plain objects without a `tasks` array (callers passing gate-only fixtures)
+ *   are not judged.
+ */
+function _lintSliceExecutability(plan, errors, warnings) {
+  for (const slice of plan.slices) {
+    const loc = `Slice ${slice.number} ("${slice.title}")`;
+    const declaredGate = (slice.rawLines || []).find((line) => VALIDATION_GATE_MARKER_RE.test(line));
+    const gateText = String(slice.validationGateDescription || "").trim();
+    const isManualGate = /^\[manual\]/i.test(gateText);
+    if (declaredGate && !isManualGate && !String(slice.validationGate || "").trim()) {
+      const described = gateText ? ` (gate text: "${gateText.slice(0, LINT_EXCERPT_CHARS)}")` : "";
+      errors.push({
+        slice: slice.number, command: null, rule: "gate-declared-not-runnable", severity: "error",
+        message:
+          `${loc}: declares a Validation Gate but no runnable gate command was parsed${described} — ` +
+          "the slice would run with no gate. Put gate commands in a shell-tagged fence (```bash, ```powershell, …) " +
+          "or inline backticks; ```text fences and prose are never executed.",
+      });
+    }
+    if (Array.isArray(slice.tasks) && slice.tasks.length === 0) {
+      warnings.push({
+        slice: slice.number, command: null, rule: "no-numbered-tasks", severity: "warn",
+        message:
+          `${loc}: no numbered tasks were parsed. The worker prompt lists only numbered items ("1. …"), so ` +
+          "bullet or prose instructions (including **Goal**) never reach the worker — it receives just the title, scope and gate.",
+      });
+    }
   }
 }
 
@@ -300,6 +410,19 @@ export function lintGateCommands(planFilePath, cwd = process.cwd()) {
   const lastSliceNumber = plan.slices.length > 0
     ? plan.slices[plan.slices.length - 1].number
     : null;
+
+  // A lint that examined nothing is not a lint that passed. Three plans read
+  // "0 error(s), 0 warning(s)" while every slice heading had failed to parse;
+  // only the "across 0 slices" tail of the summary gave it away (meta-bug #260).
+  if (plan.slices.length === 0) {
+    errors.push({
+      slice: null, command: null, rule: "no-slices-parsed", severity: "error",
+      message: "No slices parsed from the plan — zero gate commands were examined, so this result says nothing about the plan's gates. Check that slice headings match '### Slice <N> — <Title>'.",
+    });
+  }
+
+  _lintDependencyDeclarations(plan, warnings);
+  _lintSliceExecutability(plan, errors, warnings);
 
   for (const slice of plan.slices) {
     if (!slice.validationGate) continue;

@@ -49,7 +49,7 @@ Use the `forge_validate` MCP tool to check that all required Plan Forge files ar
 Look for:
 - Missing instruction files (`.github/instructions/`)
 - Missing skill or agent files
-- Unresolved `<YOUR PROJECT NAME>` or `<YOUR TECH STACK>` placeholders
+- Unresolved `TimeTracker` or `.NET 10 / ASP.NET Core` placeholders
 - `AGENTS.md` or `copilot-instructions.md` not generated
 
 > **If setup failures found**: Recommend re-running `pforge check` or `setup.ps1`/`setup.sh --force`.
@@ -160,5 +160,5 @@ After completing this skill, confirm:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before diagnosing**: `search_thoughts("forge failure", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "bug")` — load prior forge failures and recurring issues to avoid repeating diagnoses
-- **After diagnosis**: `capture_thought("Forge troubleshoot: <symptom> → <root cause> → <fix>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-forge-troubleshoot")` — persist findings for future diagnostics
+- **Before diagnosing**: `search_thoughts("forge failure", project: "TimeTracker", created_by: "copilot-vscode", type: "bug")` — load prior forge failures and recurring issues to avoid repeating diagnoses
+- **After diagnosis**: `capture_thought("Forge troubleshoot: <symptom> → <root cause> → <fix>", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-forge-troubleshoot")` — persist findings for future diagnostics

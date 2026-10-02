@@ -144,5 +144,5 @@ If I accept ALL defaults with no customization, say:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before interviewing**: `search_thoughts("project profile", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "convention")` — load prior profile decisions, domain rules, and quality standards so the interview builds on existing knowledge rather than starting fresh
-- **After profile is generated**: `capture_thought("Project profile generated: <key customizations summary>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-project-profile", type: "convention")` — persist the profile decisions so future sessions know what was configured
+- **Before interviewing**: `search_thoughts("project profile", project: "TimeTracker", created_by: "copilot-vscode", type: "convention")` — load prior profile decisions, domain rules, and quality standards so the interview builds on existing knowledge rather than starting fresh
+- **After profile is generated**: `capture_thought("Project profile generated: <key customizations summary>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-project-profile", type: "convention")` — persist the profile decisions so future sessions know what was configured

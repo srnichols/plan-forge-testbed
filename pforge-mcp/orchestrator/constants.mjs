@@ -59,6 +59,14 @@ export const DEFAULT_WORKER_OUTPUT_IDLE_MS = 480_000;
 /** Default worker total-run timeout: 30 minutes. Override with PFORGE_WORKER_TIMEOUT_MS. */
 export const DEFAULT_WORKER_TIMEOUT_MS = 1_800_000;
 
+/**
+ * Backoff before retrying a worker that never launched (meta #264), multiplied
+ * by the attempt number. The measured cause is a Windows lock on the shared
+ * `copilot.ps1` entrypoint when two orchestrators launch at the same moment, so
+ * an immediate retry tends to land inside the same lock window.
+ */
+export const WORKER_LAUNCH_RETRY_BACKOFF_MS = 3_000;
+
 /** Allowlist of commands permitted in validation gates. Shared by runGate() and lintGateCommands(). */
 export const GATE_ALLOWED_PREFIXES = [
   // Build / test runners
@@ -153,39 +161,83 @@ export const COST_ANOMALY_MULTIPLIER = 2;
 /** Phase-25 D7: keep last 10 postmortems per plan basename; age out older. */
 export const POSTMORTEM_RETENTION_COUNT = 10;
 
+/**
+ * Frontier model the watcher uses for 'analyze' narration.
+ * Single-sourced: this value was previously declared independently in
+ * hooks.mjs and review-watcher.mjs and restated in two tool descriptions,
+ * which is how the descriptions drifted to a stale 4.7.
+ */
+export const DEFAULT_WATCHER_MODEL = "claude-opus-5.5";
+
+/** xAI flagship appended by the opt-in Grok quorum add-in (quorum.includeGrok). */
+export const DEFAULT_GROK_ADDIN_MODEL = "grok-4.7";
+
+/** Grok IDs currently served by GitHub Copilot. Excludes grok-4.5 (Copilot retirement: 2026-10-19). */
+export const COPILOT_SERVED_GROK_MODELS = Object.freeze(["grok-4.6", "grok-4.7"]);
+
+/**
+ * Quorum fan-out when .forge.json names no preset and no models. Shared by
+ * loadQuorumConfig() and the .forge.json schema so the documented default
+ * cannot drift from the runtime one. Grok 4.7 is Copilot-served on Copilot
+ * hosts, with direct xAI API fallback when routing prefers direct API.
+ */
+export const DEFAULT_QUORUM_MODELS = Object.freeze(["claude-opus-5.5", "gpt-6-sol", DEFAULT_GROK_ADDIN_MODEL]);
+
+/** Synthesis reviewer paired with DEFAULT_QUORUM_MODELS. */
+export const DEFAULT_QUORUM_REVIEWER_MODEL = "claude-opus-5.5";
+
+/** Worker model when .forge.json has no modelRouting block. */
+export const DEFAULT_ROUTING_MODEL = "claude-opus-5.5";
+
+/**
+ * Base model for cost projections (forge_estimate_slice / forge_estimate_quorum)
+ * when the caller names none. Mirrors the gh-copilot defaultModel in
+ * worker-capabilities.json; a contract test keeps the two in step.
+ */
+export const DEFAULT_ESTIMATE_MODEL = "claude-sonnet-5.5";
+
+/**
+ * Retry escalation when .forge.json has no escalationChain and run history is
+ * too thin to rank models: auto first, then cross-vendor flagships.
+ */
+export const DEFAULT_ESCALATION_CHAIN = Object.freeze(["auto", "claude-opus-5.5", "gpt-6-astra"]);
+
+// 2026-09-30 model refresh (GitHub Copilot supported-models + vendor pricing):
+// Opus 4.7 retires from Copilot on 2026-10-02, Sonnet 4.6 retired 2026-09-01,
+// and GPT-5.4 mini retires 2026-10-19. Claude Opus 5.5 ($4/$20) replaces both
+// Opus legs; GPT-6 Astra is OpenAI's flagship. Grok 4.7 is Copilot-served and
+// still supports xAI direct API fallback. Both power and speed can now run as
+// full three-member quorums on gh-copilot hosts without API keys.
 export const QUORUM_PRESETS = {
-  // Bug #107: power = the premium tier (opus-4.7). Previously this preset
-  // shipped opus-4.6 and the default shipped opus-4.7 — backwards.
+  // Bug #107: power = the premium tier. The default quorum (quorum.mjs) uses
+  // the same Anthropic and xAI members with GPT-6 Sol as its OpenAI leg.
   power: {
-    models: ["claude-opus-4.7", "gpt-5.3-codex", "grok-4.20-0309-reasoning"],
-    reviewerModel: "claude-opus-4.7",
+    models: ["claude-opus-5.5", "gpt-6-astra", "grok-4.7"],
+    reviewerModel: "claude-opus-5.5",
     dryRunTimeout: 300_000,
     threshold: 5,
     availableIn: {
-      "cli-gh": ["claude-opus-4.7"],
-      "cli-claude": ["claude-opus-4.7"],
-      "cli-codex": ["gpt-5.3-codex"],
-      "vs-code-copilot-chat": ["claude-opus-4.7"],
-      "vs-code-agents-enterprise": ["claude-opus-4.7", "gpt-5.3-codex", "grok-4.20-0309-reasoning"],
+      "cli-gh": ["claude-opus-5.5", "gpt-6-astra", "grok-4.7"],
+      "cli-claude": ["claude-opus-5.5"],
+      "cli-codex": ["gpt-6-astra"],
+      "vs-code-copilot-chat": ["claude-opus-5.5", "gpt-6-astra", "grok-4.7"],
+      "vs-code-agents-enterprise": ["claude-opus-5.5", "gpt-6-astra", "grok-4.7"],
     },
     fallbacks: {
-      "cli-gh": { preset: "speed", reason: "Only 1 of 3 power models available via gh-copilot without API keys" },
+      "cli-gh": { preset: "speed", reason: "Fewer than 2 power models are available through gh-copilot on this machine" },
     },
   },
   speed: {
-    // 2026-05-21 model refresh: grok-4-1-fast-reasoning was retired by xAI on
-    // 2026-05-15. Swapped to grok-4.20-0309-non-reasoning (live, same family
-    // as the power preset's grok, non-reasoning variant for speed-tier latency).
-    models: ["claude-sonnet-4.6", "gpt-5.4-mini", "grok-4.20-0309-non-reasoning"],
-    reviewerModel: "claude-sonnet-4.6",
+    models: ["claude-sonnet-5.5", "gpt-6-luna", "gemini-3.8-flash"],
+    reviewerModel: "claude-sonnet-5.5",
     dryRunTimeout: 120_000,
     threshold: 7,
     availableIn: {
-      "cli-gh": ["claude-sonnet-4.6", "gpt-5.4-mini"],
-      "cli-claude": ["claude-sonnet-4.6"],
-      "cli-codex": ["gpt-5.4-mini"],
-      "vs-code-copilot-chat": ["claude-sonnet-4.6", "gpt-5.4-mini"],
-      "vs-code-agents-enterprise": ["claude-sonnet-4.6", "gpt-5.4-mini", "grok-4.20-0309-non-reasoning"],
+      "cli-gh": ["claude-sonnet-5.5", "gpt-6-luna", "gemini-3.8-flash"],
+      "cli-claude": ["claude-sonnet-5.5"],
+      "cli-codex": ["gpt-6-luna"],
+      "vs-code-copilot-chat": ["claude-sonnet-5.5", "gpt-6-luna", "gemini-3.8-flash"],
+      "vs-code-agents-enterprise": ["claude-sonnet-5.5", "gpt-6-luna", "gemini-3.8-flash"],
     },
     fallbacks: {},
   },
@@ -200,6 +252,25 @@ export const QUORUM_PRESETS = {
     fallbacks: {},
   },
 };
+
+/**
+ * Every model Plan Forge picks on the user's behalf, once each: the routing,
+ * estimate, watcher and quorum defaults, the escalation chain, and the power
+ * and speed quorum presets. The model-defaults contract and the weekly model
+ * drift check (#303) both walk this list.
+ */
+export function defaultedModels() {
+  return [...new Set([
+    DEFAULT_WATCHER_MODEL,
+    DEFAULT_GROK_ADDIN_MODEL,
+    DEFAULT_ROUTING_MODEL,
+    DEFAULT_ESTIMATE_MODEL,
+    DEFAULT_QUORUM_REVIEWER_MODEL,
+    ...DEFAULT_QUORUM_MODELS,
+    ...DEFAULT_ESCALATION_CHAIN.filter((m) => m !== "auto"),
+    ...["power", "speed"].flatMap((p) => [...QUORUM_PRESETS[p].models, QUORUM_PRESETS[p].reviewerModel]),
+  ])];
+}
 
 /**
  * 7-day default for “stalled” in-progress smelts. Long enough that Smith and

@@ -8,5 +8,8 @@
     "plans": 33
   },
   "staleDefaultsHours": 24,
-  "quorumPreset": "speed"
+  "quorumPreset": "speed",
+  "legacy": {
+    "tbdPlaceholders": false
+  }
 }

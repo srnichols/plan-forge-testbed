@@ -9,9 +9,9 @@
  * surface here.
  *
  * The test is skipped on CI / non-Windows runners where pforge.ps1 cannot
- * run — use the companion pforge.sh path for that case.
- *
- * Testbed: E:\GitHub\plan-forge-testbed  (read-only; must NOT be modified)
+ * run — use the companion pforge.sh path for that case — and wherever no
+ * testbed resolves (testbed.path in .forge.json, or a plan-forge-testbed
+ * clone next to the repo). The testbed is read-only; never modify it.
  */
 
 import { describe, it, expect } from "vitest";
@@ -19,16 +19,25 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTestbedPath } from "../testbed/scenarios.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, "fixtures");
 const GOLDEN = resolve(FIXTURES, "smith-golden-pre-enums.txt");
 
-const TESTBED = "E:\\GitHub\\plan-forge-testbed";
 const PFORGE_PS1 = resolve(HERE, "..", "..", "pforge.ps1");
 
+function findTestbed() {
+  try {
+    return resolveTestbedPath({}, { projectRoot: resolve(HERE, "..", "..") });
+  } catch {
+    return null;
+  }
+}
+
+const TESTBED = findTestbed();
 const isWindows = process.platform === "win32";
-const testbedExists = existsSync(TESTBED);
+const testbedExists = Boolean(TESTBED) && existsSync(TESTBED);
 const ps1Exists = existsSync(PFORGE_PS1);
 
 /** Strip ANSI escape sequences so golden diffs are color-independent. */
@@ -55,6 +64,11 @@ function normalize(text) {
       // graceful fallback). All three normalize to the same placeholder so the
       // golden fixture is forward- and backward-compatible.
       .replace(/copilot-coding-agent (?:v\S*|\(version unknown\))[^\n]*/g, "copilot-coding-agent <coding-agent-status>")
+      // grok worker probe: present-and-versioned on a machine with the CLI,
+      // "not found on PATH" plus a FIX line without it. Same environment-varying
+      // class as gh-copilot above; the FIX line is dropped so both shapes collapse.
+      .replace(/[^\S\n]*(?:✅|Γ£à|⚠️|⚠|ΓÜá∩╕Å)[^\n]*\bgrok\b[^\n]*\(agent worker\)[^\n]*/g, "  grok <worker-status>")
+      .replace(/[^\S\n]+FIX: irm https:\/\/x\.ai\/cli\/install[^\n]*\n?/g, "")
       // Image API key presence: XAI_API_KEY / OPENAI_API_KEY vary by environment
       .replace(/[^\S\n]*(?:✓|✅|Γ£à)[^\n]*API_KEY[^\n]*/g, "  <api-key-present>")
       .replace(/[^\S\n]*(?:✓|✅|Γ£à)[^\n]*Grok Aurora[^\n]*/g, "  <api-key-present>")
@@ -85,7 +99,7 @@ function runSmith() {
   return spawnSync(
     "pwsh",
     ["-NonInteractive", "-NoProfile", "-File", PFORGE_PS1, "smith"],
-    { cwd: TESTBED, encoding: "utf-8", timeout: 60_000 }
+    { cwd: TESTBED, encoding: "utf-8", timeout: 150_000 }
   );
 }
 
@@ -96,7 +110,16 @@ let _smithOutput = null;
 function getSmithOutput() {
   if (_smithOutput === null) {
     const result = runSmith();
-    _smithOutput = result.stdout + result.stderr;
+    // Without this guard a timeout yields null stdout, and the golden comparison
+    // reports a content diff instead of the real cause.
+    if (result.error) {
+      throw new Error(
+        `pforge smith did not complete (${result.error.code || result.error.message}) — ` +
+          "golden comparison skipped. This test shells out to a full pwsh CLI run, so it " +
+          "is the most load-sensitive file in the suite; re-run it in isolation to confirm."
+      );
+    }
+    _smithOutput = (result.stdout || "") + (result.stderr || "");
   }
   return _smithOutput;
 }
@@ -109,7 +132,7 @@ describe("smith-golden: pforge smith output stability", () => {
       expect(output).toMatch(/8\/8 lifecycle hooks present/);
       expect(output).not.toMatch(/Missing hooks:.*PostRun/);
     },
-    90_000
+    180_000
   );
 
   it.skipIf(!canRun)(
@@ -137,6 +160,6 @@ describe("smith-golden: pforge smith output stability", () => {
 
       expect(actual).toBe(expected);
     },
-    90_000
+    180_000
   );
 });

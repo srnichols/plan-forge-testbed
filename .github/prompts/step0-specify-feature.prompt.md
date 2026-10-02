@@ -22,7 +22,7 @@ Your job is to help me describe WHAT I want to build and WHY — not HOW to buil
 
 ### FIRST: Check for Prior Context
 
-1. **Check OpenBrain** (if configured): `search_thoughts("<FEATURE-NAME>", project: "<YOUR PROJECT NAME>")` — load prior decisions, gotchas, and lessons about this feature area. If results found, reference them in the specification.
+1. **Check OpenBrain** (if configured): `search_thoughts("<FEATURE-NAME>", project: "TimeTracker")` — load prior decisions, gotchas, and lessons about this feature area. If results found, reference them in the specification.
 
 2. **Check LiveGuard memories**: Read `.forge/liveguard-memories.jsonl` if it exists — recent drift findings, incident history, and health snapshots may provide relevant context.
 
@@ -322,5 +322,5 @@ If there ARE markers, say:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before interviewing**: `search_thoughts("<feature topic>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — check if this feature or similar has been specified before, load prior decisions and lessons
-- **After specification is complete**: `capture_thought("Feature spec: <summary of what and why>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions
+- **Before interviewing**: `search_thoughts("<feature topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — check if this feature or similar has been specified before, load prior decisions and lessons
+- **After specification is complete**: `capture_thought("Feature spec: <summary of what and why>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-0", type: "decision")` — persist the specification for downstream sessions

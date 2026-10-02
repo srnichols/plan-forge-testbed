@@ -1,9 +1,9 @@
 {
-  "current": "2.90.12-dev",
-  "latest": "2.90.11",
+  "current": "3.5.1",
+  "latest": "3.4.1",
   "isNewer": false,
-  "url": "https://github.com/srnichols/plan-forge/releases/tag/v2.90.11",
-  "publishedAt": "2026-05-07T08:13:11Z",
-  "checkedAt": "2026-05-07T22:51:09.218Z",
+  "url": "https://github.com/srnichols/plan-forge/releases/tag/v3.4.1",
+  "publishedAt": "2026-05-17T13:01:22Z",
+  "checkedAt": "2026-05-18T04:34:26.808Z",
   "fromCache": false
 }

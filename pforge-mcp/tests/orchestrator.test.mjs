@@ -20,6 +20,7 @@ import {
   loadModelPerformance,
   recordModelPerformance,
   loadQuorumConfig,
+  applyGrokAddIn,
   loadOpenClawConfig,
   scoreSliceComplexity,
   coalesceGateLines,
@@ -45,6 +46,12 @@ import {
   resolveGateTimeoutMs,
   isApiOnlyModel,
 } from "../orchestrator.mjs";
+import {
+  DEFAULT_GROK_ADDIN_MODEL,
+  DEFAULT_QUORUM_MODELS,
+  DEFAULT_QUORUM_REVIEWER_MODEL,
+  QUORUM_PRESETS as PRESETS,
+} from "../orchestrator/constants.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => resolve(__dirname, "fixtures", name);
@@ -234,6 +241,7 @@ describe("lintGateCommands", () => {
       "- Something",
       "## Execution Slices",
       `### Slice ${sliceNumber}: ${title}`,
+      "1. Do the work.",
       "**Validation Gate**",
       "```",
       ...gates,
@@ -1028,7 +1036,8 @@ describe("loadQuorumConfig", () => {
     expect(config.enabled).toBe(false);
     expect(config.auto).toBe(true);
     expect(config.threshold).toBe(5);
-    expect(config.reviewerModel).toBe("claude-opus-4.7");
+    expect(config.reviewerModel).toBe(DEFAULT_QUORUM_REVIEWER_MODEL);
+    expect(config.models).toEqual([...DEFAULT_QUORUM_MODELS]);
     expect(config.dryRunTimeout).toBe(300_000);
   });
 
@@ -1062,9 +1071,10 @@ describe("loadQuorumConfig", () => {
     expect(config.preset).toBe("power");
   });
 
-  it("power preset uses claude-opus-4.7 as reviewer model (v2.34)", () => {
+  it("power preset uses its declared flagship reviewer model", () => {
     const config = loadQuorumConfig(tempDir, "power");
-    expect(config.reviewerModel).toBe("claude-opus-4.7");
+    expect(config.reviewerModel).toBe(PRESETS.power.reviewerModel);
+    expect(config.reviewerModel).toBe("claude-opus-5.5");
   });
 
   it("user config overrides preset values", () => {
@@ -1088,6 +1098,94 @@ describe("loadQuorumConfig", () => {
     }));
     const config = loadQuorumConfig(tempDir);
     expect(config.strictAvailability).toBe(true);
+  });
+});
+
+// ─── Grok quorum add-in (Phase GROK-BUILD-WORKER Slice 7) ───────────────
+
+describe("applyGrokAddIn", () => {
+  const base = () => ({ models: ["claude-opus-4.7", "gpt-5.3-codex"] });
+
+  it("is a no-op when includeGrok is falsy", () => {
+    const cfg = base();
+    expect(applyGrokAddIn(cfg, { includeGrok: false })).toBe(cfg);
+    expect(applyGrokAddIn(cfg, {})).toBe(cfg);
+  });
+
+  it("appends the default Grok model via API when includeGrok='api' and XAI_API_KEY present", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "api", hasXaiKey: true });
+    expect(r.models).toEqual(["claude-opus-4.7", "gpt-5.3-codex", DEFAULT_GROK_ADDIN_MODEL]);
+    expect(r.grokVia).toBe("api");
+  });
+
+  it("treats includeGrok=true as 'api'", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: true, hasXaiKey: true });
+    expect(r.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(r.grokVia).toBe("api");
+  });
+
+  it("appends Copilot-served Grok via API mode when gh-copilot is available and XAI_API_KEY is absent", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "api", hasXaiKey: false, ghCopilotAvailable: true });
+    expect(r.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(r.grokVia).toBe("api");
+  });
+
+  it("honors a custom grokModel override", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "api", hasXaiKey: true, grokModel: "grok-4.3" });
+    expect(r.models).toContain("grok-4.3");
+    expect(r.models).not.toContain(DEFAULT_GROK_ADDIN_MODEL);
+  });
+
+  it("appends via CLI when includeGrok='cli' and the grok CLI is available", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "cli", grokCliAvailable: true });
+    expect(r.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(r.grokVia).toBe("cli");
+  });
+
+  it("skips (advisory, no hard-fail) when the API credential is missing", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "api", hasXaiKey: false, ghCopilotAvailable: false });
+    expect(r.models).toEqual(["claude-opus-4.7", "gpt-5.3-codex"]);
+    expect(r.grokAddInSkipped).toMatch(/gh-copilot/);
+  });
+
+  it("skips when the CLI credential is missing", () => {
+    const r = applyGrokAddIn(base(), { includeGrok: "cli", grokCliAvailable: false });
+    expect(r.models).not.toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(r.grokAddInSkipped).toMatch(/grok CLI/);
+  });
+
+  it("never duplicates or displaces an existing grok member", () => {
+    const cfg = { models: ["claude-opus-4.7", "grok-4.20-0309-reasoning"] };
+    const r = applyGrokAddIn(cfg, { includeGrok: "api", hasXaiKey: true });
+    expect(r).toBe(cfg); // unchanged reference — additive-only invariant
+  });
+});
+
+describe("loadQuorumConfig — includeGrok add-in", () => {
+  it("appends the default Grok model when .forge.json quorum.includeGrok='api' + XAI_API_KEY", () => {
+    writeFileSync(resolve(tempDir, ".forge.json"), JSON.stringify({ quorum: { includeGrok: "api", models: ["claude-opus-4.7", "gpt-5.3-codex"] } }));
+    const config = loadQuorumConfig(tempDir, null, { env: { XAI_API_KEY: "xai-x" } });
+    expect(config.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(config.grokVia).toBe("api");
+  });
+
+  it("CLI override (includeGrokOverride) wins over .forge.json", () => {
+    writeFileSync(resolve(tempDir, ".forge.json"), JSON.stringify({ quorum: { models: ["claude-opus-4.7", "gpt-5.3-codex"] } }));
+    const config = loadQuorumConfig(tempDir, null, { includeGrokOverride: "api", env: { XAI_API_KEY: "xai-x" } });
+    expect(config.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+  });
+
+  it("appends Copilot-served Grok when gh-copilot is available and XAI_API_KEY is absent", () => {
+    writeFileSync(resolve(tempDir, ".forge.json"), JSON.stringify({ quorum: { includeGrok: "api", models: ["claude-opus-4.7", "gpt-5.3-codex"] } }));
+    const config = loadQuorumConfig(tempDir, null, { env: {}, ghCopilotAvailable: true });
+    expect(config.models).toContain(DEFAULT_GROK_ADDIN_MODEL);
+    expect(config.grokVia).toBe("api");
+  });
+
+  it("defaults (no includeGrok) leave models untouched", () => {
+    const config = loadQuorumConfig(tempDir);
+    expect(config.models).toEqual([...DEFAULT_QUORUM_MODELS]);
+    expect(config.grokVia).toBeUndefined();
   });
 });
 
@@ -1181,7 +1279,7 @@ describe("coalesceGateLines", () => {
   });
 
   it("skips markdown-style numbered list prose (regression: slice-7 false failure)", () => {
-    // Real-world case from Rummag Phase-01 CI/CD slice: plan authors described
+    // Real-world case from a consumer plan's CI/CD slice: plan authors described
     // CSRF flow as numbered prose. Previously these were sent to runGate and
     // rejected by the allowlist as "'1.' not in allowlist", failing the slice.
     const gate = `1. Server generates CSRF token on session creation → sets as httpOnly cookie \`_csrf\`.\n2. Client reads cookie and mirrors value in X-CSRF-Token header.\nnpm test`;
@@ -1215,6 +1313,7 @@ describe("parseStderrStats", () => {
     expect(stats.model).toBe("claude-opus-4.6");
     expect(stats.tokens_in).toBe(476_000);
     expect(stats.tokens_out).toBe(3_100);
+    expect(stats.cache_read_tokens).toBe(430_100);
     expect(stats.premiumRequests).toBe(3);
   });
 
@@ -1224,6 +1323,7 @@ describe("parseStderrStats", () => {
     const stats = parseStderrStats(stderr);
     expect(stats.tokens_in).toBe(3_200_000);
     expect(stats.tokens_out).toBe(10_500);
+    expect(stats.cache_read_tokens).toBe(3_100_000);
     expect(stats.premiumRequests).toBe(3);
   });
 
@@ -1233,12 +1333,14 @@ describe("parseStderrStats", () => {
     expect(stats.model).toBe("claude-sonnet-4.6");
     expect(stats.tokens_in).toBe(639_400);
     expect(stats.tokens_out).toBe(4_500);
+    expect(stats.cache_read_tokens).toBe(552_100);
     expect(stats.premiumRequests).toBe(1);
   });
 
   it("returns zero stats for empty input", () => {
-    expect(parseStderrStats("")).toEqual({ model: null, tokens_in: 0, tokens_out: 0, premiumRequests: 0 });
-    expect(parseStderrStats(null)).toEqual({ model: null, tokens_in: 0, tokens_out: 0, premiumRequests: 0 });
+    const empty = { model: null, tokens_in: 0, tokens_out: 0, cache_read_tokens: 0, cache_creation_input_tokens: 0, reasoning_tokens: 0, premiumRequests: 0 };
+    expect(parseStderrStats("")).toEqual(empty);
+    expect(parseStderrStats(null)).toEqual(empty);
   });
 
   it("handles millions and billions suffixes", () => {
@@ -1283,6 +1385,7 @@ describe("parseStderrStats", () => {
     expect(stats.model).toBe("claude-sonnet-4.6");
     expect(stats.tokens_in).toBe(639_400);   // NOT 1_278_800 (pre-fix double-count)
     expect(stats.tokens_out).toBe(4_500);    // NOT 9_000
+    expect(stats.cache_read_tokens).toBe(552_100);
     expect(stats.premiumRequests).toBe(1);
   });
 
@@ -1296,6 +1399,7 @@ describe("parseStderrStats", () => {
     // Still summing across two distinct models when no aggregate is present.
     expect(stats.tokens_in).toBe(739_400);
     expect(stats.tokens_out).toBe(6_500);
+    expect(stats.cache_read_tokens).toBe(602_100);
     // Primary = one with most output tokens.
     expect(stats.model).toBe("claude-sonnet-4.6");
   });
@@ -1355,14 +1459,15 @@ describe("extractTokens", () => {
 // ─── calculateSliceCost ─────────────────────────────────────────────
 
 describe("calculateSliceCost", () => {
-  it("calculates cost from premium requests for CLI workers", () => {
+  it("calculates gh-copilot cost from tokens, not premium requests", () => {
     const tokens = { model: "claude-sonnet-4.6", tokens_in: 476000, tokens_out: 3100, premiumRequests: 3 };
     const result = calculateSliceCost(tokens, "gh-copilot");
-    expect(result.cost_usd).toBe(0.03);
+    expect(result.cost_usd).toBeGreaterThan(0);
+    expect(result.cost_usd).not.toBe(0.03);
     expect(result.model).toBe("claude-sonnet-4.6");
   });
 
-  it("returns zero cost when premiumRequests is 0 for CLI workers", () => {
+  it("returns zero gh-copilot cost when no tokens were reported", () => {
     const tokens = { model: "claude-sonnet-4.6", tokens_in: 0, tokens_out: 0, premiumRequests: 0 };
     const result = calculateSliceCost(tokens, "gh-copilot");
     expect(result.cost_usd).toBe(0);
@@ -1389,7 +1494,7 @@ describe("calculateSliceCost", () => {
   });
 });
 
-// ─── scoreSliceComplexity signal detection (Rummag regression) ───────
+// ─── scoreSliceComplexity signal detection (consumer-plan regression) ───
 
 describe("scoreSliceComplexity signal detection", () => {
   function writePlanWithSlice(body) {
@@ -1449,7 +1554,7 @@ describe("scoreSliceComplexity signal detection", () => {
   });
 });
 
-// ─── parsePlan body-line parsing (Rummag regression) ─────────────────
+// ─── parsePlan body-line parsing (consumer-plan regression) ───────────
 
 describe("parsePlan body-line metadata", () => {
   function writeBodyPlan(body) {
@@ -1466,8 +1571,8 @@ describe("parsePlan body-line metadata", () => {
     return planPath;
   }
 
-  it("parses **Depends On:** body line into depends[] (Rummag format)", () => {
-    // Regression: Rummag plan writes deps as body prose, not header tag.
+  it("parses **Depends On:** body line into depends[] (body-line format)", () => {
+    // Regression: some consumer plans write deps as body prose, not a header tag.
     // Previously depends[] was always [] → dependencyWeight always 0 → quorum never triggered.
     const planPath = writeBodyPlan([
       "### Slice 3: Campaigns",
@@ -1500,8 +1605,8 @@ describe("parsePlan body-line metadata", () => {
     }
   });
 
-  it("parses **Context Files:** body line into contextFiles[] (Rummag format)", () => {
-    // #231: Rummag plans declare reference docs as backtick-wrapped paths in a
+  it("parses **Context Files:** body line into contextFiles[] (body-line format)", () => {
+    // #231: some consumer plans declare reference docs as backtick-wrapped paths in a
     // **Context Files:** body line. These are read-only references and must NOT
     // widen the editable scope[]; they land in contextFiles[] instead.
     const planPath = writeBodyPlan([
@@ -1543,7 +1648,7 @@ describe("parsePlan body-line metadata", () => {
     }
   });
 
-  it("integration: Rummag-style slice produces non-zero scope/dependency/security weights", () => {
+  it("integration: body-line-format slice produces non-zero scope/dependency/security weights", () => {
     // End-to-end regression: ensure complexity score rises above the previous
     // stuck-at-2 baseline when the parser actually captures metadata.
     const planPath = writeBodyPlan([

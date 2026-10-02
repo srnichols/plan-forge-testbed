@@ -170,7 +170,7 @@
         },
         "--model": {
           "type": "string",
-          "description": "Model override (e.g., claude-sonnet-4.6)"
+          "description": "Model override (e.g., claude-sonnet-5.5)"
         },
         "--resume-from": {
           "type": "number",
@@ -193,7 +193,7 @@
         "pforge run-plan docs/plans/Phase-1.md",
         "pforge run-plan docs/plans/Phase-1.md --estimate",
         "pforge run-plan docs/plans/Phase-1.md --assisted",
-        "pforge run-plan docs/plans/Phase-1.md --model claude-sonnet-4.6",
+        "pforge run-plan docs/plans/Phase-1.md --model claude-sonnet-5.5",
         "pforge run-plan docs/plans/Phase-1.md --resume-from 3",
         "pforge run-plan docs/plans/Phase-1.md --quorum",
         "pforge run-plan docs/plans/Phase-1.md --quorum=auto",
@@ -610,6 +610,42 @@
       "flags": {},
       "examples": [
         "pforge version-bump 2.53.0"
+      ]
+    },
+    "pending": {
+      "description": "List, diff, apply or discard guidance updates pforge update saved in .forge/update-pending/ instead of overwriting your edits",
+      "args": [
+        {
+          "name": "subcommand",
+          "type": "string",
+          "required": false,
+          "enum": [
+            "list",
+            "diff",
+            "apply",
+            "discard"
+          ]
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "flags": {
+        "--all": {
+          "type": "boolean",
+          "description": "apply/discard every pending update"
+        },
+        "--yes": {
+          "type": "boolean",
+          "description": "Make the change (apply/discard are dry runs without it)"
+        }
+      },
+      "examples": [
+        "pforge pending",
+        "pforge pending diff .github/instructions/git-workflow.instructions.md",
+        "pforge pending apply --all --yes"
       ]
     },
     "migrate-memory": {

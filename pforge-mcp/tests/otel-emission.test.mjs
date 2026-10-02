@@ -11,7 +11,7 @@
  *     slice-started, run-started events
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -127,6 +127,24 @@ describe("initOtel", () => {
       expect(typeof sdk.shutdown).toBe("function");
       // Tear down so the live exporter does not leak into other tests.
       await sdk.shutdown();
+    }
+  });
+
+  it("warns actionably when the gate is open but the SDK cannot load", async () => {
+    process.env.OTEL_ENABLED = "true";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const sdk = await initOtel();
+      // Only assert the diagnostic when the packages really are absent; if a
+      // future install makes them resolvable this test must not fail spuriously.
+      if (sdk === null) {
+        expect(warn).toHaveBeenCalled();
+        const msg = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+        expect(msg).toMatch(/otel/i);
+        expect(msg).toMatch(/@opentelemetry\/api/);
+      }
+    } finally {
+      warn.mockRestore();
     }
   });
 });

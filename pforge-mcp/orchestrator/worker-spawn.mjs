@@ -14,7 +14,13 @@ import {
   getCliWorkersCacheExpiryState, setCliWorkersCacheExpiryState,
   getWorkerCapabilitiesCacheState, setWorkerCapabilitiesCacheState,
 } from "./state.mjs";
-import { API_ALLOWED_ROLES, QUORUM_PRESETS, DEFAULT_WORKER_OUTPUT_IDLE_MS, DEFAULT_WORKER_TIMEOUT_MS } from "./constants.mjs";
+import {
+  API_ALLOWED_ROLES,
+  COPILOT_SERVED_GROK_MODELS,
+  QUORUM_PRESETS,
+  DEFAULT_WORKER_OUTPUT_IDLE_MS,
+  DEFAULT_WORKER_TIMEOUT_MS,
+} from "./constants.mjs";
 export { API_ALLOWED_ROLES };
 
 
@@ -57,14 +63,15 @@ export function resolveWorkerTimeoutMs(opts = {}) {
 //
 // Model routing has two tiers (fixed in meta-bug #103):
 //
-//   1. DIRECT_API_ONLY — patterns that MUST use direct HTTP. No CLI proxy
-//      serves them. gh-copilot does not accept --model grok-* or dall-e-*.
-//      These models are unavailable without the provider's env key.
+//   1. DIRECT_API_ONLY — patterns that MUST use direct HTTP. Plan Forge routes
+//      legacy/non-Copilot grok-* IDs and dall-e-* here. Copilot-served Grok
+//      IDs live in COPILOT_SERVABLE so gh-copilot can carry them first.
+//      Direct-only models are unavailable without the provider's env key.
 //
 //   2. COPILOT_SERVABLE — patterns that gh-copilot serves via the user's
-//      GitHub Copilot subscription. `gh copilot --model <name>` works for
-//      these regardless of whether the user has a direct OpenAI key.
-//      Routing precedence: gh-copilot CLI (subscription) → direct API
+//      GitHub Copilot AI-credit billing. `copilot --model <name>` works for
+//      these regardless of whether the user has a direct provider key.
+//      Routing precedence: gh-copilot CLI → direct API
 //      (pay-per-token) → unavailable.
 //
 // Keeping these lists separate prevents the regression in #103 where
@@ -79,7 +86,7 @@ export function resolveWorkerTimeoutMs(opts = {}) {
  */
 const DIRECT_API_ONLY = {
   xai: {
-    pattern: /^grok-/,
+    pattern: (model) => /^grok-/.test(model) && !COPILOT_SERVED_GROK_MODELS.includes(model),
     baseUrl: "https://api.x.ai/v1",
     envKey: "XAI_API_KEY",
     label: "xAI Grok",
@@ -106,7 +113,7 @@ const DIRECT_API_ONLY = {
 };
 
 /**
- * Providers whose models gh-copilot serves via the Copilot subscription.
+ * Providers whose models gh-copilot serves via Copilot AI credits.
  * Routed CLI-first; falls back to direct HTTP only when the user explicitly
  * sets the provider's env key AND gh-copilot is unavailable.
  */
@@ -117,8 +124,31 @@ const COPILOT_SERVABLE = {
     envKey: "OPENAI_API_KEY",
     label: "OpenAI (via Copilot or direct)",
   },
+  "xai-copilot": {
+    pattern: (model) => COPILOT_SERVED_GROK_MODELS.includes(model),
+    baseUrl: "https://api.x.ai/v1",
+    envKey: "XAI_API_KEY",
+    label: "xAI Grok (via Copilot or direct)",
+    apiName: "xai",
+  },
   // Future: anthropic-direct served via Copilot — gh-copilot already serves claude-*
   // through its CLI today, so we don't need a COPILOT_SERVABLE entry for claude.
+};
+
+/**
+ * Grok models eligible for Grok Build CLI routing. Distinct from DIRECT_API_ONLY
+ * (which remains the fallback): grok-* is served by the `grok` CLI worker when the
+ * operator opts in (routing.grokCli="prefer") AND the CLI is installed; otherwise
+ * it falls back to the xAI direct API — no regression for API-first users.
+ * Phase GROK-BUILD-WORKER.
+ */
+const GROK_CLI_SERVABLE = {
+  xai: {
+    pattern: /^grok-/,
+    worker: "grok",
+    envKey: "XAI_API_KEY",
+    label: "xAI Grok Build CLI",
+  },
 };
 
 /**
@@ -126,6 +156,13 @@ const COPILOT_SERVABLE = {
  * API_PROVIDERS directly. New callers should prefer the specific registries.
  */
 const API_PROVIDERS = { ...DIRECT_API_ONLY, ...COPILOT_SERVABLE };
+
+function providerMatches(provider, model) {
+  if (!provider || !model) return false;
+  return typeof provider.pattern === "function"
+    ? provider.pattern(model)
+    : provider.pattern.test(model);
+}
 
 /**
  * Probe whether gh-copilot CLI is installed and available. Used by routing
@@ -188,7 +225,7 @@ function isGhCopilotAvailable() {
 export function isDirectApiOnlyModel(model) {
   if (!model) return false;
   for (const provider of Object.values(DIRECT_API_ONLY)) {
-    if (provider.pattern.test(model)) return true;
+    if (providerMatches(provider, model)) return true;
   }
   return false;
 }
@@ -202,7 +239,23 @@ export function isDirectApiOnlyModel(model) {
 export function isCopilotServableModel(model) {
   if (!model) return false;
   for (const provider of Object.values(COPILOT_SERVABLE)) {
-    if (provider.pattern.test(model)) return true;
+    if (providerMatches(provider, model)) return true;
+  }
+  return false;
+}
+
+/**
+ * Check whether a model is eligible for Grok Build CLI routing (grok-*).
+ * Eligibility ≠ activation: the CLI path only activates when routing.grokCli is
+ * "prefer" AND the grok worker is available. Otherwise grok-* stays on the
+ * existing direct-API path. Phase GROK-BUILD-WORKER.
+ * @param {string} model
+ * @returns {boolean}
+ */
+export function isGrokCliServableModel(model) {
+  if (!model) return false;
+  for (const provider of Object.values(GROK_CLI_SERVABLE)) {
+    if (providerMatches(provider, model)) return true;
   }
   return false;
 }
@@ -294,13 +347,13 @@ function resolveFoundryBaseUrl(endpointKey) {
  * probeQuorumModelAvailability — they consult this helper AFTER determining
  * that the CLI path is unavailable or inappropriate.
  *
- * @param {string} model - Model identifier (e.g., "grok-3-mini")
+ * @param {string} model - Model identifier (e.g., "grok-4.20-0309-non-reasoning")
  * @returns {{ name, baseUrl, apiKey, label } | null}
  */
 function detectApiProvider(model) {
   if (!model) return null;
   for (const [name, provider] of Object.entries(API_PROVIDERS)) {
-    if (provider.pattern.test(model)) {
+    if (providerMatches(provider, model)) {
       // Entra (Managed Identity / Service Principal) auth: when AZURE_AUTH_MODE
       // is "entra" or "managed-identity" the token is resolved at call time via
       // @azure/identity — no static API key is required or used.
@@ -318,9 +371,12 @@ function detectApiProvider(model) {
         : provider.baseUrl;
       if (!baseUrl) return null; // Endpoint env var not configured
       return {
-        name,
+        name: provider.apiName || name,
         baseUrl,
         apiKey,
+        // Name only, never the value: the BYOK SDK path re-reads the key at call
+        // time so it is never carried through a config object or logged.
+        envKey: provider.envKey,
         label: provider.label,
         entraAuth,
         ...(provider.apiKeyHeader && { apiKeyHeader: provider.apiKeyHeader }),
@@ -1045,10 +1101,14 @@ export function detectWorkers(_projectDir) {
 
   // API providers are NOT cached — env vars can change between calls (e.g. in tests).
   const results = [...cliWorkers];
+  const seenApiProviders = new Set();
   for (const [name, provider] of Object.entries(API_PROVIDERS)) {
+    const providerName = provider.apiName || name;
+    if (seenApiProviders.has(providerName)) continue;
+    seenApiProviders.add(providerName);
     const apiKey = process.env[provider.envKey] || loadSecretFromForge(provider.envKey);
     results.push({
-      name: `api-${name}`,
+      name: `api-${providerName}`,
       available: !!apiKey,
       capable: !!apiKey,
       type: "api",
@@ -1085,25 +1145,39 @@ export function detectWorkers(_projectDir) {
  * @param {Function} [opts.resolveApiProvider] injectable detectApiProvider (tests)
  * @returns {{ status:"failed", code:string, error:string, failureCategory?:string }|null}
  */
-export function assertWorkerBackendReady({ model = null, worker = null, cwd = process.cwd(), detect = detectWorkers, resolveApiProvider = detectApiProvider } = {}) {
-  // Direct-API models are validated by spawnWorker's own key check.
-  if (isDirectApiOnlyModel(model)) return null;
+/**
+ * True when the grok CLI is the intended execution backend — either an explicit
+ * `--worker grok`, or a grok-* model with routing.grokCli="prefer".
+ */
+function isGrokBackend({ model, worker, cwd }) {
+  return worker === "grok"
+    || (isGrokCliServableModel(model) && loadGrokCliPreference(cwd) === "prefer");
+}
 
-  const workers = detect(cwd);
-  const cliWorkers = workers.filter((w) => w.type === "cli");
+/**
+ * Grok CLI readiness. Falls back gracefully: a *preferred* (non-explicit) grok
+ * model with the CLI absent but XAI_API_KEY present is allowed (the router uses
+ * the metered API). Only an explicit --worker grok, or no API fallback, fails.
+ */
+function checkGrokReady({ model, worker, cwd, detect, resolveApiProvider }) {
+  const grokWorker = detect(cwd).find((w) => w.name === "grok");
+  if (grokWorker?.available) return null;
+  if (worker !== "grok" && resolveApiProvider(model)) return null;
 
-  // An explicit --worker override narrows the candidate set to that worker.
-  const candidates = worker ? cliWorkers.filter((w) => w.name === worker) : cliWorkers;
+  const hint = suggestInstall("grok");
+  return {
+    status: "failed",
+    code: "WORKER_AUTH_REQUIRED",
+    failureCategory: grokWorker?.failureCategory || "missing",
+    error:
+      "worker failed: grok CLI not ready — install it (`irm https://x.ai/cli/install.ps1 | iex`) " +
+      "and sign in with `grok` (SuperGrok / X Premium+), or set XAI_API_KEY to use the metered xAI API.",
+    install: hint.command || hint.docs || null,
+  };
+}
 
-  // Any usable CLI worker → proceed unchanged.
-  if (candidates.some((w) => w.available)) return null;
-
-  // No usable CLI worker, but the model routes to a configured direct API
-  // (resolveApiProvider returns a provider only when the key is present) →
-  // proceed. Skipped when the caller demanded a specific CLI worker.
-  if (!worker && resolveApiProvider(model)) return null;
-
-  // Nothing usable. Prefer the actionable auth message when auth is the blocker.
+/** Failure object for "no usable CLI worker" — prefers the actionable auth message. */
+function noCliWorkerFailure(candidates, cliWorkers) {
   if (candidates.some((w) => w.failureCategory === "auth")) {
     return {
       status: "failed",
@@ -1124,6 +1198,40 @@ export function assertWorkerBackendReady({ model = null, worker = null, cwd = pr
     code: "NO_WORKER_AVAILABLE",
     error: `worker failed: ${reason}`,
   };
+}
+
+export function assertWorkerBackendReady({ model = null, worker = null, cwd = process.cwd(), detect = detectWorkers, resolveApiProvider = detectApiProvider } = {}) {
+  // The copilot-coding-agent worker dispatches remotely (GitHub Copilot Coding
+  // Agent via PRs) and spawns no local CLI worker, so this local-CLI auth gate
+  // does not apply. Its auth is validated by the copilot pre-flight
+  // (_runCopilotPreflight) instead. Without this skip, a host with no
+  // authenticated CLI worker (e.g. CI) wrongly returns WORKER_AUTH_REQUIRED
+  // before the copilot pre-flight can run.
+  if (worker === "copilot-coding-agent") return null;
+
+  // Phase GROK-BUILD-WORKER Slice 5: validated BEFORE the direct-API
+  // short-circuit below, because the grok CLI is the execution backend.
+  if (isGrokBackend({ model, worker, cwd })) {
+    return checkGrokReady({ model, worker, cwd, detect, resolveApiProvider });
+  }
+
+  // Direct-API models are validated by spawnWorker's own key check.
+  if (isDirectApiOnlyModel(model)) return null;
+
+  const cliWorkers = detect(cwd).filter((w) => w.type === "cli");
+
+  // An explicit --worker override narrows the candidate set to that worker.
+  const candidates = worker ? cliWorkers.filter((w) => w.name === worker) : cliWorkers;
+
+  // Any usable CLI worker → proceed unchanged.
+  if (candidates.some((w) => w.available)) return null;
+
+  // No usable CLI worker, but the model routes to a configured direct API
+  // (resolveApiProvider returns a provider only when the key is present) →
+  // proceed. Skipped when the caller demanded a specific CLI worker.
+  if (!worker && resolveApiProvider(model)) return null;
+
+  return noCliWorkerFailure(candidates, cliWorkers);
 }
 
 // ─── Execution Runtime Detection ──────────────────────────────────────
@@ -1199,7 +1307,7 @@ export function detectClientHost() {
  * Describe the billing surface implied by choosing a given transport for
  * a Copilot-servable model under the current client host. Surfaces this
  * in logs and `probeQuorumModelAvailability` results so users can see
- * which subscription is being charged before a quorum run starts.
+ * which billing surface is being charged before a quorum run starts.
  *
  * @param {"gh-copilot"|"direct-api"|"other-cli"} via
  * @param {string} host  — result of detectClientHost()
@@ -1210,17 +1318,17 @@ export function describeBillingSurface(via, host) {
     switch (host) {
       case "vs-code-copilot":
       case "vs-code-agents":
-        return { label: "GitHub Copilot subscription (VS Code)", warning: null };
+        return { label: "GitHub Copilot AI credits (VS Code)", warning: null };
       case "claude-code":
         return {
-          label: "GitHub Copilot subscription",
+          label: "GitHub Copilot AI credits",
           warning:
             "Running under Claude Code, but this model routes through your Copilot seat " +
             "(Anthropic subscription is not used for gpt-* / chatgpt-* models). Track with meta-bug #104.",
         };
       case "cursor":
         return {
-          label: "GitHub Copilot subscription (via local gh CLI)",
+          label: "GitHub Copilot AI credits (via local gh CLI)",
           warning:
             "Running under Cursor, but this model routes through your local gh-copilot CLI " +
             "rather than Cursor's own subscription — Plan Forge cannot see Cursor's model proxy from a subprocess.",
@@ -1228,11 +1336,11 @@ export function describeBillingSurface(via, host) {
       case "windsurf":
       case "zed":
         return {
-          label: "GitHub Copilot subscription (via local gh CLI)",
+          label: "GitHub Copilot AI credits (via local gh CLI)",
           warning: `Running under ${host}, but model routes through your local gh-copilot CLI.`,
         };
       default:
-        return { label: "GitHub Copilot subscription", warning: null };
+        return { label: "GitHub Copilot AI credits", warning: null };
     }
   }
   if (via === "direct-api") {
@@ -1318,6 +1426,53 @@ export function loadRoutingPreference(cwd) {
   }
 }
 
+const VALID_GROK_CLI_PREFS = new Set(["prefer", "auto", "off"]);
+
+/**
+ * Read the Grok Build CLI routing preference from .forge.json → routing.grokCli.
+ * "prefer" routes grok-* through the grok CLI worker when it is available; "auto"
+ * / "off" (default) keeps the existing xAI direct-API behavior. Phase GROK-BUILD-WORKER.
+ * @param {string} cwd
+ * @returns {"prefer"|"auto"|"off"}
+ */
+export function loadGrokCliPreference(cwd) {
+  try {
+    const configPath = resolve(cwd, ".forge.json");
+    if (!existsSync(configPath)) return "auto";
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const pref = config?.routing?.grokCli;
+    if (typeof pref === "string" && VALID_GROK_CLI_PREFS.has(pref)) return pref;
+    return "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+const VALID_COPILOT_SDK_PREFS = new Set(["prefer", "off"]);
+const DEFAULT_COPILOT_SDK_PREF = "prefer";
+
+/**
+ * Read the Copilot SDK routing preference from .forge.json → routing.copilotSdk.
+ * "prefer" (default since #307) routes COPILOT_SERVABLE models through
+ * @github/copilot-sdk when the SDK is installed, falling back to spawning the
+ * Copilot CLI if the SDK cannot start; "off" always spawns the CLI. Measured on
+ * the same tasks and model, the SDK path cost 33–36% less than spawn.
+ * @param {string} cwd
+ * @returns {"prefer"|"off"}
+ */
+export function loadCopilotSdkPreference(cwd) {
+  try {
+    const configPath = resolve(cwd, ".forge.json");
+    if (!existsSync(configPath)) return DEFAULT_COPILOT_SDK_PREF;
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const pref = config?.routing?.copilotSdk;
+    if (typeof pref === "string" && VALID_COPILOT_SDK_PREFS.has(pref)) return pref;
+    return DEFAULT_COPILOT_SDK_PREF;
+  } catch {
+    return DEFAULT_COPILOT_SDK_PREF;
+  }
+}
+
 // ─── Quorum Model Availability Probing (H.3) ─────────────────────────
 
 /**
@@ -1328,8 +1483,10 @@ export function loadRoutingPreference(cwd) {
  * @returns {string}
  */
 export function resolveRequiredCli(model) {
+  if (isCopilotServableModel(model)) return "gh-copilot";
   if (/^claude-/.test(model)) return "claude";
   if (/^codex-/.test(model)) return "codex";
+  if (/^grok-/.test(model)) return "grok";
   return "gh-copilot";
 }
 
@@ -1337,8 +1494,9 @@ export function resolveRequiredCli(model) {
  * Probe whether a single quorum model is available on this machine.
  *
  * Routing precedence (fixed in meta-bug #103):
- *   1. DIRECT_API_ONLY models (grok-*, dall-e-*)      → detectApiProvider only
- *   2. COPILOT_SERVABLE models (gpt-*, chatgpt-*)     → host-aware preference
+ *   1. DIRECT_API_ONLY models (legacy grok-*, dall-e-*) → detectApiProvider only
+ *   2. COPILOT_SERVABLE models (gpt-*, chatgpt-*, Copilot Grok)
+ *                                                     → host-aware preference
  *                                                        (#104) — Claude Code /
  *                                                        Cursor / Windsurf / Zed
  *                                                        prefer direct API by
@@ -1357,7 +1515,7 @@ function _probeDirectApiOnly(model, host) {
     return { model, available: true, via: "api", provider: apiProvider.name, host, billing: billing.label };
   }
   for (const [name, provider] of Object.entries(DIRECT_API_ONLY)) {
-    if (provider.pattern.test(model)) {
+    if (providerMatches(provider, model)) {
       return {
         model, available: false, via: "api", provider: name, host,
         reason: `${provider.envKey} not set`,
@@ -1368,6 +1526,26 @@ function _probeDirectApiOnly(model, host) {
   return null;
 }
 
+/**
+ * Grok Build CLI probe branch (Phase GROK-BUILD-WORKER). Returns a CLI result
+ * ONLY when the operator opted in (routing.grokCli="prefer") AND the `grok`
+ * worker is available. Returns null otherwise so the caller falls through to the
+ * existing direct-API path — guaranteeing zero regression for API-first users.
+ * @returns {object|null}
+ */
+function _probeGrokCliServable(model, host, grokCliPreference, cwd, workers) {
+  const pref = grokCliPreference ?? loadGrokCliPreference(cwd || process.cwd());
+  if (pref !== "prefer") return null;
+  const grokWorker = (workers || detectWorkers()).find((w) => w.name === "grok" && w.available);
+  if (!grokWorker) return null;
+  return {
+    model, available: true, via: "cli", worker: "grok",
+    provider: "grok-subscription", host,
+    billing: "Grok subscription (flat) or XAI_API_KEY (metered)",
+    routingPreference: pref,
+  };
+}
+
 function _probeCopilotServable(model, host, hostPreference, ghCopilot) {
   const { order, dropIfNoDirectApi } = getRoutingPreference(host, hostPreference);
   const apiProvider = detectApiProvider(model);
@@ -1376,7 +1554,7 @@ function _probeCopilotServable(model, host, hostPreference, ghCopilot) {
     const billing = describeBillingSurface("gh-copilot", host);
     return {
       model, available: true, via: "cli", worker: "gh-copilot",
-      provider: "copilot-subscription", host,
+      provider: "copilot-ai-credits", host,
       billing: billing.label,
       billingWarning: billing.warning,
       routingPreference: hostPreference,
@@ -1401,7 +1579,7 @@ function _probeCopilotServable(model, host, hostPreference, ghCopilot) {
 
   if (dropIfNoDirectApi && !apiProvider) {
     for (const [name, provider] of Object.entries(COPILOT_SERVABLE)) {
-      if (provider.pattern.test(model)) {
+      if (providerMatches(provider, model)) {
         return {
           model, available: false, via: "api", provider: name, host,
           routingPreference: hostPreference,
@@ -1412,7 +1590,7 @@ function _probeCopilotServable(model, host, hostPreference, ghCopilot) {
     }
   }
   for (const [name, provider] of Object.entries(COPILOT_SERVABLE)) {
-    if (provider.pattern.test(model)) {
+    if (providerMatches(provider, model)) {
       return {
         model, available: false, via: "cli", provider: name, host,
         routingPreference: hostPreference,
@@ -1425,13 +1603,22 @@ function _probeCopilotServable(model, host, hostPreference, ghCopilot) {
 }
 
 export function probeQuorumModelAvailability(model, opts = {}) {
-  const workers = detectWorkers();
+  const workers = opts.workers || detectWorkers(opts.cwd);
   const ghCopilotAvailable = isGhCopilotAvailable();
   const ghCopilot = ghCopilotAvailable
     ? workers.find((w) => w.name === "gh-copilot") || { name: "gh-copilot", available: true }
     : null;
   const host = opts.host || detectClientHost();
   const hostPreference = opts.hostPreference || "auto";
+
+  // Grok Build CLI preference (Phase GROK-BUILD-WORKER): when the operator opts
+  // in via routing.grokCli="prefer" AND the grok CLI worker is available, route
+  // grok-* through the Grok Build CLI (subscription/flat). Otherwise fall through
+  // to the existing direct-API path below — no regression for API-first users.
+  if (isGrokCliServableModel(model)) {
+    const grokRes = _probeGrokCliServable(model, host, opts.grokCliPreference, opts.cwd, workers);
+    if (grokRes) return grokRes;
+  }
 
   if (isDirectApiOnlyModel(model)) {
     const directRes = _probeDirectApiOnly(model, host);
@@ -1541,20 +1728,44 @@ export function formatQuorumSummary(rows, host, hostPreference) {
 }
 
 /**
- * Assess quorum viability for a given preset and runtime.
+ * Resolve an assessment target: either a named built-in preset or a
+ * preset-shaped config object (issue #243 — users configure their own
+ * quorum.models, which the named-preset-only form could not reach).
+ */
+function _resolveQuorumTarget(presetOrConfig) {
+  if (typeof presetOrConfig === "string") {
+    const preset = QUORUM_PRESETS[presetOrConfig];
+    return preset ? { preset, label: presetOrConfig } : { error: `Unknown preset: ${presetOrConfig}` };
+  }
+  if (presetOrConfig && typeof presetOrConfig === "object") {
+    return Array.isArray(presetOrConfig.models) && presetOrConfig.models.length > 0
+      ? { preset: presetOrConfig, label: "config" }
+      : { error: "Quorum config has no models to assess" };
+  }
+  return { error: `Unknown preset: ${presetOrConfig}` };
+}
+
+/**
+ * Assess quorum viability for a preset or an explicit config, against a runtime.
  * Combines static availableIn declarations with live probeQuorumModelAvailability().
  *
  * availableIn is advisory (for --estimate UX). probeQuorumModelAvailability()
  * remains the authoritative runtime check — stale availableIn data causes
  * bad advice but never incorrect execution.
  *
- * @param {string} presetName - "power" | "speed"
- * @param {{ runtimeOverride?: string, probe?: (model: string) => object }} [options]
- * @returns {{ runtime: string, preset: string, declared: number, effective: number, models: object[], synthesisViable: boolean, recommendation: object|null } | { error: string }}
+ * `isPriced` is injected rather than imported so this module stays free of
+ * cost-service. An unpriced model is reported as a warning and never marked
+ * unavailable: the probe's permissiveness is what lets a newly released model
+ * work before the pricing registry catches up.
+ *
+ * @param {string|{models: string[], reviewerModel?: string}} presetOrConfig - "power" | "speed" | a config object
+ * @param {{ runtimeOverride?: string, probe?: (model: string) => object, isPriced?: (model: string) => boolean }} [options]
+ * @returns {{ runtime: string, preset: string, declared: number, effective: number, models: object[], synthesisViable: boolean, recommendation: object|null, warnings: string[] } | { error: string }}
  */
-export function assessQuorumViability(presetName, { runtimeOverride = null, probe = probeQuorumModelAvailability } = {}) {
-  const preset = QUORUM_PRESETS[presetName];
-  if (!preset) return { error: `Unknown preset: ${presetName}` };
+export function assessQuorumViability(presetOrConfig, { runtimeOverride = null, probe = probeQuorumModelAvailability, isPriced = null } = {}) {
+  const target = _resolveQuorumTarget(presetOrConfig);
+  if (target.error) return { error: target.error };
+  const { preset, label } = target;
 
   const runtime = runtimeOverride || detectExecutionRuntime();
   const declaredAvailable = preset.availableIn?.[runtime] || null;
@@ -1566,10 +1777,15 @@ export function assessQuorumViability(presetName, { runtimeOverride = null, prob
       status: probed.available ? "available" : "unavailable",
       via: probed.via,
       declaredForRuntime: declaredAvailable ? declaredAvailable.includes(model) : null,
+      priced: isPriced ? isPriced(model) : null,
       reason: probed.reason || null,
       install: probed.install || null,
     };
   });
+
+  const warnings = models
+    .filter((m) => m.priced === false)
+    .map((m) => `${m.model} is not in the pricing registry — cost estimates fall back to a conservative rate, and the name may be a typo. Routing is unaffected.`);
 
   const available = models.filter((m) => m.status === "available");
   const synthesisViable = available.length >= 2;
@@ -1586,12 +1802,13 @@ export function assessQuorumViability(presetName, { runtimeOverride = null, prob
 
   return {
     runtime,
-    preset: presetName,
+    preset: label,
     declared: preset.models.length,
     effective: available.length,
     models,
     synthesisViable,
     recommendation,
+    warnings,
   };
 }
 
@@ -1645,36 +1862,60 @@ export function detectRuntimes() {
  * Test helpers: use `withSandboxRepo()` from `tests/helpers/sandbox-repo.mjs`
  * to get a properly isolated tmpdir with `git init` + initial commit.
  */
-function _resolveApiProviderForRouting(model, worker) {
+function _isPreferredGrokCliAvailable(model, cwd, workers = null) {
+  if (!isGrokCliServableModel(model)) return false;
+  if (loadGrokCliPreference(cwd || process.cwd()) !== "prefer") return false;
+  return (workers || detectWorkers(cwd)).some((w) => w.name === "grok" && w.available);
+}
+
+function _resolveDirectApiOnlyRouting(model) {
+  const apiProvider = detectApiProvider(model);
+  if (apiProvider) return { apiProvider };
+  const matched = Object.values(DIRECT_API_ONLY).find((p) => providerMatches(p, model));
+  const envKey = matched?.envKey || "the provider's API key";
+  const label = matched?.label || "the provider";
+  throw new Error(
+    `Model "${model}" requires ${label} direct API access — ${envKey} is not set ` +
+    `and gh-copilot does not proxy this model. ` +
+    `Set ${envKey} in env or .forge/secrets.json.`
+  );
+}
+
+function _missingCopilotServableRouting(model, { apiProvider, dropIfNoDirectApi, effectiveHost }) {
+  const matched = Object.values(COPILOT_SERVABLE).find((p) => providerMatches(p, model));
+  const envKey = matched?.envKey || "OPENAI_API_KEY";
+  if (dropIfNoDirectApi && !apiProvider) {
+    throw new Error(
+      `Model "${model}" is Copilot-servable but routing.hostPreference="drop" ` +
+      `under host=${effectiveHost} requires ${envKey}. Set ${envKey} or change routing.hostPreference.`
+    );
+  }
+  if (apiProvider) return { apiProvider };
+  throw new Error(
+    `Model "${model}" is Copilot-servable but gh-copilot CLI is not installed ` +
+    `and ${envKey} is not set. Install gh-copilot (preferred) or set ${envKey}.`
+  );
+}
+
+function _resolveCopilotServableRouting(model, { cwd, host, hostPreference, role }) {
+  const effectiveHost = host || detectClientHost();
+  const effectiveHostPreference = hostPreference || loadRoutingPreference(cwd);
+  const { order, dropIfNoDirectApi } = getRoutingPreference(effectiveHost, effectiveHostPreference);
+  const apiProvider = detectApiProvider(model);
+  const ghCopilot = isGhCopilotAvailable();
+  if (!API_ALLOWED_ROLES.has(role || "code") && ghCopilot) return { apiProvider: null };
+  for (const transport of order) {
+    if (transport === "direct-api" && apiProvider) return { apiProvider };
+    if (transport === "gh-copilot" && ghCopilot) return { apiProvider: null };
+  }
+  return _missingCopilotServableRouting(model, { apiProvider, dropIfNoDirectApi, effectiveHost });
+}
+
+export function _resolveApiProviderForRouting(model, worker, { cwd = process.cwd(), host = null, hostPreference = null, role = null, workers = null } = {}) {
   if (worker || !model) return { apiProvider: null };
-  if (isDirectApiOnlyModel(model)) {
-    const apiProvider = detectApiProvider(model);
-    if (!apiProvider) {
-      const matched = Object.values(DIRECT_API_ONLY).find((p) => p.pattern.test(model));
-      const envKey = matched?.envKey || "the provider's API key";
-      const label = matched?.label || "the provider";
-      throw new Error(
-        `Model "${model}" requires ${label} direct API access — ${envKey} is not set ` +
-        `and gh-copilot does not proxy this model. ` +
-        `Set ${envKey} in env or .forge/secrets.json.`
-      );
-    }
-    return { apiProvider };
-  }
-  if (isCopilotServableModel(model)) {
-    if (!isGhCopilotAvailable()) {
-      const apiProvider = detectApiProvider(model);
-      if (!apiProvider) {
-        const matched = Object.values(COPILOT_SERVABLE).find((p) => p.pattern.test(model));
-        const envKey = matched?.envKey || "OPENAI_API_KEY";
-        throw new Error(
-          `Model "${model}" is Copilot-servable but gh-copilot CLI is not installed ` +
-          `and ${envKey} is not set. Install gh-copilot (preferred) or set ${envKey}.`
-        );
-      }
-      return { apiProvider };
-    }
-  }
+  if (_isPreferredGrokCliAvailable(model, cwd, workers)) return { apiProvider: null, forcedWorker: "grok" };
+  if (isDirectApiOnlyModel(model)) return _resolveDirectApiOnlyRouting(model);
+  if (isCopilotServableModel(model)) return _resolveCopilotServableRouting(model, { cwd, host, hostPreference, role });
   return { apiProvider: null };
 }
 
@@ -1685,7 +1926,7 @@ function _enforceApiRoleGuard(apiProvider, role, model) {
       `Model "${model}" is routed through the ${apiProvider.label} API which cannot execute ` +
       `tool calls or edit files. ${apiProvider.label} models are valid for reviewer, analysis, ` +
       `and quorum roles — not as a primary code-writing worker. ` +
-      `For code, use claude-sonnet-4.6 (via gh-copilot) or claude-opus-4.7 (via claude CLI).`
+      `For code, use claude-sonnet-5.5 (via gh-copilot) or claude-opus-5.5 (via claude CLI).`
     );
   }
 }
@@ -1713,15 +1954,24 @@ function _buildWorkerInvocation(chosen, promptFile, prompt, model) {
   return { cmd: null, args: null, spec, error: new Error(`Unknown worker: ${chosen.name}`) };
 }
 
-function _enrichWorkerTokens({ tokens, stdout, stderr, code, timedOut, spec, spawnStartMs }) {
+function applyParsedStderrStatsToTokens(tokens, stderr) {
   if (!tokens.model || tokens.tokens_out === 0) {
     const stderrStats = parseStderrStats(stderr);
     if (stderrStats.model) tokens.model = stderrStats.model;
     if (stderrStats.tokens_out > 0) tokens.tokens_out = stderrStats.tokens_out;
     if (stderrStats.tokens_in > 0) tokens.tokens_in = stderrStats.tokens_in;
+    if (stderrStats.cache_read_tokens > 0) tokens.cache_read_tokens = stderrStats.cache_read_tokens;
+    if (stderrStats.cache_creation_input_tokens > 0) tokens.cache_creation_input_tokens = stderrStats.cache_creation_input_tokens;
+    if (stderrStats.reasoning_tokens > 0) tokens.reasoning_tokens = stderrStats.reasoning_tokens;
     if (stderrStats.premiumRequests > 0) tokens.premiumRequests = stderrStats.premiumRequests;
   }
-  if (!tokens.model) tokens.model = spec?.defaultModel || null;
+}
+
+export function _enrichWorkerTokens({ tokens, stdout, stderr, code, timedOut, spec, spawnStartMs, workerName, requestedModel = null }) {
+  applyParsedStderrStatsToTokens(tokens, stderr);
+  // The Copilot CLI's run summary names no model, so attribute the run to the
+  // --model it was started with; the worker default applies only when none was given.
+  if (!tokens.model) tokens.model = requestedModel || spec?.defaultModel || null;
   if (shouldDefaultPremiumRequestsToOne({ tokens, stdout, stderr, code, timedOut })) {
     tokens.premiumRequests = 1;
   }
@@ -1732,6 +1982,7 @@ function _enrichWorkerTokens({ tokens, stdout, stderr, code, timedOut, spec, spa
   if (!tokens.sessionDurationMs || tokens.sessionDurationMs === 0) {
     tokens.sessionDurationMs = Date.now() - spawnStartMs;
   }
+  if (workerName && !tokens.worker) tokens.worker = workerName;
   return tokens;
 }
 
@@ -1784,8 +2035,8 @@ function writeWorkerPromptFile(prompt) {
   return promptFile;
 }
 
-function spawnCliWorkerProcess({ cmd, args, cwd, runPlanActive, extraEnv }) {
-  const isWindows = process.platform === "win32";
+function spawnCliWorkerProcess({ cmd, args, cwd, runPlanActive, extraEnv, direct = false }) {
+  const isWindows = process.platform === "win32" && !direct;
   const spawnBin = isWindows ? "cmd" : cmd;
   const spawnArgs = isWindows ? ["/d", "/s", "/c", cmd, ...args] : args
 ;
@@ -1891,7 +2142,12 @@ function finalizeWorkerResult({ code, state, chosen, promptFile, spec, model, sp
   }
 
   const jsonlEvents = parseJSONL(state.stdout);
-  let tokens = extractTokens(jsonlEvents);
+  // Phase GROK-BUILD-WORKER Slice 3: the grok CLI emits --output-format
+  // streaming-json with its own event shape; route it through the tolerant
+  // grok parser. All other CLI workers keep the existing extractTokens path.
+  let tokens = chosen.name === "grok"
+    ? parseGrokStreamingJson(state.stdout)
+    : extractTokens(jsonlEvents);
   tokens = _enrichWorkerTokens({
     tokens,
     stdout: state.stdout,
@@ -1900,6 +2156,8 @@ function finalizeWorkerResult({ code, state, chosen, promptFile, spec, model, sp
     timedOut: state.timedOut,
     spec,
     spawnStartMs,
+    workerName: chosen.name,
+    requestedModel: model,
   });
 
   return {
@@ -1915,61 +2173,146 @@ function finalizeWorkerResult({ code, state, chosen, promptFile, spec, model, sp
   };
 }
 
-function spawnCliWorkerExecution({ prompt, model, cwd, timeout, worker, runPlanActive, eventBus, extraEnv }) {
-  return new Promise(async (workerResolve, workerReject) => {
-    const workers = await resolveSpawnWorkers({ worker, eventBus });
-    if (workers.length === 0) {
-      workerReject(new Error("No CLI workers available. Install gh copilot, claude, or codex CLI."));
-      return;
-    }
-
-    const chosen = _pickChosenWorker(workers, worker, model);
-    const promptFile = writeWorkerPromptFile(prompt);
+async function spawnCliWorkerExecution({ prompt, model, cwd, timeout, worker, runPlanActive, eventBus, extraEnv }) {
+  const workers = await resolveSpawnWorkers({ worker, eventBus });
+  if (workers.length === 0) throw new Error("No CLI workers available. Install gh copilot, claude, or codex CLI.");
+  const chosen = _pickChosenWorker(workers, worker, model);
+  const promptFile = writeWorkerPromptFile(prompt);
+  try {
     const invocationResult = _buildWorkerInvocation(chosen, promptFile, prompt, model);
-    if (invocationResult.error) {
-      workerReject(invocationResult.error);
-      return;
-    }
-
+    if (invocationResult.error) throw invocationResult.error;
     const { cmd, args, spec } = invocationResult;
-    const child = spawnCliWorkerProcess({ cmd, args, cwd, runPlanActive, extraEnv });
-    const spawnStartMs = Date.now();
-    const state = { stdout: "", stderr: "", timedOut: false };
+    const { resolveCopilotLauncher } = await import("./copilot-launcher.mjs");
+    const launcher = await resolveCopilotLauncher({ command: cmd, args, cwd, env: { ...process.env, ...(extraEnv || {}) } });
+    return await new Promise((workerResolve, workerReject) => {
+      const child = spawnCliWorkerProcess({ cmd: launcher.command, args: launcher.args, direct: launcher.direct, cwd, runPlanActive, extraEnv });
+      const spawnStartMs = Date.now();
+      const state = { stdout: "", stderr: "", timedOut: false };
 
-    registerSpawnedChild(child);
-    attachWorkerStreamHandlers(child, state);
+      registerSpawnedChild(child);
+      attachWorkerStreamHandlers(child, state);
 
-    const heartbeat = setInterval(() => {
-      process.stdout.write(".");
-    }, 15_000);
-    const timer = setTimeout(() => {
-      state.timedOut = true;
-      child.kill("SIGTERM");
-    }, timeout);
+      const heartbeat = setInterval(() => {
+        process.stdout.write(".");
+      }, 15_000);
+      const timer = setTimeout(() => {
+        state.timedOut = true;
+        child.kill("SIGTERM");
+      }, timeout);
 
-    child.on("close", (code) => {
-      clearInterval(heartbeat);
-      clearTimeout(timer);
-      workerResolve(finalizeWorkerResult({
-        code,
-        state,
-        chosen,
-        promptFile,
-        spec,
-        model,
-        spawnStartMs,
-      }));
+      child.on("close", (code) => {
+        clearInterval(heartbeat);
+        clearTimeout(timer);
+        workerResolve(finalizeWorkerResult({
+          code,
+          state,
+          chosen,
+          promptFile,
+          spec,
+          model,
+          spawnStartMs,
+        }));
+      });
+
+      child.on("error", (err) => {
+        clearInterval(heartbeat);
+        clearTimeout(timer);
+        workerReject(new Error(`Failed to spawn ${cmd}: ${err.message} (code: ${err.code || "unknown"})`));
+      });
     });
-
-    child.on("error", (err) => {
-      clearInterval(heartbeat);
-      clearTimeout(timer);
-      workerReject(new Error(`Failed to spawn ${cmd}: ${err.message} (code: ${err.code || "unknown"})`));
-    });
-  });
+  } finally {
+    const { rm } = await import("node:fs/promises");
+    await rm(promptFile, { force: true });
+  }
 }
 
+// The role guard must reject before any async work begins: an `async function`
+// can only reject a promise, so a caller that does not await would still spawn.
 export function spawnWorker(prompt, options = {}) {
+  const { model = null, worker = null, role = null, cwd = process.cwd() } = options;
+  const { apiProvider } = _resolveApiProviderForRouting(model, worker, { cwd, role });
+  if (apiProvider) _enforceApiRoleGuard(apiProvider, role, model);
+  return _spawnWorkerAsync(prompt, options);
+}
+
+/**
+ * Map a DIRECT_API_ONLY registry name to the BYOK provider type understood by
+ * sdk-worker. Entries mapped to null have no SDK path and stay on direct HTTP.
+ */
+const REGISTRY_TO_BYOK_TYPE = {
+  "openai-image": "openai",
+  "microsoft-foundry": "azure",
+  xai: null, // grok SDK path not yet supported
+};
+
+/**
+ * Phase-60 Slice 4 — try the BYOK SDK path for a DIRECT_API_ONLY model.
+ * Returns `{ handled: false }` to mean "fall through to the direct API path",
+ * which covers an unmapped provider, a missing BYOK key, and an SDK-level
+ * failure. Any non-SDK error propagates, since that is a real defect rather
+ * than a routing miss.
+ *
+ * @returns {Promise<{ handled: boolean, result?: object }>}
+ */
+async function _tryByokSdkRoute({ apiProvider, prompt, model, cwd, forbiddenPaths }) {
+  const byokType = REGISTRY_TO_BYOK_TYPE[apiProvider.name];
+  if (!byokType) return { handled: false };
+
+  try {
+    const { runSdkSession } = await import("./sdk-worker.mjs");
+    const result = await runSdkSession({
+      prompt, model, cwd, forbiddenPaths,
+      // Env var NAME only — the SDK re-reads the value at call time so the key
+      // is never carried through this config object (meta-bug #268).
+      provider: { type: byokType, envKey: apiProvider.envKey },
+    });
+    if (result && result.ok === false && result.error === "BYOK_KEY_MISSING") {
+      return { handled: false };
+    }
+    return { handled: true, result };
+  } catch (err) {
+    if (!err.sdkError) throw err;
+    // The real session factory declines every BYOK provider (SDK_BYOK_UNSUPPORTED):
+    // that is the expected route to the direct API, not a failure worth a log line.
+    if (err.code !== "SDK_BYOK_UNSUPPORTED") {
+      console.error(`[sdk-worker] BYOK SDK path failed, falling back to direct API: ${err.message}`);
+    }
+    return { handled: false };
+  }
+}
+
+/**
+ * Phase-60 Slice 2 — try the SDK path for a COPILOT_SERVABLE model.
+ * Falls through to the spawn path on any SDK-level failure; the switch is an
+ * optimisation, not a requirement.
+ *
+ * @returns {Promise<{ handled: boolean, result?: object }>}
+ */
+async function _tryCopilotSdkRoute({ prompt, model, cwd, forbiddenPaths, timeout }) {
+  try {
+    const { runSdkSession } = await import("./sdk-worker.mjs");
+    return { handled: true, result: await runSdkSession({ prompt, model, cwd, forbiddenPaths, timeout }) };
+  } catch (err) {
+    if (!err.sdkError) throw err;
+    console.error(`[sdk-worker] falling back to spawn: ${err.message}`);
+    return { handled: false };
+  }
+}
+
+async function _tryResolvedApiRoute({ apiProvider, prompt, model, cwd, forbiddenPaths, timeout, role, sdkPreferred }) {
+  if (!apiProvider) return { handled: false };
+  if (sdkPreferred) {
+    const sdk = await _tryByokSdkRoute({ apiProvider, prompt, model, cwd, forbiddenPaths });
+    if (sdk.handled) {
+      _enforceApiRoleGuard(apiProvider, role, model);
+      return { handled: true, result: sdk.result };
+    }
+  }
+  _enforceApiRoleGuard(apiProvider, role, model);
+  return { handled: true, result: await callApiWorker(prompt, model, apiProvider, { timeout, role }) };
+}
+
+async function _spawnWorkerAsync(prompt, options = {}) {
   const {
     model = null,
     cwd = process.cwd(),
@@ -1979,12 +2322,18 @@ export function spawnWorker(prompt, options = {}) {
     role = null,
     eventBus = null,
     extraEnv = null,
+    forbiddenPaths = [],
   } = options;
 
-  const { apiProvider } = _resolveApiProviderForRouting(model, worker);
-  if (apiProvider) {
-    _enforceApiRoleGuard(apiProvider, role, model);
-    return callApiWorker(prompt, model, apiProvider, { timeout, role });
+  const { apiProvider, forcedWorker } = _resolveApiProviderForRouting(model, worker, { cwd, role });
+  const sdkPreferred = loadCopilotSdkPreference(cwd) === "prefer";
+
+  const apiRoute = await _tryResolvedApiRoute({ apiProvider, prompt, model, cwd, forbiddenPaths, timeout, role, sdkPreferred });
+  if (apiRoute.handled) return apiRoute.result;
+
+  if (model && !worker && !forcedWorker && sdkPreferred && isCopilotServableModel(model)) {
+    const sdk = await _tryCopilotSdkRoute({ prompt, model, cwd, forbiddenPaths, timeout });
+    if (sdk.handled) return sdk.result;
   }
 
   return spawnCliWorkerExecution({
@@ -1992,7 +2341,7 @@ export function spawnWorker(prompt, options = {}) {
     model,
     cwd,
     timeout,
-    worker,
+    worker: worker || forcedWorker,
     runPlanActive,
     eventBus,
     extraEnv,
@@ -2026,6 +2375,9 @@ export function detectHelpTextOutput(stdout, stderr, workerName) {
   return meaningfulLen < 4000;
 }
 
+/** Below this many bytes of stdout, a worker did not do meaningful work. */
+const MIN_WORKER_STDOUT = 50;
+
 /**
  * Issue #77: detect silent worker failures.
  *
@@ -2049,7 +2401,6 @@ export function detectSilentWorkerFailure(workerResult, mode, sliceNumber) {
   if (workerResult.exitCode !== 0) return null;
 
   const stdoutLen = (workerResult.output || "").trim().length;
-  const MIN_WORKER_STDOUT = 50;
 
   if (stdoutLen < MIN_WORKER_STDOUT) {
     return `Worker '${workerResult.worker || "unknown"}' exited 0 but produced only ${stdoutLen} bytes of stdout — ` +
@@ -2060,6 +2411,41 @@ export function detectSilentWorkerFailure(workerResult, mode, sliceNumber) {
       `check worker-capabilities.json baseArgs for unsupported flags.`;
   }
   return null;
+}
+
+/**
+ * Meta-bug #264: detect a worker that never launched.
+ *
+ * detectSilentWorkerFailure above covers the exit-0 case. The inverse — empty
+ * stdout with a NON-ZERO exit — is a process that never started: a missing CLI,
+ * or on Windows a lock on the shared copilot entrypoint when two orchestrators
+ * launch workers at the same moment.
+ *
+ * Running the validation gate in that state is meaningless. It can only report
+ * the absence of work that was never attempted, and it does so by naming a test
+ * command and a test path — so every signal points at the test configuration
+ * while the cause is a file lock.
+ *
+ * @param {{ output?: string, stderr?: string, worker?: string, exitCode?: number, timedOut?: boolean }} workerResult
+ * @param {string} mode
+ * @returns {string|null} reason, or null when the worker did run
+ */
+export function detectWorkerLaunchFailure(workerResult, mode) {
+  if (!workerResult) return null;
+  if (mode === "assisted") return null;
+  if (workerResult.worker === "human") return null;
+  if (workerResult.exitCode === 0) return null;
+  // Timeouts and signal kills mean the worker DID run; they have their own paths.
+  if (workerResult.timedOut) return null;
+  if (detectKilledBySignal(workerResult.exitCode)) return null;
+
+  const stdoutLen = (workerResult.output || "").trim().length;
+  if (stdoutLen >= MIN_WORKER_STDOUT) return null;
+
+  const stderrTail = (workerResult.stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" ").slice(0, 300);
+  return `worker '${workerResult.worker || "unknown"}' never launched — exited ${workerResult.exitCode} ` +
+    `after writing ${stdoutLen} bytes of stdout. The validation gate was skipped: it could only report the ` +
+    `absence of work that was never attempted.${stderrTail ? ` stderr: ${stderrTail}` : ""}`;
 }
 
 /**
@@ -2129,8 +2515,14 @@ function parseJSONL(output) {
  *   claude-*  → anthropic   (claude-opus-4.7, claude-sonnet-4.6, etc.)
  *   gpt-*     → openai      (gpt-5.3-codex, gpt-4o, etc.)
  *   o1-* o3-* → openai      (reasoning model lines)
- *   grok-*    → xai         (grok-4.20-0309-reasoning, grok-3, etc.)
+ *   grok-*    → xai         (grok-4.20-0309-reasoning, grok-4.3, etc.)
  *   gemini-*  → google
+ *   kimi-*    → moonshot    (kimi-k3, kimi-k2.7-code, etc.)
+ *   mai-*     → microsoft   (mai-code-1.1-flash; Copilot-only)
+ *
+ * Every key in cost-service MODEL_PRICING must resolve here — a priced but
+ * unmapped model reports vendor null through telemetry and cost attribution.
+ * Guarded by telemetry-issue-186.test.mjs.
  *
  * @param {string|null|undefined} model
  * @returns {string|null} vendor key, or null when model is null/empty/unrecognized
@@ -2143,6 +2535,8 @@ export function deriveVendorFromModel(model) {
   if (/^o[1-9](-|$)/.test(lower)) return "openai"; // o1, o3, o4 reasoning models
   if (lower.startsWith("grok-")) return "xai";
   if (lower.startsWith("gemini-")) return "google";
+  if (lower.startsWith("kimi-")) return "moonshot";
+  if (lower.startsWith("mai-")) return "microsoft";
   return null;
 }
 
@@ -2158,6 +2552,101 @@ export function deriveVendorFromModel(model) {
  * non-null value is the actual measured duration. sessionDurationMs follows
  * the same convention as a precaution against future event-stream regressions.
  */
+/** Model: top-level `model` (variant) or the first `modelUsage` key (real grok). */
+function grokEventModel(ev) {
+  if (typeof ev.model === "string") return ev.model;
+  if (ev.modelUsage && typeof ev.modelUsage === "object") {
+    const [first] = Object.keys(ev.modelUsage);
+    if (first) return first;
+  }
+  return null;
+}
+
+/** Assistant text: real grok emits {type:"text",data:"..."}; the rest are documented variants. */
+function grokEventText(ev) {
+  if (ev.type === "text" && typeof ev.data === "string") return ev.data;
+  return ev.delta?.text
+    ?? (typeof ev.content === "string" ? ev.content : null)
+    ?? (ev.type === "assistant" && typeof ev.text === "string" ? ev.text : null);
+}
+
+/** Terminal usage event: real grok = type:"end" with a top-level `usage`. */
+function grokEventUsage(ev) {
+  const usage = ev.usage || (ev.type === "result" ? ev.result?.usage : null);
+  if (!usage || typeof usage !== "object") return null;
+  return {
+    tokensIn: usage.input_tokens ?? usage.prompt_tokens ?? null,
+    tokensOut: usage.output_tokens ?? usage.completion_tokens ?? null,
+    costTicks: usage.cost_in_usd_ticks ?? null,
+  };
+}
+
+/**
+ * Parse Grok Build CLI `--output-format streaming-json` output into a token /
+ * cost summary. Phase GROK-BUILD-WORKER Slice 3 (schema verified in v3.24.1).
+ *
+ * Verified against real `grok 0.2.101` output (2026-07-14). The stream is JSONL:
+ *   - `{"type":"text","data":"<assistant text>"}` chunks
+ *   - a terminal `{"type":"end", ..., "usage":{input_tokens,output_tokens,...},
+ *      "total_cost_usd_ticks":N, "modelUsage":{ "<model>": {...} }}` event
+ * The parser also stays tolerant of documented variant shapes (delta.text,
+ * content, prompt_tokens/completion_tokens, usage.cost_in_usd_ticks, top-level
+ * model) and degrades to null tokens (heuristic estimation upstream) when no
+ * usage event is present — so a future schema change fails soft, not hard.
+ *
+ * @param {string} stdout - raw JSONL text from the grok CLI
+ * @returns {{ output: string, tokens_in: number|null, tokens_out: number|null,
+ *   cost_in_usd_ticks: number|null, model: string|null, premiumRequests: number,
+ *   apiDurationMs: null, sessionDurationMs: null, codeChanges: null, vendor: string }}
+ */
+export function parseGrokStreamingJson(stdout) {
+  const lines = String(stdout || "").split(/\r?\n/).filter((l) => l.trim());
+  let output = "";
+  let model = null;
+  let tokensIn = null;
+  let tokensOut = null;
+  let costTicks = null;
+
+  for (const line of lines) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { continue; }
+    if (!ev || typeof ev !== "object") continue;
+
+    if (!model) model = grokEventModel(ev);
+
+    const text = grokEventText(ev);
+    if (text) output += text;
+
+    const usage = grokEventUsage(ev);
+    if (usage) {
+      if (usage.tokensIn != null) tokensIn = usage.tokensIn;
+      if (usage.tokensOut != null) tokensOut = usage.tokensOut;
+      if (usage.costTicks != null) costTicks = usage.costTicks;
+    }
+    // Cost ticks: real grok reports these at the event level, not inside usage.
+    if (ev.total_cost_usd_ticks != null) costTicks = ev.total_cost_usd_ticks;
+  }
+
+  return {
+    output,
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    cost_in_usd_ticks: costTicks,
+    model,
+    // Starts at 0; _enrichWorkerTokens() bumps it to 1 for a successful
+    // subscription run (shouldDefaultPremiumRequestsToOne), exactly like the
+    // gh-copilot CLI lane — that is what makes flat grok-cli billing land.
+    premiumRequests: 0,
+    apiDurationMs: null,
+    sessionDurationMs: null,
+    codeChanges: null,
+    // CLI worker path — keep on the subscription premium-request billing lane
+    // (like extractTokens) so no surprise token charges accrue for the flat
+    // subscription case. Metered grok runs go through callApiWorker, not here.
+    vendor: "unknown",
+  };
+}
+
 export function extractTokens(events) {
   let outputTokens = 0;
   let model = null;
@@ -2238,7 +2727,7 @@ export function shouldDefaultPremiumRequestsToOne({ tokens, stdout, stderr, code
  * Format: "Breakdown by AI model:\n claude-sonnet-4.6  11.7m in, 97.5k out, ..."
  */
 export function parseStderrStats(stderr) {
-  const stats = { model: null, tokens_in: 0, tokens_out: 0, premiumRequests: 0 };
+  const stats = { model: null, tokens_in: 0, tokens_out: 0, cache_read_tokens: 0, cache_creation_input_tokens: 0, reasoning_tokens: 0, premiumRequests: 0 };
   if (!stderr) return stats;
 
   // Parse premium requests — two formats:
@@ -2252,10 +2741,14 @@ export function parseStderrStats(stderr) {
   //   New (UTF-8): "Tokens    ↑ 476.0k • ↓ 3.1k • 430.1k (cached)"
   //   New (ASCII fallback): "Tokens    ^ 476.0k * v 3.1k * 430.1k (cached)"
   //     — covers terminals that strip/replace Unicode (Windows cp437, CI logs, etc.)
-  const newTokenMatch = stderr.match(/Tokens\s+[↑⬆^]\s*([\d.]+[kmb]?)\s*[•·*]\s*[↓⬇v]\s*([\d.]+[kmb]?)/i);
+  const newTokenMatch = stderr.match(/Tokens\s+[↑⬆^]\s*([\d.]+[kmb]?)(?:\s*\(([^)]*)\))?.*?[↓⬇v]\s*([\d.]+[kmb]?)(?:\s*\(([^)]*)\))?/i);
   if (newTokenMatch) {
     stats.tokens_in = parseTokenCount(newTokenMatch[1]);
-    stats.tokens_out = parseTokenCount(newTokenMatch[2]);
+    stats.tokens_out = parseTokenCount(newTokenMatch[3]);
+    applyTokenParentheticalStats(stats, newTokenMatch[2]);
+    applyTokenParentheticalStats(stats, newTokenMatch[4]);
+    const trailingCacheMatch = stderr.match(/[•·*]\s*([\d.]+[kmb]?)\s*\(cached\)|[•·*]\s*([\d.]+[kmb]?)\s+cached/i);
+    if (!stats.cache_read_tokens && trailingCacheMatch) stats.cache_read_tokens = parseTokenCount(trailingCacheMatch[1] || trailingCacheMatch[2]);
   }
 
   // Parse model from new format: "Model     claude-opus-4.6" or model line in breakdown
@@ -2273,7 +2766,7 @@ export function parseStderrStats(stderr) {
   // Fix: if `newTokenMatch` already captured the aggregate, treat the
   // breakdown lines as identification-only (pick the dominant model by
   // output-token count) and do NOT re-accumulate tokens.
-  const modelLines = stderr.match(/^\s+([\w.-]+)\s+([\d.]+[kmb]?)\s+in,\s+([\d.]+[kmb]?)\s+out/gm);
+  const modelLines = stderr.match(/^\s+([\w.-]+)\s+([\d.]+[kmb]?)\s+in,\s+([\d.]+[kmb]?)\s+out(?:,\s+[\d.]+[kmb]?\s+cached)?/gm);
   if (modelLines) {
     let maxTokens = 0;
     const haveAggregate = Boolean(newTokenMatch);
@@ -2287,6 +2780,8 @@ export function parseStderrStats(stderr) {
         stats.tokens_in += tokIn;
         stats.tokens_out += tokOut;
       }
+      const cached = line.match(/,\s+([\d.]+[kmb]?)\s+cached/i);
+      if (!haveAggregate && cached) stats.cache_read_tokens += parseTokenCount(cached[1]);
       // Primary model = the one with most output tokens (works either way).
       if (tokOut > maxTokens) {
         maxTokens = tokOut;
@@ -2309,6 +2804,19 @@ export function parseStderrStats(stderr) {
   return stats;
 }
 
+function applyTokenParentheticalStats(stats, text) {
+  if (!text) return;
+  for (const part of String(text).split(",")) {
+    const match = part.trim().match(/^([\d.]+[kmb]?)\s+([A-Za-z]+)/i);
+    if (!match) continue;
+    const value = parseTokenCount(match[1]);
+    const label = match[2].toLowerCase();
+    if (label.startsWith("cached")) stats.cache_read_tokens += value;
+    else if (label.startsWith("written") || label.startsWith("write")) stats.cache_creation_input_tokens += value;
+    else if (label.startsWith("reason")) stats.reasoning_tokens += value;
+  }
+}
+
 /**
  * Parse token count strings like "97.5k", "11.7m", "1.2b", "843.6k"
  */
@@ -2320,4 +2828,3 @@ function parseTokenCount(str) {
   if (str.endsWith("k")) return Math.round(num * 1_000);
   return Math.round(num);
 }
-

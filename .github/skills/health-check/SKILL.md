@@ -33,7 +33,7 @@ Use the `forge_validate` MCP tool (or run `pforge check`) to verify that all req
 Review the output for:
 - Required files present (instructions, agents, prompts, skills)
 - File counts match preset expectations
-- No unresolved `<YOUR PROJECT NAME>` placeholders
+- No unresolved `TimeTracker` placeholders
 - AGENTS.md and copilot-instructions.md configured
 
 > **If validate reports missing files**: Flag as CRITICAL — setup may need to be re-run.
@@ -99,5 +99,5 @@ After completing this skill, confirm:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before checking**: `search_thoughts("setup issue", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "bug")` — load prior setup issues and recurring health check failures
-- **After check**: `capture_thought("Health check: <summary of findings>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "skill-health-check")` — persist environment issues for future diagnostics
+- **Before checking**: `search_thoughts("setup issue", project: "TimeTracker", created_by: "copilot-vscode", type: "bug")` — load prior setup issues and recurring health check failures
+- **After check**: `capture_thought("Health check: <summary of findings>", project: "TimeTracker", created_by: "copilot-vscode", source: "skill-health-check")` — persist environment issues for future diagnostics

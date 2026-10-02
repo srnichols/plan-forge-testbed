@@ -27,6 +27,9 @@ $fail = 0
 $warn = 0
 
 function Check-FileExists([string]$RelPath, [bool]$Required = $true) {
+    # NOTE: Call sites invoke this as a bare statement and never consume the
+    # result. Emitting a boolean would leak stray "True"/"False" lines into the
+    # validator output (meta-bug #233), so return nothing.
     $fullPath = Join-Path $ProjectPath $RelPath
     if (Test-Path $fullPath) {
         $size = (Get-Item $fullPath).Length

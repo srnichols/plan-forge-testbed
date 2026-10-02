@@ -37,7 +37,7 @@ The right amount of complexity is the minimum needed for the current slice.
 Execute the hardened plan one slice at a time, starting with Slice 1.
 
 Before starting Slice 1, run a **Pre-Execution Traceability Check**:
-- **Check OpenBrain** (if configured): `search_thoughts("<plan topic>", project: "<YOUR PROJECT NAME>")` — load prior gotchas, patterns, and lessons for the affected files/areas
+- **Check OpenBrain** (if configured): `search_thoughts("<plan topic>", project: "TimeTracker")` — load prior gotchas, patterns, and lessons for the affected files/areas
 - **Check LiveGuard memories**: Read `.forge/liveguard-memories.jsonl` if present — prior drift violations and incident history for this project
 - Scan the spec's MUST acceptance criteria
 - Verify each MUST criterion maps to at least one slice's validation gate
@@ -120,9 +120,9 @@ SESSION RESUME CHECKLIST:
 
 ## Persistent Memory (if OpenBrain is configured)
 
-- **Before each slice**: `search_thoughts("<slice topic>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
-- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
-- **After completeness sweep**: `capture_thoughts([...lessons], project: "<YOUR PROJECT NAME>", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
+- **Before each slice**: `search_thoughts("<slice topic>", project: "TimeTracker", created_by: "copilot-vscode", type: "decision")` — load prior decisions, patterns, and implementation lessons relevant to the current slice
+- **After each slice**: `capture_thought("Slice N: <key decision or outcome>", project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-3-slice-N", type: "decision")` — persist decisions made during execution
+- **After completeness sweep**: `capture_thoughts([...lessons], project: "TimeTracker", created_by: "copilot-vscode", source: "plan-forge-step-4-sweep", type: "convention")` — batch capture patterns, conventions, and lessons discovered
 
 ---
 
