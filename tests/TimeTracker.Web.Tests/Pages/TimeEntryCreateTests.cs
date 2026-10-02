@@ -13,6 +13,7 @@ public class TimeEntryCreateTests : TestContext
 {
     private readonly ITimeEntriesApi _timeEntriesApi = Substitute.For<ITimeEntriesApi>();
     private readonly IProjectsApi _projectsApi = Substitute.For<IProjectsApi>();
+    private readonly IClientsApi _clientsApi = Substitute.For<IClientsApi>();
 
     public TimeEntryCreateTests()
     {
@@ -21,6 +22,9 @@ public class TimeEntryCreateTests : TestContext
         Services.AddFluentUIComponents();
         Services.AddSingleton(_timeEntriesApi);
         Services.AddSingleton(_projectsApi);
+        // The page shows client names in its project dropdown.
+        _clientsApi.GetAllAsync(Arg.Any<CancellationToken>()).Returns(new List<ClientDto>());
+        Services.AddSingleton(_clientsApi);
     }
 
     [Fact]
