@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- bunit 1.x pins AngleSharp 1.2.0 (GHSA-pgww-w46g-26qg, fixed in 1.5.0); lift it within the 1.x line. -->
+    <PackageReference Include="AngleSharp" Version="1.8.3" />
     <PackageReference Include="bunit" Version="1.*" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.*" />
